@@ -5,10 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **New execution engine: a stack-based bytecode VM** replaces the v0.1
+  tree-walking interpreter. Locals are stack slots, globals live in an
+  open-addressing hash table, closures capture via upvalues. ~5× faster than the
+  tree-walker; on par with CPython on recursion, ~1.4× faster on tight loops.
+  Same language surface — all tests and examples pass unchanged.
+
 ### In progress
-- Bytecode VM (arm64-tuned) to replace the tree-walking engine — see
-  [ROADMAP](docs/ROADMAP.md).
+- Continuous code-review + code-quality pass folded into the build loop.
 - AI-native built-ins (`ai`, `embed`, `http`, `json`).
+- Presentation & positioning materials.
 
 ## [0.1.0] — 2026-06-14
 

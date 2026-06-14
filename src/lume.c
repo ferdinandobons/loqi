@@ -1,14 +1,15 @@
 /*
  * Lume — the AI-first language.
- * Reference implementation (v0.1): a clean tree-walking interpreter in C11.
+ * Reference implementation in C11, dependency-free (builds with nothing but clang).
  *
- * This single translation unit contains the lexer, parser, AST and evaluator.
- * It is intentionally dependency-free so it builds with nothing but clang.
- * Performance work (bytecode VM, GC) lands in later iterations; correctness and
- * a complete, pleasant language come first.
+ * Pipeline: source -> lexer -> Pratt parser -> AST -> single-pass bytecode
+ * compiler -> stack-based virtual machine. Locals resolve to stack slots at
+ * compile time, globals to an open-addressing hash table, closures capture via
+ * upvalues.
  *
- * Memory model for v0.1: heap objects are tracked in a global arena and freed at
- * exit. A real garbage collector is a planned iteration — see docs/ROADMAP.md.
+ * Memory model (current): heap objects are tracked in a global arena and freed
+ * at process exit. A real mark-sweep garbage collector is a planned iteration —
+ * see docs/ROADMAP.md.
  */
 
 #include <stdio.h>
@@ -26,10 +27,13 @@
  * Forward declarations
  * ========================================================================= */
 typedef struct Obj Obj;
-typedef struct Env Env;
 typedef struct Node Node;
 typedef struct Value Value;
 typedef struct Interp Interp;
+typedef struct Table Table;
+typedef struct ObjProto ObjProto;
+typedef struct ObjClosure ObjClosure;
+typedef struct ObjUpvalue ObjUpvalue;
 
 /* ===========================================================================
  * Values
@@ -46,7 +50,7 @@ struct Value {
     } as;
 };
 
-typedef enum { OBJ_STRING, OBJ_LIST, OBJ_MAP, OBJ_FUNCTION, OBJ_NATIVE } ObjType;
+typedef enum { OBJ_STRING, OBJ_LIST, OBJ_MAP, OBJ_PROTO, OBJ_CLOSURE, OBJ_UPVALUE, OBJ_NATIVE } ObjType;
 
 struct Obj {
     ObjType type;
@@ -78,11 +82,41 @@ typedef struct {
     int cap;
 } ObjMap;
 
-typedef struct {
+/* A chunk of compiled bytecode: instruction bytes, source lines, constants. */
+typedef struct Chunk {
+    uint8_t *code;
+    int *lines;
+    int count;
+    int cap;
+    Value *constants;
+    int const_count;
+    int const_cap;
+} Chunk;
+
+/* A compiled function prototype (the immutable code + metadata). */
+struct ObjProto {
     Obj obj;
-    Node *decl;     /* the N_FN node: params + body */
-    Env *closure;   /* captured lexical environment */
-} ObjFunction;
+    int arity;
+    int upvalue_count;
+    Chunk chunk;
+    char *name;     /* for diagnostics; NULL for the top-level script */
+};
+
+/* A captured variable that may outlive the stack frame that created it. */
+struct ObjUpvalue {
+    Obj obj;
+    Value *location;     /* points into the VM stack while open */
+    Value closed;        /* holds the value once closed */
+    ObjUpvalue *next;    /* intrusive list of open upvalues */
+};
+
+/* A closure: a prototype plus the upvalues it closed over. */
+struct ObjClosure {
+    Obj obj;
+    ObjProto *proto;
+    ObjUpvalue **upvalues;
+    int upvalue_count;
+};
 
 typedef Value (*NativeFn)(Interp *I, int argc, Value *argv);
 
@@ -109,13 +143,15 @@ typedef struct {
 #define IS_STRING(v) (IS_OBJ(v) && OBJ_TYPE(v) == OBJ_STRING)
 #define IS_LIST(v)   (IS_OBJ(v) && OBJ_TYPE(v) == OBJ_LIST)
 #define IS_MAP(v)    (IS_OBJ(v) && OBJ_TYPE(v) == OBJ_MAP)
-#define IS_FUNCTION(v) (IS_OBJ(v) && OBJ_TYPE(v) == OBJ_FUNCTION)
+#define IS_CLOSURE(v) (IS_OBJ(v) && OBJ_TYPE(v) == OBJ_CLOSURE)
+#define IS_PROTO(v)  (IS_OBJ(v) && OBJ_TYPE(v) == OBJ_PROTO)
 #define IS_NATIVE(v) (IS_OBJ(v) && OBJ_TYPE(v) == OBJ_NATIVE)
 
 #define AS_STRING(v) ((ObjString *)AS_OBJ(v))
 #define AS_LIST(v)   ((ObjList *)AS_OBJ(v))
 #define AS_MAP(v)    ((ObjMap *)AS_OBJ(v))
-#define AS_FUNCTION(v) ((ObjFunction *)AS_OBJ(v))
+#define AS_CLOSURE(v) ((ObjClosure *)AS_OBJ(v))
+#define AS_PROTO(v)  ((ObjProto *)AS_OBJ(v))
 #define AS_NATIVE(v) ((ObjNative *)AS_OBJ(v))
 
 static Value NIL_VAL   = { VAL_NIL,   { .i = 0 } };
@@ -130,7 +166,7 @@ static inline Value obj_val(Obj *o)   { Value v; v.type = VAL_OBJ;   v.as.obj = 
  * ========================================================================= */
 struct Interp {
     Obj *arena;        /* all heap objects, for cleanup */
-    Env *globals;      /* global scope */
+    Table *globals;    /* global names -> values (hash table, O(1)) */
     const char *path;  /* current source path for diagnostics */
     jmp_buf err_jmp;   /* runtime error landing pad */
     bool has_error;
@@ -946,50 +982,69 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
 /* ===========================================================================
  * Environments
  * ========================================================================= */
+/* ===========================================================================
+ * Table — open-addressing hash map with string keys, for global variables.
+ * O(1) average lookup; this is what replaces the old linear-scan environment.
+ * ========================================================================= */
 typedef struct {
-    char *name;
+    char *key;       /* owned copy; NULL = empty slot */
+    uint32_t hash;
     Value value;
-} Binding;
+} TableEntry;
 
-struct Env {
-    Env *parent;
-    Binding *vars;
+struct Table {
     int count;
     int cap;
+    TableEntry *entries;
 };
 
-static Env *env_new(Env *parent) {
-    Env *e = xmalloc(sizeof(Env));
-    e->parent = parent; e->vars = NULL; e->count = 0; e->cap = 0;
-    return e;
+static uint32_t hash_string(const char *s, size_t n) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++) { h ^= (uint8_t)s[i]; h *= 16777619u; }
+    return h;
 }
-static void env_define(Env *e, const char *name, Value v) {
-    for (int i = 0; i < e->count; i++)
-        if (strcmp(e->vars[i].name, name) == 0) { e->vars[i].value = v; return; }
-    if (e->count + 1 > e->cap) {
-        e->cap = e->cap < 8 ? 8 : e->cap * 2;
-        e->vars = xrealloc(e->vars, sizeof(Binding) * (size_t)e->cap);
+
+static void table_init(Table *t) { t->count = 0; t->cap = 0; t->entries = NULL; }
+
+static TableEntry *table_find(TableEntry *entries, int cap, const char *key, uint32_t hash) {
+    uint32_t idx = hash & (uint32_t)(cap - 1);
+    for (;;) {
+        TableEntry *e = &entries[idx];
+        if (e->key == NULL || (e->hash == hash && strcmp(e->key, key) == 0)) return e;
+        idx = (idx + 1) & (uint32_t)(cap - 1);
     }
-    e->vars[e->count].name = strdup(name);
-    e->vars[e->count].value = v;
-    e->count++;
-}
-static Value *env_find(Env *e, const char *name) {
-    for (; e; e = e->parent)
-        for (int i = 0; i < e->count; i++)
-            if (strcmp(e->vars[i].name, name) == 0) return &e->vars[i].value;
-    return NULL;
 }
 
-/* ===========================================================================
- * Evaluator
- * ========================================================================= */
-typedef enum { EX_NORMAL, EX_RETURN, EX_BREAK, EX_CONTINUE } ExecKind;
-typedef struct { ExecKind kind; Value value; } Exec;
+static void table_grow(Table *t) {
+    int new_cap = t->cap < 8 ? 8 : t->cap * 2;
+    TableEntry *ne = xmalloc(sizeof(TableEntry) * (size_t)new_cap);
+    for (int i = 0; i < new_cap; i++) { ne[i].key = NULL; ne[i].hash = 0; ne[i].value = NIL_VAL; }
+    for (int i = 0; i < t->cap; i++) {
+        TableEntry *old = &t->entries[i];
+        if (!old->key) continue;
+        TableEntry *dst = table_find(ne, new_cap, old->key, old->hash);
+        dst->key = old->key; dst->hash = old->hash; dst->value = old->value;
+    }
+    free(t->entries);
+    t->entries = ne; t->cap = new_cap;
+}
 
-static Value eval(Interp *I, Node *n, Env *env);
-static Exec exec_stmt(Interp *I, Node *n, Env *env);
-static Exec exec_block(Interp *I, Node *block, Env *env);
+/* Returns pointer to the stored value, or NULL if absent. */
+static Value *table_get(Table *t, const char *key, uint32_t hash) {
+    if (t->count == 0) return NULL;
+    TableEntry *e = table_find(t->entries, t->cap, key, hash);
+    return e->key ? &e->value : NULL;
+}
+
+/* Insert or update. Returns true if a new key was added. */
+static bool table_set(Table *t, const char *key, uint32_t hash, Value value) {
+    if (t->count + 1 > t->cap * 3 / 4) table_grow(t);
+    TableEntry *e = table_find(t->entries, t->cap, key, hash);
+    bool is_new = e->key == NULL;
+    if (is_new) { e->key = strdup(key); e->hash = hash; t->count++; }
+    e->value = value;
+    return is_new;
+}
 
 static bool is_truthy(Value v) {
     switch (v.type) {
@@ -1070,12 +1125,18 @@ static char *value_to_cstr(Interp *I, Value v) {
                     snprintf(b, 64, "<native %s>", AS_NATIVE(v)->name);
                     return b;
                 }
-                case OBJ_FUNCTION: {
-                    ObjFunction *f = AS_FUNCTION(v);
+                case OBJ_CLOSURE: {
+                    ObjProto *p = AS_CLOSURE(v)->proto;
                     char *b = xmalloc(64);
-                    snprintf(b, 64, "<fn %s>", f->decl->name ? f->decl->name : "anon");
+                    snprintf(b, 64, "<fn %s>", p->name ? p->name : "anon");
                     return b;
                 }
+                case OBJ_PROTO: {
+                    char *b = xmalloc(64);
+                    snprintf(b, 64, "<proto %s>", AS_PROTO(v)->name ? AS_PROTO(v)->name : "script");
+                    return b;
+                }
+                case OBJ_UPVALUE: return strdup("<upvalue>");
                 case OBJ_LIST: {
                     ObjList *l = AS_LIST(v);
                     char *b = xmalloc(2); b[0] = '['; b[1] = '\0';
@@ -1135,7 +1196,9 @@ static const char *type_name(Value v) {
                 case OBJ_STRING: return "str";
                 case OBJ_LIST: return "list";
                 case OBJ_MAP: return "map";
-                case OBJ_FUNCTION: case OBJ_NATIVE: return "fn";
+                case OBJ_CLOSURE: case OBJ_NATIVE: return "fn";
+                case OBJ_PROTO: return "proto";
+                case OBJ_UPVALUE: return "upvalue";
             }
     }
     return "?";
@@ -1143,331 +1206,797 @@ static const char *type_name(Value v) {
 
 static double as_double(Value v) { return IS_INT(v) ? (double)AS_INT(v) : AS_FLOAT(v); }
 
-static Value eval_binary(Interp *I, Node *n, Env *env) {
-    Value a = eval(I, n->a, env);
-    Value b = eval(I, n->b, env);
-    TokType op = n->op;
+/* ===========================================================================
+ * Bytecode
+ * ========================================================================= */
+typedef enum {
+    OP_CONSTANT, OP_NIL, OP_TRUE, OP_FALSE, OP_POP,
+    OP_GET_LOCAL, OP_SET_LOCAL,
+    OP_GET_GLOBAL, OP_DEFINE_GLOBAL, OP_SET_GLOBAL,
+    OP_GET_UPVALUE, OP_SET_UPVALUE,
+    OP_EQUAL, OP_NOT_EQUAL, OP_LESS, OP_LESS_EQUAL, OP_GREATER, OP_GREATER_EQUAL,
+    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_FLOORDIV, OP_MOD,
+    OP_NEGATE, OP_NOT,
+    OP_JUMP, OP_JUMP_IF_FALSE, OP_LOOP,
+    OP_CALL, OP_CLOSURE, OP_CLOSE_UPVALUE, OP_RETURN,
+    OP_BUILD_LIST, OP_BUILD_MAP,
+    OP_GET_INDEX, OP_SET_INDEX, OP_GET_PROPERTY, OP_SET_PROPERTY,
+    OP_ITER_SEQ, OP_FOR_NEXT, OP_IMPORT
+} OpCode;
 
-    if (op == T_EQEQ) return bool_val(values_equal(a, b));
-    if (op == T_BANGEQ) return bool_val(!values_equal(a, b));
+static void chunk_init(Chunk *c) { memset(c, 0, sizeof(Chunk)); }
+static void chunk_write(Chunk *c, uint8_t byte, int line) {
+    if (c->count + 1 > c->cap) {
+        c->cap = c->cap < 8 ? 8 : c->cap * 2;
+        c->code = xrealloc(c->code, (size_t)c->cap);
+        c->lines = xrealloc(c->lines, sizeof(int) * (size_t)c->cap);
+    }
+    c->code[c->count] = byte; c->lines[c->count] = line; c->count++;
+}
+static int chunk_add_const(Chunk *c, Value v) {
+    if (c->const_count + 1 > c->const_cap) {
+        c->const_cap = c->const_cap < 8 ? 8 : c->const_cap * 2;
+        c->constants = xrealloc(c->constants, sizeof(Value) * (size_t)c->const_cap);
+    }
+    c->constants[c->const_count] = v;
+    return c->const_count++;
+}
 
-    /* string concatenation with + */
-    if (op == T_PLUS && (IS_STRING(a) || IS_STRING(b))) {
-        char *sa = value_to_cstr(I, a);
-        char *sb = value_to_cstr(I, b);
+static ObjProto *new_proto(Interp *I) {
+    ObjProto *p = (ObjProto *)alloc_obj(I, sizeof(ObjProto), OBJ_PROTO);
+    p->arity = 0; p->upvalue_count = 0; p->name = NULL;
+    chunk_init(&p->chunk);
+    return p;
+}
+static ObjClosure *new_closure(Interp *I, ObjProto *proto) {
+    ObjUpvalue **ups = NULL;
+    if (proto->upvalue_count) {
+        ups = xmalloc(sizeof(ObjUpvalue *) * (size_t)proto->upvalue_count);
+        for (int i = 0; i < proto->upvalue_count; i++) ups[i] = NULL;
+    }
+    ObjClosure *c = (ObjClosure *)alloc_obj(I, sizeof(ObjClosure), OBJ_CLOSURE);
+    c->proto = proto; c->upvalues = ups; c->upvalue_count = proto->upvalue_count;
+    return c;
+}
+static ObjUpvalue *new_upvalue(Interp *I, Value *slot) {
+    ObjUpvalue *u = (ObjUpvalue *)alloc_obj(I, sizeof(ObjUpvalue), OBJ_UPVALUE);
+    u->location = slot; u->closed = NIL_VAL; u->next = NULL;
+    return u;
+}
+
+/* ===========================================================================
+ * Compiler — walks the AST and emits bytecode. Locals resolve to stack slots
+ * at compile time; globals to a hash table. Closures capture via upvalues.
+ * ========================================================================= */
+#define MAX_LOCALS 256
+
+typedef struct { const char *name; int name_len; int depth; bool is_captured; } CompLocal;
+typedef struct { uint8_t index; bool is_local; } CompUpvalue;
+
+typedef struct LoopCtx {
+    struct LoopCtx *enclosing;
+    int continue_target;
+    int body_local_base;
+    int breaks[256];
+    int break_count;
+} LoopCtx;
+
+typedef struct Compiler {
+    struct Compiler *enclosing;
+    Interp *I;
+    ObjProto *proto;
+    CompLocal locals[MAX_LOCALS];
+    int local_count;
+    CompUpvalue upvalues[MAX_LOCALS];
+    int scope_depth;
+    LoopCtx *loop;
+    bool *had_error; /* shared flag across nested compilers */
+} Compiler;
+
+static void compile_expr(Compiler *C, Node *n);
+static void compile_stmt(Compiler *C, Node *n);
+static void compile_function(Compiler *enc, Node *fn_node, int line);
+
+static Chunk *cur_chunk(Compiler *C) { return &C->proto->chunk; }
+static void emit_byte(Compiler *C, uint8_t b, int line) { chunk_write(cur_chunk(C), b, line); }
+static void emit_u16(Compiler *C, int v, int line) {
+    emit_byte(C, (uint8_t)((v >> 8) & 0xff), line);
+    emit_byte(C, (uint8_t)(v & 0xff), line);
+}
+static int add_const(Compiler *C, Value v) {
+    int idx = chunk_add_const(cur_chunk(C), v);
+    if (idx > 0xffff) { *C->had_error = true; fprintf(stderr, "troppe costanti in una funzione\n"); return 0; }
+    return idx;
+}
+static void emit_const(Compiler *C, Value v, int line) {
+    emit_byte(C, OP_CONSTANT, line); emit_u16(C, add_const(C, v), line);
+}
+static int name_const(Compiler *C, const char *name) {
+    return add_const(C, cstring_val(C->I, name));
+}
+static int emit_jump(Compiler *C, uint8_t op, int line) {
+    emit_byte(C, op, line); emit_byte(C, 0xff, line); emit_byte(C, 0xff, line);
+    return cur_chunk(C)->count - 2;
+}
+static void patch_jump(Compiler *C, int offset) {
+    int jump = cur_chunk(C)->count - offset - 2;
+    if (jump > 0xffff) { *C->had_error = true; fprintf(stderr, "salto troppo lungo\n"); }
+    cur_chunk(C)->code[offset] = (uint8_t)((jump >> 8) & 0xff);
+    cur_chunk(C)->code[offset + 1] = (uint8_t)(jump & 0xff);
+}
+static void emit_loop(Compiler *C, int loop_start, int line) {
+    emit_byte(C, OP_LOOP, line);
+    int offset = cur_chunk(C)->count - loop_start + 2;
+    if (offset > 0xffff) { *C->had_error = true; fprintf(stderr, "ciclo troppo lungo\n"); }
+    emit_byte(C, (uint8_t)((offset >> 8) & 0xff), line);
+    emit_byte(C, (uint8_t)(offset & 0xff), line);
+}
+
+static void init_compiler(Compiler *C, Interp *I, Compiler *enclosing, const char *name, bool *had_error) {
+    C->enclosing = enclosing; C->I = I; C->local_count = 0; C->scope_depth = 0;
+    C->loop = NULL; C->had_error = had_error;
+    C->proto = new_proto(I);
+    if (name) C->proto->name = strdup(name);
+    /* slot 0 holds the executing closure itself */
+    CompLocal *l = &C->locals[C->local_count++];
+    l->name = ""; l->name_len = 0; l->depth = 0; l->is_captured = false;
+}
+
+static void begin_scope(Compiler *C) { C->scope_depth++; }
+static void end_scope(Compiler *C, int line) {
+    C->scope_depth--;
+    while (C->local_count > 0 && C->locals[C->local_count - 1].depth > C->scope_depth) {
+        emit_byte(C, C->locals[C->local_count - 1].is_captured ? OP_CLOSE_UPVALUE : OP_POP, line);
+        C->local_count--;
+    }
+}
+static int add_local(Compiler *C, const char *name, int len) {
+    if (C->local_count >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "troppe variabili locali\n"); return -1; }
+    CompLocal *l = &C->locals[C->local_count++];
+    l->name = name; l->name_len = len; l->depth = -1; l->is_captured = false;
+    return C->local_count - 1;
+}
+static void mark_initialized(Compiler *C) {
+    if (C->scope_depth == 0) return;
+    C->locals[C->local_count - 1].depth = C->scope_depth;
+}
+static int resolve_local(Compiler *C, const char *name, int len) {
+    for (int i = C->local_count - 1; i >= 0; i--) {
+        CompLocal *l = &C->locals[i];
+        if (l->name_len == len && memcmp(l->name, name, (size_t)len) == 0) return i;
+    }
+    return -1;
+}
+static int add_upvalue(Compiler *C, uint8_t index, bool is_local) {
+    int n = C->proto->upvalue_count;
+    for (int i = 0; i < n; i++)
+        if (C->upvalues[i].index == index && C->upvalues[i].is_local == is_local) return i;
+    if (n >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "troppi upvalue\n"); return 0; }
+    C->upvalues[n].index = index; C->upvalues[n].is_local = is_local;
+    return C->proto->upvalue_count++;
+}
+static int resolve_upvalue(Compiler *C, const char *name, int len) {
+    if (!C->enclosing) return -1;
+    int local = resolve_local(C->enclosing, name, len);
+    if (local != -1) {
+        C->enclosing->locals[local].is_captured = true;
+        return add_upvalue(C, (uint8_t)local, true);
+    }
+    int up = resolve_upvalue(C->enclosing, name, len);
+    if (up != -1) return add_upvalue(C, (uint8_t)up, false);
+    return -1;
+}
+
+static void named_get(Compiler *C, const char *name, int line) {
+    int len = (int)strlen(name);
+    int slot = resolve_local(C, name, len);
+    if (slot != -1) { emit_byte(C, OP_GET_LOCAL, line); emit_byte(C, (uint8_t)slot, line); return; }
+    int up = resolve_upvalue(C, name, len);
+    if (up != -1) { emit_byte(C, OP_GET_UPVALUE, line); emit_byte(C, (uint8_t)up, line); return; }
+    emit_byte(C, OP_GET_GLOBAL, line); emit_u16(C, name_const(C, name), line);
+}
+static void named_set(Compiler *C, const char *name, int line) {
+    int len = (int)strlen(name);
+    int slot = resolve_local(C, name, len);
+    if (slot != -1) { emit_byte(C, OP_SET_LOCAL, line); emit_byte(C, (uint8_t)slot, line); return; }
+    int up = resolve_upvalue(C, name, len);
+    if (up != -1) { emit_byte(C, OP_SET_UPVALUE, line); emit_byte(C, (uint8_t)up, line); return; }
+    emit_byte(C, OP_SET_GLOBAL, line); emit_u16(C, name_const(C, name), line);
+}
+
+static void compile_assign(Compiler *C, Node *n) {
+    Node *t = n->a;
+    if (t->type == N_IDENT) {
+        compile_expr(C, n->b);
+        named_set(C, t->name, n->line);
+    } else if (t->type == N_INDEX) {
+        compile_expr(C, t->a);
+        compile_expr(C, t->b);
+        compile_expr(C, n->b);
+        emit_byte(C, OP_SET_INDEX, n->line);
+    } else if (t->type == N_MEMBER) {
+        compile_expr(C, t->a);
+        compile_expr(C, n->b);
+        emit_byte(C, OP_SET_PROPERTY, n->line);
+        emit_u16(C, name_const(C, t->name), n->line);
+    } else {
+        *C->had_error = true;
+        fprintf(stderr, "destinazione di assegnamento non valida\n");
+    }
+}
+
+static void compile_expr(Compiler *C, Node *n) {
+    switch (n->type) {
+        case N_NIL: emit_byte(C, OP_NIL, n->line); break;
+        case N_BOOL: emit_byte(C, AS_BOOL(n->literal) ? OP_TRUE : OP_FALSE, n->line); break;
+        case N_INT: case N_FLOAT: case N_STR: emit_const(C, n->literal, n->line); break;
+        case N_IDENT: named_get(C, n->name, n->line); break;
+        case N_LIST:
+            for (int i = 0; i < n->item_count; i++) compile_expr(C, n->items[i]);
+            emit_byte(C, OP_BUILD_LIST, n->line); emit_u16(C, n->item_count, n->line);
+            break;
+        case N_MAP:
+            for (int i = 0; i < n->item_count; i++) {
+                compile_expr(C, n->items[i]);
+                compile_expr(C, n->items2[i]);
+            }
+            emit_byte(C, OP_BUILD_MAP, n->line); emit_u16(C, n->item_count, n->line);
+            break;
+        case N_UNARY:
+            compile_expr(C, n->a);
+            emit_byte(C, n->op == T_MINUS ? OP_NEGATE : OP_NOT, n->line);
+            break;
+        case N_BINARY: {
+            compile_expr(C, n->a);
+            compile_expr(C, n->b);
+            uint8_t op;
+            switch (n->op) {
+                case T_PLUS: op = OP_ADD; break;
+                case T_MINUS: op = OP_SUB; break;
+                case T_STAR: op = OP_MUL; break;
+                case T_SLASH: op = OP_DIV; break;
+                case T_SLASHSLASH: op = OP_FLOORDIV; break;
+                case T_PERCENT: op = OP_MOD; break;
+                case T_EQEQ: op = OP_EQUAL; break;
+                case T_BANGEQ: op = OP_NOT_EQUAL; break;
+                case T_LT: op = OP_LESS; break;
+                case T_LTEQ: op = OP_LESS_EQUAL; break;
+                case T_GT: op = OP_GREATER; break;
+                case T_GTEQ: op = OP_GREATER_EQUAL; break;
+                default: op = OP_NIL; *C->had_error = true; break;
+            }
+            emit_byte(C, op, n->line);
+            break;
+        }
+        case N_LOGICAL: {
+            compile_expr(C, n->a);
+            if (n->op == T_AND) {
+                int end = emit_jump(C, OP_JUMP_IF_FALSE, n->line);
+                emit_byte(C, OP_POP, n->line);
+                compile_expr(C, n->b);
+                patch_jump(C, end);
+            } else { /* or */
+                int elseJ = emit_jump(C, OP_JUMP_IF_FALSE, n->line);
+                int endJ = emit_jump(C, OP_JUMP, n->line);
+                patch_jump(C, elseJ);
+                emit_byte(C, OP_POP, n->line);
+                compile_expr(C, n->b);
+                patch_jump(C, endJ);
+            }
+            break;
+        }
+        case N_CALL: {
+            compile_expr(C, n->a);
+            for (int i = 0; i < n->item_count; i++) compile_expr(C, n->items[i]);
+            emit_byte(C, OP_CALL, n->line); emit_byte(C, (uint8_t)n->item_count, n->line);
+            break;
+        }
+        case N_INDEX:
+            compile_expr(C, n->a); compile_expr(C, n->b);
+            emit_byte(C, OP_GET_INDEX, n->line);
+            break;
+        case N_MEMBER:
+            compile_expr(C, n->a);
+            emit_byte(C, OP_GET_PROPERTY, n->line); emit_u16(C, name_const(C, n->name), n->line);
+            break;
+        case N_ASSIGN: compile_assign(C, n); break;
+        case N_FN: compile_function(C, n, n->line); break;
+        default: *C->had_error = true; fprintf(stderr, "espressione non compilabile\n"); break;
+    }
+}
+
+static void compile_break(Compiler *C, int line) {
+    if (!C->loop) { *C->had_error = true; fprintf(stderr, "'break' fuori da un ciclo\n"); return; }
+    for (int i = C->local_count - 1; i >= C->loop->body_local_base; i--)
+        emit_byte(C, C->locals[i].is_captured ? OP_CLOSE_UPVALUE : OP_POP, line);
+    int j = emit_jump(C, OP_JUMP, line);
+    C->loop->breaks[C->loop->break_count++] = j;
+}
+static void compile_continue(Compiler *C, int line) {
+    if (!C->loop) { *C->had_error = true; fprintf(stderr, "'continue' fuori da un ciclo\n"); return; }
+    for (int i = C->local_count - 1; i >= C->loop->body_local_base; i--)
+        emit_byte(C, C->locals[i].is_captured ? OP_CLOSE_UPVALUE : OP_POP, line);
+    emit_loop(C, C->loop->continue_target, line);
+}
+
+static void compile_if(Compiler *C, Node *n) {
+    compile_expr(C, n->a);
+    int elseJ = emit_jump(C, OP_JUMP_IF_FALSE, n->line);
+    emit_byte(C, OP_POP, n->line);
+    compile_stmt(C, n->b);
+    int endJ = emit_jump(C, OP_JUMP, n->line);
+    patch_jump(C, elseJ);
+    emit_byte(C, OP_POP, n->line);
+    if (n->c) compile_stmt(C, n->c);
+    patch_jump(C, endJ);
+}
+
+static void compile_while(Compiler *C, Node *n) {
+    LoopCtx loop; loop.enclosing = C->loop; loop.break_count = 0;
+    int loop_start = cur_chunk(C)->count;
+    loop.continue_target = loop_start;
+    compile_expr(C, n->a);
+    int exitJ = emit_jump(C, OP_JUMP_IF_FALSE, n->line);
+    emit_byte(C, OP_POP, n->line);
+    loop.body_local_base = C->local_count;
+    C->loop = &loop;
+    compile_stmt(C, n->b);
+    C->loop = loop.enclosing;
+    emit_loop(C, loop_start, n->line);
+    patch_jump(C, exitJ);
+    emit_byte(C, OP_POP, n->line);
+    for (int i = 0; i < loop.break_count; i++) patch_jump(C, loop.breaks[i]);
+}
+
+static void compile_for(Compiler *C, Node *n) {
+    int line = n->line;
+    begin_scope(C);
+    /* hidden: sequence to iterate */
+    compile_expr(C, n->a);
+    emit_byte(C, OP_ITER_SEQ, line);
+    int seq_slot = add_local(C, "$seq", 4); mark_initialized(C);
+    /* hidden: index */
+    emit_const(C, int_val(0), line);
+    int idx_slot = add_local(C, "$idx", 4); mark_initialized(C);
+    /* loop variable */
+    emit_byte(C, OP_NIL, line);
+    int var_slot = add_local(C, n->name, (int)strlen(n->name)); mark_initialized(C);
+
+    LoopCtx loop; loop.enclosing = C->loop; loop.break_count = 0;
+    int loop_start = cur_chunk(C)->count;
+    loop.continue_target = loop_start;
+    loop.body_local_base = C->local_count;
+
+    emit_byte(C, OP_FOR_NEXT, line);
+    emit_byte(C, (uint8_t)seq_slot, line);
+    emit_byte(C, (uint8_t)idx_slot, line);
+    int exitJ = cur_chunk(C)->count;
+    emit_byte(C, 0xff, line); emit_byte(C, 0xff, line);
+    emit_byte(C, OP_SET_LOCAL, line); emit_byte(C, (uint8_t)var_slot, line);
+    emit_byte(C, OP_POP, line);
+
+    C->loop = &loop;
+    compile_stmt(C, n->b);
+    C->loop = loop.enclosing;
+
+    emit_loop(C, loop_start, line);
+    patch_jump(C, exitJ); /* FOR_NEXT exit target = here */
+    for (int i = 0; i < loop.break_count; i++) patch_jump(C, loop.breaks[i]);
+    end_scope(C, line); /* pops var, idx, seq */
+}
+
+static void compile_function(Compiler *enc, Node *fn_node, int line) {
+    Compiler sub;
+    init_compiler(&sub, enc->I, enc, fn_node->name, enc->had_error);
+    sub.proto->arity = fn_node->item_count;
+    begin_scope(&sub);
+    for (int i = 0; i < fn_node->item_count; i++) {
+        add_local(&sub, fn_node->items[i]->name, (int)strlen(fn_node->items[i]->name));
+        mark_initialized(&sub);
+    }
+    /* body is an N_BLOCK; compile its statements in the function scope */
+    Node *body = fn_node->a;
+    for (int i = 0; i < body->item_count; i++) compile_stmt(&sub, body->items[i]);
+    emit_byte(&sub, OP_NIL, line);
+    emit_byte(&sub, OP_RETURN, line);
+
+    ObjProto *p = sub.proto;
+    emit_byte(enc, OP_CLOSURE, line);
+    emit_u16(enc, add_const(enc, obj_val((Obj *)p)), line);
+    for (int i = 0; i < p->upvalue_count; i++) {
+        emit_byte(enc, sub.upvalues[i].is_local ? 1 : 0, line);
+        emit_byte(enc, sub.upvalues[i].index, line);
+    }
+}
+
+static void compile_stmt(Compiler *C, Node *n) {
+    switch (n->type) {
+        case N_LET:
+            if (n->a) compile_expr(C, n->a); else emit_byte(C, OP_NIL, n->line);
+            if (C->scope_depth == 0) {
+                emit_byte(C, OP_DEFINE_GLOBAL, n->line); emit_u16(C, name_const(C, n->name), n->line);
+            } else {
+                add_local(C, n->name, (int)strlen(n->name)); mark_initialized(C);
+            }
+            break;
+        case N_FN:
+            if (C->scope_depth == 0) {
+                compile_function(C, n, n->line);
+                emit_byte(C, OP_DEFINE_GLOBAL, n->line); emit_u16(C, name_const(C, n->name), n->line);
+            } else {
+                add_local(C, n->name, (int)strlen(n->name)); mark_initialized(C);
+                compile_function(C, n, n->line);
+            }
+            break;
+        case N_EXPRSTMT: compile_expr(C, n->a); emit_byte(C, OP_POP, n->line); break;
+        case N_BLOCK:
+            begin_scope(C);
+            for (int i = 0; i < n->item_count; i++) compile_stmt(C, n->items[i]);
+            end_scope(C, n->line);
+            break;
+        case N_IF: compile_if(C, n); break;
+        case N_WHILE: compile_while(C, n); break;
+        case N_FOR: compile_for(C, n); break;
+        case N_RETURN:
+            if (n->a) compile_expr(C, n->a); else emit_byte(C, OP_NIL, n->line);
+            emit_byte(C, OP_RETURN, n->line);
+            break;
+        case N_BREAK: compile_break(C, n->line); break;
+        case N_CONTINUE: compile_continue(C, n->line); break;
+        case N_IMPORT:
+            emit_byte(C, OP_IMPORT, n->line); emit_u16(C, name_const(C, n->name), n->line);
+            break;
+        default: compile_expr(C, n); emit_byte(C, OP_POP, n->line); break;
+    }
+}
+
+static ObjProto *compile_script(Interp *I, Node *program) {
+    bool had_error = false;
+    Compiler C;
+    init_compiler(&C, I, NULL, NULL, &had_error);
+    for (int i = 0; i < program->item_count; i++) compile_stmt(&C, program->items[i]);
+    emit_byte(&C, OP_NIL, 1);
+    emit_byte(&C, OP_RETURN, 1);
+    if (had_error) return NULL;
+    return C.proto;
+}
+
+/* ===========================================================================
+ * Virtual machine — a stack-based bytecode interpreter.
+ * ========================================================================= */
+#define FRAMES_MAX 128
+#define STACK_MAX (FRAMES_MAX * 256)
+
+typedef struct { ObjClosure *closure; uint8_t *ip; Value *slots; } CallFrame;
+
+typedef struct {
+    Interp *I;
+    Value stack[STACK_MAX];
+    Value *stack_top;
+    CallFrame frames[FRAMES_MAX];
+    int frame_count;
+    ObjUpvalue *open_upvalues;
+} VM;
+
+static int run_source(Interp *I, const char *src, const char *path);
+
+static inline void vm_push(VM *vm, Value v) { *vm->stack_top++ = v; }
+static inline Value vm_pop(VM *vm) { return *(--vm->stack_top); }
+static inline Value vm_peek(VM *vm, int distance) { return vm->stack_top[-1 - distance]; }
+
+static void vm_error(VM *vm, const char *fmt, ...) {
+    CallFrame *frame = &vm->frames[vm->frame_count - 1];
+    Chunk *ch = &frame->closure->proto->chunk;
+    int idx = (int)(frame->ip - ch->code) - 1;
+    int line = (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
+    va_list ap; va_start(ap, fmt);
+    int n = snprintf(vm->I->err_msg, sizeof(vm->I->err_msg),
+                     "errore a runtime [%s:%d]: ", vm->I->path ? vm->I->path : "?", line);
+    vsnprintf(vm->I->err_msg + n, sizeof(vm->I->err_msg) - (size_t)n, fmt, ap);
+    va_end(ap);
+    vm->I->has_error = true;
+    longjmp(vm->I->err_jmp, 1);
+}
+
+static ObjUpvalue *capture_upvalue(VM *vm, Value *local) {
+    ObjUpvalue *prev = NULL, *cur = vm->open_upvalues;
+    while (cur && cur->location > local) { prev = cur; cur = cur->next; }
+    if (cur && cur->location == local) return cur;
+    ObjUpvalue *created = new_upvalue(vm->I, local);
+    created->next = cur;
+    if (prev) prev->next = created; else vm->open_upvalues = created;
+    return created;
+}
+static void close_upvalues(VM *vm, Value *last) {
+    while (vm->open_upvalues && vm->open_upvalues->location >= last) {
+        ObjUpvalue *u = vm->open_upvalues;
+        u->closed = *u->location;
+        u->location = &u->closed;
+        vm->open_upvalues = u->next;
+    }
+}
+
+static void vm_call_closure(VM *vm, ObjClosure *cl, int argc) {
+    if (argc != cl->proto->arity)
+        vm_error(vm, "%s() attende %d argomenti, ricevuti %d",
+                 cl->proto->name ? cl->proto->name : "fn", cl->proto->arity, argc);
+    if (vm->frame_count == FRAMES_MAX) vm_error(vm, "stack di chiamate esaurito (ricorsione troppo profonda)");
+    CallFrame *frame = &vm->frames[vm->frame_count++];
+    frame->closure = cl;
+    frame->ip = cl->proto->chunk.code;
+    frame->slots = vm->stack_top - argc - 1;
+}
+static void vm_call_value(VM *vm, Value callee, int argc) {
+    if (IS_CLOSURE(callee)) { vm_call_closure(vm, AS_CLOSURE(callee), argc); return; }
+    if (IS_NATIVE(callee)) {
+        ObjNative *nat = AS_NATIVE(callee);
+        if (nat->arity >= 0 && nat->arity != argc)
+            vm_error(vm, "%s() attende %d argomenti, ricevuti %d", nat->name, nat->arity, argc);
+        Value result = nat->fn(vm->I, argc, vm->stack_top - argc);
+        vm->stack_top -= argc + 1;
+        vm_push(vm, result);
+        return;
+    }
+    vm_error(vm, "valore di tipo %s non è chiamabile", type_name(callee));
+}
+
+/* numeric / string / list binary operators (equality handled inline) */
+static void vm_binary(VM *vm, OpCode op) {
+    Value b = vm_pop(vm), a = vm_pop(vm);
+    Interp *I = vm->I;
+    if (op == OP_ADD && (IS_STRING(a) || IS_STRING(b))) {
+        char *sa = value_to_cstr(I, a), *sb = value_to_cstr(I, b);
         size_t la = strlen(sa), lb = strlen(sb);
         char *r = xmalloc(la + lb + 1);
         memcpy(r, sa, la); memcpy(r + la, sb, lb); r[la + lb] = '\0';
         Value out = string_val(I, r, (int)(la + lb));
         free(sa); free(sb); free(r);
-        return out;
+        vm_push(vm, out); return;
     }
-    /* list concatenation with + */
-    if (op == T_PLUS && IS_LIST(a) && IS_LIST(b)) {
+    if (op == OP_ADD && IS_LIST(a) && IS_LIST(b)) {
         ObjList *r = new_list(I);
         for (int i = 0; i < AS_LIST(a)->count; i++) list_push(r, AS_LIST(a)->items[i]);
         for (int i = 0; i < AS_LIST(b)->count; i++) list_push(r, AS_LIST(b)->items[i]);
-        return obj_val((Obj *)r);
+        vm_push(vm, obj_val((Obj *)r)); return;
     }
-
     if (!IS_NUM(a) || !IS_NUM(b))
-        runtime_error(I, n->line, "operatore '%s' non supportato tra %s e %s",
-                      op == T_PLUS ? "+" : op == T_MINUS ? "-" : op == T_STAR ? "*" :
-                      op == T_SLASH ? "/" : op == T_SLASHSLASH ? "//" : op == T_PERCENT ? "%" :
-                      op == T_LT ? "<" : op == T_LTEQ ? "<=" : op == T_GT ? ">" : ">=",
-                      type_name(a), type_name(b));
-
+        vm_error(vm, "operatore aritmetico non supportato tra %s e %s", type_name(a), type_name(b));
     bool both_int = IS_INT(a) && IS_INT(b);
     switch (op) {
-        case T_PLUS:  return both_int ? int_val(AS_INT(a) + AS_INT(b)) : float_val(as_double(a) + as_double(b));
-        case T_MINUS: return both_int ? int_val(AS_INT(a) - AS_INT(b)) : float_val(as_double(a) - as_double(b));
-        case T_STAR:  return both_int ? int_val(AS_INT(a) * AS_INT(b)) : float_val(as_double(a) * as_double(b));
-        case T_SLASH: {
+        case OP_ADD: vm_push(vm, both_int ? int_val(AS_INT(a) + AS_INT(b)) : float_val(as_double(a) + as_double(b))); break;
+        case OP_SUB: vm_push(vm, both_int ? int_val(AS_INT(a) - AS_INT(b)) : float_val(as_double(a) - as_double(b))); break;
+        case OP_MUL: vm_push(vm, both_int ? int_val(AS_INT(a) * AS_INT(b)) : float_val(as_double(a) * as_double(b))); break;
+        case OP_DIV: {
             double db = as_double(b);
-            if (db == 0.0) runtime_error(I, n->line, "divisione per zero");
-            return float_val(as_double(a) / db); /* '/' is float division */
+            if (db == 0.0) vm_error(vm, "divisione per zero");
+            vm_push(vm, float_val(as_double(a) / db)); break;
         }
-        case T_SLASHSLASH: {
+        case OP_FLOORDIV:
             if (both_int) {
-                if (AS_INT(b) == 0) runtime_error(I, n->line, "divisione per zero");
+                if (AS_INT(b) == 0) vm_error(vm, "divisione per zero");
                 int64_t q = AS_INT(a) / AS_INT(b);
-                /* floor division */
                 if ((AS_INT(a) % AS_INT(b) != 0) && ((AS_INT(a) < 0) != (AS_INT(b) < 0))) q--;
-                return int_val(q);
-            }
-            double db = as_double(b);
-            if (db == 0.0) runtime_error(I, n->line, "divisione per zero");
-            return float_val(floor(as_double(a) / db));
-        }
-        case T_PERCENT: {
-            if (both_int) {
-                if (AS_INT(b) == 0) runtime_error(I, n->line, "modulo per zero");
-                return int_val(AS_INT(a) % AS_INT(b));
-            }
-            return float_val(fmod(as_double(a), as_double(b)));
-        }
-        case T_LT:   return bool_val(as_double(a) <  as_double(b));
-        case T_LTEQ: return bool_val(as_double(a) <= as_double(b));
-        case T_GT:   return bool_val(as_double(a) >  as_double(b));
-        case T_GTEQ: return bool_val(as_double(a) >= as_double(b));
-        default: runtime_error(I, n->line, "operatore binario sconosciuto");
-    }
-    return NIL_VAL;
-}
-
-static Value call_value(Interp *I, Value callee, int argc, Value *argv, int line);
-
-static Value eval_call(Interp *I, Node *n, Env *env) {
-    Value callee = eval(I, n->a, env);
-    int argc = n->item_count;
-    Value *argv = argc ? xmalloc(sizeof(Value) * (size_t)argc) : NULL;
-    for (int i = 0; i < argc; i++) argv[i] = eval(I, n->items[i], env);
-    Value r = call_value(I, callee, argc, argv, n->line);
-    free(argv);
-    return r;
-}
-
-static Value call_value(Interp *I, Value callee, int argc, Value *argv, int line) {
-    if (IS_NATIVE(callee)) {
-        ObjNative *nat = AS_NATIVE(callee);
-        if (nat->arity >= 0 && nat->arity != argc)
-            runtime_error(I, line, "%s() attende %d argomenti, ricevuti %d", nat->name, nat->arity, argc);
-        return nat->fn(I, argc, argv);
-    }
-    if (IS_FUNCTION(callee)) {
-        ObjFunction *fn = AS_FUNCTION(callee);
-        Node *decl = fn->decl;
-        if (decl->item_count != argc)
-            runtime_error(I, line, "%s() attende %d argomenti, ricevuti %d",
-                          decl->name ? decl->name : "fn", decl->item_count, argc);
-        Env *local = env_new(fn->closure);
-        for (int i = 0; i < argc; i++)
-            env_define(local, decl->items[i]->name, argv[i]);
-        Exec ex = exec_block(I, decl->a, local);
-        if (ex.kind == EX_RETURN) return ex.value;
-        return NIL_VAL;
-    }
-    runtime_error(I, line, "valore di tipo %s non è chiamabile", type_name(callee));
-    return NIL_VAL;
-}
-
-static Value eval(Interp *I, Node *n, Env *env) {
-    switch (n->type) {
-        case N_NIL: return NIL_VAL;
-        case N_BOOL: case N_INT: case N_FLOAT: case N_STR: return n->literal;
-        case N_IDENT: {
-            Value *slot = env_find(env, n->name);
-            if (!slot) runtime_error(I, n->line, "nome non definito: '%s'", n->name);
-            return *slot;
-        }
-        case N_LIST: {
-            ObjList *l = new_list(I);
-            for (int i = 0; i < n->item_count; i++) list_push(l, eval(I, n->items[i], env));
-            return obj_val((Obj *)l);
-        }
-        case N_MAP: {
-            ObjMap *m = new_map(I);
-            for (int i = 0; i < n->item_count; i++) {
-                Value k = eval(I, n->items[i], env);
-                char *key = value_to_cstr(I, k);
-                map_set(m, key, eval(I, n->items2[i], env));
-                free(key);
-            }
-            return obj_val((Obj *)m);
-        }
-        case N_UNARY: {
-            Value v = eval(I, n->a, env);
-            if (n->op == T_MINUS) {
-                if (IS_INT(v)) return int_val(-AS_INT(v));
-                if (IS_FLOAT(v)) return float_val(-AS_FLOAT(v));
-                runtime_error(I, n->line, "'-' richiede un numero, trovato %s", type_name(v));
-            }
-            if (n->op == T_NOT) return bool_val(!is_truthy(v));
-            return NIL_VAL;
-        }
-        case N_BINARY: return eval_binary(I, n, env);
-        case N_LOGICAL: {
-            Value a = eval(I, n->a, env);
-            if (n->op == T_AND) return is_truthy(a) ? eval(I, n->b, env) : a;
-            else /* OR */       return is_truthy(a) ? a : eval(I, n->b, env);
-        }
-        case N_CALL: return eval_call(I, n, env);
-        case N_INDEX: {
-            Value coll = eval(I, n->a, env);
-            Value idx = eval(I, n->b, env);
-            if (IS_LIST(coll)) {
-                if (!IS_INT(idx)) runtime_error(I, n->line, "indice di list deve essere int");
-                int64_t i = AS_INT(idx);
-                ObjList *l = AS_LIST(coll);
-                if (i < 0) i += l->count;
-                if (i < 0 || i >= l->count) runtime_error(I, n->line, "indice %lld fuori dai limiti (len %d)", (long long)AS_INT(idx), l->count);
-                return l->items[i];
-            }
-            if (IS_MAP(coll)) {
-                char *key = value_to_cstr(I, idx);
-                Value *slot = map_get(AS_MAP(coll), key);
-                free(key);
-                return slot ? *slot : NIL_VAL;
-            }
-            if (IS_STRING(coll)) {
-                if (!IS_INT(idx)) runtime_error(I, n->line, "indice di str deve essere int");
-                ObjString *s = AS_STRING(coll);
-                int64_t i = AS_INT(idx);
-                if (i < 0) i += s->length;
-                if (i < 0 || i >= s->length) runtime_error(I, n->line, "indice %lld fuori dai limiti", (long long)AS_INT(idx));
-                return string_val(I, s->chars + i, 1);
-            }
-            runtime_error(I, n->line, "il tipo %s non è indicizzabile", type_name(coll));
-        }
-        case N_MEMBER: {
-            Value obj = eval(I, n->a, env);
-            if (IS_MAP(obj)) {
-                Value *slot = map_get(AS_MAP(obj), n->name);
-                return slot ? *slot : NIL_VAL;
-            }
-            runtime_error(I, n->line, "il tipo %s non ha attributi (.%s)", type_name(obj), n->name);
-        }
-        case N_ASSIGN: {
-            Value v = eval(I, n->b, env);
-            Node *target = n->a;
-            if (target->type == N_IDENT) {
-                Value *slot = env_find(env, target->name);
-                if (!slot) runtime_error(I, n->line, "assegnamento a variabile non dichiarata '%s' (usa 'let')", target->name);
-                *slot = v;
-            } else if (target->type == N_INDEX) {
-                Value coll = eval(I, target->a, env);
-                Value idx = eval(I, target->b, env);
-                if (IS_LIST(coll)) {
-                    if (!IS_INT(idx)) runtime_error(I, n->line, "indice di list deve essere int");
-                    int64_t i = AS_INT(idx);
-                    ObjList *l = AS_LIST(coll);
-                    if (i < 0) i += l->count;
-                    if (i < 0 || i >= l->count) runtime_error(I, n->line, "indice fuori dai limiti");
-                    l->items[i] = v;
-                } else if (IS_MAP(coll)) {
-                    char *key = value_to_cstr(I, idx);
-                    map_set(AS_MAP(coll), key, v);
-                    free(key);
-                } else runtime_error(I, n->line, "il tipo %s non supporta assegnamento per indice", type_name(coll));
-            } else if (target->type == N_MEMBER) {
-                Value obj = eval(I, target->a, env);
-                if (!IS_MAP(obj)) runtime_error(I, n->line, "assegnamento attributo su tipo %s", type_name(obj));
-                map_set(AS_MAP(obj), target->name, v);
-            }
-            return v;
-        }
-        case N_FN: { /* anonymous fn expression */
-            ObjFunction *fn = (ObjFunction *)alloc_obj(I, sizeof(ObjFunction), OBJ_FUNCTION);
-            fn->decl = n; fn->closure = env;
-            return obj_val((Obj *)fn);
-        }
-        default:
-            runtime_error(I, n->line, "espressione non valutabile");
-    }
-    return NIL_VAL;
-}
-
-static Exec normal(void) { Exec e; e.kind = EX_NORMAL; e.value = NIL_VAL; return e; }
-
-static Exec exec_block(Interp *I, Node *block, Env *env) {
-    for (int i = 0; i < block->item_count; i++) {
-        Exec ex = exec_stmt(I, block->items[i], env);
-        if (ex.kind != EX_NORMAL) return ex;
-    }
-    return normal();
-}
-
-static void run_module(Interp *I, const char *path); /* for import */
-
-static Exec exec_stmt(Interp *I, Node *n, Env *env) {
-    switch (n->type) {
-        case N_LET: {
-            Value v = n->a ? eval(I, n->a, env) : NIL_VAL;
-            env_define(env, n->name, v);
-            return normal();
-        }
-        case N_FN: {
-            ObjFunction *fn = (ObjFunction *)alloc_obj(I, sizeof(ObjFunction), OBJ_FUNCTION);
-            fn->decl = n; fn->closure = env;
-            env_define(env, n->name, obj_val((Obj *)fn));
-            return normal();
-        }
-        case N_EXPRSTMT: eval(I, n->a, env); return normal();
-        case N_BLOCK: {
-            Env *inner = env_new(env);
-            return exec_block(I, n, inner);
-        }
-        case N_IF: {
-            if (is_truthy(eval(I, n->a, env))) {
-                Env *inner = env_new(env);
-                return exec_block(I, n->b, inner);
-            } else if (n->c) {
-                if (n->c->type == N_IF) return exec_stmt(I, n->c, env);
-                Env *inner = env_new(env);
-                return exec_block(I, n->c, inner);
-            }
-            return normal();
-        }
-        case N_WHILE: {
-            while (is_truthy(eval(I, n->a, env))) {
-                Env *inner = env_new(env);
-                Exec ex = exec_block(I, n->b, inner);
-                if (ex.kind == EX_BREAK) break;
-                if (ex.kind == EX_RETURN) return ex;
-                /* CONTINUE / NORMAL: keep looping */
-            }
-            return normal();
-        }
-        case N_FOR: {
-            Value iter = eval(I, n->a, env);
-            if (IS_LIST(iter)) {
-                ObjList *l = AS_LIST(iter);
-                for (int i = 0; i < l->count; i++) {
-                    Env *inner = env_new(env);
-                    env_define(inner, n->name, l->items[i]);
-                    Exec ex = exec_block(I, n->b, inner);
-                    if (ex.kind == EX_BREAK) break;
-                    if (ex.kind == EX_RETURN) return ex;
-                }
-            } else if (IS_MAP(iter)) {
-                ObjMap *m = AS_MAP(iter);
-                for (int i = 0; i < m->count; i++) {
-                    Env *inner = env_new(env);
-                    env_define(inner, n->name, cstring_val(I, m->entries[i].key));
-                    Exec ex = exec_block(I, n->b, inner);
-                    if (ex.kind == EX_BREAK) break;
-                    if (ex.kind == EX_RETURN) return ex;
-                }
-            } else if (IS_STRING(iter)) {
-                ObjString *s = AS_STRING(iter);
-                for (int i = 0; i < s->length; i++) {
-                    Env *inner = env_new(env);
-                    env_define(inner, n->name, string_val(I, s->chars + i, 1));
-                    Exec ex = exec_block(I, n->b, inner);
-                    if (ex.kind == EX_BREAK) break;
-                    if (ex.kind == EX_RETURN) return ex;
-                }
+                vm_push(vm, int_val(q));
             } else {
-                runtime_error(I, n->line, "il tipo %s non è iterabile", type_name(iter));
+                double db = as_double(b);
+                if (db == 0.0) vm_error(vm, "divisione per zero");
+                vm_push(vm, float_val(floor(as_double(a) / db)));
             }
-            return normal();
-        }
-        case N_RETURN: {
-            Exec e; e.kind = EX_RETURN;
-            e.value = n->a ? eval(I, n->a, env) : NIL_VAL;
-            return e;
-        }
-        case N_BREAK: { Exec e; e.kind = EX_BREAK; e.value = NIL_VAL; return e; }
-        case N_CONTINUE: { Exec e; e.kind = EX_CONTINUE; e.value = NIL_VAL; return e; }
-        case N_IMPORT: {
-            run_module(I, n->name);
-            return normal();
-        }
-        default:
-            eval(I, n, env);
-            return normal();
+            break;
+        case OP_MOD:
+            if (both_int) {
+                if (AS_INT(b) == 0) vm_error(vm, "modulo per zero");
+                vm_push(vm, int_val(AS_INT(a) % AS_INT(b)));
+            } else vm_push(vm, float_val(fmod(as_double(a), as_double(b))));
+            break;
+        case OP_LESS:          vm_push(vm, bool_val(as_double(a) <  as_double(b))); break;
+        case OP_LESS_EQUAL:    vm_push(vm, bool_val(as_double(a) <= as_double(b))); break;
+        case OP_GREATER:       vm_push(vm, bool_val(as_double(a) >  as_double(b))); break;
+        case OP_GREATER_EQUAL: vm_push(vm, bool_val(as_double(a) >= as_double(b))); break;
+        default: vm_error(vm, "operatore binario sconosciuto");
     }
 }
+
+/* convert an iterable into a list to walk (for-in) */
+static Value iter_seq(VM *vm, Value it) {
+    if (IS_LIST(it)) return it;
+    Interp *I = vm->I;
+    if (IS_MAP(it)) {
+        ObjList *l = new_list(I);
+        ObjMap *m = AS_MAP(it);
+        for (int i = 0; i < m->count; i++) list_push(l, cstring_val(I, m->entries[i].key));
+        return obj_val((Obj *)l);
+    }
+    if (IS_STRING(it)) {
+        ObjList *l = new_list(I);
+        ObjString *s = AS_STRING(it);
+        for (int i = 0; i < s->length; i++) list_push(l, string_val(I, s->chars + i, 1));
+        return obj_val((Obj *)l);
+    }
+    vm_error(vm, "il tipo %s non è iterabile", type_name(it));
+    return NIL_VAL;
+}
+
+static void run_vm(VM *vm) {
+    CallFrame *frame = &vm->frames[vm->frame_count - 1];
+#define READ_BYTE() (*frame->ip++)
+#define READ_U16() (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
+#define READ_CONST() (frame->closure->proto->chunk.constants[READ_U16()])
+    for (;;) {
+        uint8_t inst = READ_BYTE();
+        switch (inst) {
+            case OP_CONSTANT: vm_push(vm, READ_CONST()); break;
+            case OP_NIL: vm_push(vm, NIL_VAL); break;
+            case OP_TRUE: vm_push(vm, bool_val(true)); break;
+            case OP_FALSE: vm_push(vm, bool_val(false)); break;
+            case OP_POP: vm_pop(vm); break;
+            case OP_GET_LOCAL: { uint8_t s = READ_BYTE(); vm_push(vm, frame->slots[s]); break; }
+            case OP_SET_LOCAL: { uint8_t s = READ_BYTE(); frame->slots[s] = vm_peek(vm, 0); break; }
+            case OP_GET_GLOBAL: {
+                ObjString *name = AS_STRING(READ_CONST());
+                Value *v = table_get(vm->I->globals, name->chars, hash_string(name->chars, (size_t)name->length));
+                if (!v) vm_error(vm, "nome non definito: '%s'", name->chars);
+                vm_push(vm, *v);
+                break;
+            }
+            case OP_DEFINE_GLOBAL: {
+                ObjString *name = AS_STRING(READ_CONST());
+                table_set(vm->I->globals, name->chars, hash_string(name->chars, (size_t)name->length), vm_peek(vm, 0));
+                vm_pop(vm);
+                break;
+            }
+            case OP_SET_GLOBAL: {
+                ObjString *name = AS_STRING(READ_CONST());
+                uint32_t h = hash_string(name->chars, (size_t)name->length);
+                if (!table_get(vm->I->globals, name->chars, h))
+                    vm_error(vm, "assegnamento a variabile non dichiarata '%s' (usa 'let')", name->chars);
+                table_set(vm->I->globals, name->chars, h, vm_peek(vm, 0));
+                break;
+            }
+            case OP_GET_UPVALUE: { uint8_t i = READ_BYTE(); vm_push(vm, *frame->closure->upvalues[i]->location); break; }
+            case OP_SET_UPVALUE: { uint8_t i = READ_BYTE(); *frame->closure->upvalues[i]->location = vm_peek(vm, 0); break; }
+            case OP_EQUAL: { Value b = vm_pop(vm), a = vm_pop(vm); vm_push(vm, bool_val(values_equal(a, b))); break; }
+            case OP_NOT_EQUAL: { Value b = vm_pop(vm), a = vm_pop(vm); vm_push(vm, bool_val(!values_equal(a, b))); break; }
+            case OP_LESS: case OP_LESS_EQUAL: case OP_GREATER: case OP_GREATER_EQUAL:
+            case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_FLOORDIV: case OP_MOD:
+                vm_binary(vm, (OpCode)inst); break;
+            case OP_NEGATE: {
+                Value v = vm_pop(vm);
+                if (IS_INT(v)) vm_push(vm, int_val(-AS_INT(v)));
+                else if (IS_FLOAT(v)) vm_push(vm, float_val(-AS_FLOAT(v)));
+                else vm_error(vm, "'-' richiede un numero, trovato %s", type_name(v));
+                break;
+            }
+            case OP_NOT: vm_push(vm, bool_val(!is_truthy(vm_pop(vm)))); break;
+            case OP_JUMP: { uint16_t off = READ_U16(); frame->ip += off; break; }
+            case OP_JUMP_IF_FALSE: { uint16_t off = READ_U16(); if (!is_truthy(vm_peek(vm, 0))) frame->ip += off; break; }
+            case OP_LOOP: { uint16_t off = READ_U16(); frame->ip -= off; break; }
+            case OP_CALL: {
+                int argc = READ_BYTE();
+                vm_call_value(vm, vm_peek(vm, argc), argc);
+                frame = &vm->frames[vm->frame_count - 1];
+                break;
+            }
+            case OP_CLOSURE: {
+                ObjProto *proto = AS_PROTO(READ_CONST());
+                ObjClosure *cl = new_closure(vm->I, proto);
+                vm_push(vm, obj_val((Obj *)cl));
+                for (int i = 0; i < cl->upvalue_count; i++) {
+                    uint8_t is_local = READ_BYTE();
+                    uint8_t index = READ_BYTE();
+                    if (is_local) cl->upvalues[i] = capture_upvalue(vm, frame->slots + index);
+                    else cl->upvalues[i] = frame->closure->upvalues[index];
+                }
+                break;
+            }
+            case OP_CLOSE_UPVALUE: close_upvalues(vm, vm->stack_top - 1); vm_pop(vm); break;
+            case OP_RETURN: {
+                Value result = vm_pop(vm);
+                close_upvalues(vm, frame->slots);
+                vm->frame_count--;
+                if (vm->frame_count == 0) { vm_pop(vm); return; }
+                vm->stack_top = frame->slots;
+                vm_push(vm, result);
+                frame = &vm->frames[vm->frame_count - 1];
+                break;
+            }
+            case OP_BUILD_LIST: {
+                int count = READ_U16();
+                ObjList *l = new_list(vm->I);
+                for (int i = 0; i < count; i++) list_push(l, vm->stack_top[-count + i]);
+                vm->stack_top -= count;
+                vm_push(vm, obj_val((Obj *)l));
+                break;
+            }
+            case OP_BUILD_MAP: {
+                int count = READ_U16();
+                ObjMap *m = new_map(vm->I);
+                Value *base = vm->stack_top - count * 2;
+                for (int i = 0; i < count; i++) {
+                    char *key = value_to_cstr(vm->I, base[i * 2]);
+                    map_set(m, key, base[i * 2 + 1]);
+                    free(key);
+                }
+                vm->stack_top -= count * 2;
+                vm_push(vm, obj_val((Obj *)m));
+                break;
+            }
+            case OP_GET_INDEX: {
+                Value idx = vm_pop(vm), coll = vm_pop(vm);
+                if (IS_LIST(coll)) {
+                    if (!IS_INT(idx)) vm_error(vm, "indice di list deve essere int");
+                    ObjList *l = AS_LIST(coll);
+                    int64_t i = AS_INT(idx); if (i < 0) i += l->count;
+                    if (i < 0 || i >= l->count) vm_error(vm, "indice %lld fuori dai limiti (len %d)", (long long)AS_INT(idx), l->count);
+                    vm_push(vm, l->items[i]);
+                } else if (IS_MAP(coll)) {
+                    char *key = value_to_cstr(vm->I, idx);
+                    Value *slot = map_get(AS_MAP(coll), key); free(key);
+                    vm_push(vm, slot ? *slot : NIL_VAL);
+                } else if (IS_STRING(coll)) {
+                    if (!IS_INT(idx)) vm_error(vm, "indice di str deve essere int");
+                    ObjString *s = AS_STRING(coll);
+                    int64_t i = AS_INT(idx); if (i < 0) i += s->length;
+                    if (i < 0 || i >= s->length) vm_error(vm, "indice fuori dai limiti");
+                    vm_push(vm, string_val(vm->I, s->chars + i, 1));
+                } else vm_error(vm, "il tipo %s non è indicizzabile", type_name(coll));
+                break;
+            }
+            case OP_SET_INDEX: {
+                Value value = vm_pop(vm), idx = vm_pop(vm), coll = vm_pop(vm);
+                if (IS_LIST(coll)) {
+                    if (!IS_INT(idx)) vm_error(vm, "indice di list deve essere int");
+                    ObjList *l = AS_LIST(coll);
+                    int64_t i = AS_INT(idx); if (i < 0) i += l->count;
+                    if (i < 0 || i >= l->count) vm_error(vm, "indice fuori dai limiti");
+                    l->items[i] = value;
+                } else if (IS_MAP(coll)) {
+                    char *key = value_to_cstr(vm->I, idx);
+                    map_set(AS_MAP(coll), key, value); free(key);
+                } else vm_error(vm, "il tipo %s non supporta assegnamento per indice", type_name(coll));
+                vm_push(vm, value);
+                break;
+            }
+            case OP_GET_PROPERTY: {
+                ObjString *name = AS_STRING(READ_CONST());
+                Value obj = vm_pop(vm);
+                if (!IS_MAP(obj)) vm_error(vm, "il tipo %s non ha attributi (.%s)", type_name(obj), name->chars);
+                Value *slot = map_get(AS_MAP(obj), name->chars);
+                vm_push(vm, slot ? *slot : NIL_VAL);
+                break;
+            }
+            case OP_SET_PROPERTY: {
+                ObjString *name = AS_STRING(READ_CONST());
+                Value value = vm_pop(vm), obj = vm_pop(vm);
+                if (!IS_MAP(obj)) vm_error(vm, "assegnamento attributo su tipo %s", type_name(obj));
+                map_set(AS_MAP(obj), name->chars, value);
+                vm_push(vm, value);
+                break;
+            }
+            case OP_ITER_SEQ: { Value it = vm_pop(vm); vm_push(vm, iter_seq(vm, it)); break; }
+            case OP_FOR_NEXT: {
+                uint8_t seq_slot = READ_BYTE();
+                uint8_t idx_slot = READ_BYTE();
+                uint16_t off = READ_U16();
+                ObjList *l = AS_LIST(frame->slots[seq_slot]);
+                int64_t i = AS_INT(frame->slots[idx_slot]);
+                if (i >= l->count) { frame->ip += off; }
+                else { vm_push(vm, l->items[i]); frame->slots[idx_slot] = int_val(i + 1); }
+                break;
+            }
+            case OP_IMPORT: {
+                ObjString *path = AS_STRING(READ_CONST());
+                run_source(vm->I, NULL, path->chars); /* NULL src => read file */
+                break;
+            }
+            default: vm_error(vm, "istruzione sconosciuta %d", inst);
+        }
+    }
+#undef READ_BYTE
+#undef READ_U16
+#undef READ_CONST
+}
+
 
 /* ===========================================================================
  * Native functions (the "batteries included" standard library — core set)
@@ -1654,7 +2183,7 @@ static Value nat_assert(Interp *I, int argc, Value *argv) {
 static void define_native(Interp *I, const char *name, NativeFn fn, int arity) {
     ObjNative *nat = (ObjNative *)alloc_obj(I, sizeof(ObjNative), OBJ_NATIVE);
     nat->fn = fn; nat->name = name; nat->arity = arity;
-    env_define(I->globals, name, obj_val((Obj *)nat));
+    table_set(I->globals, name, hash_string(name, strlen(name)), obj_val((Obj *)nat));
 }
 
 static void install_stdlib(Interp *I) {
@@ -1698,43 +2227,52 @@ static char *read_file(const char *path) {
     return buf;
 }
 
-static int interpret(Interp *I, const char *src, const char *path) {
+/* Compile and run a source string (or a file when src == NULL). The error
+ * landing pad (I->err_jmp) is saved/restored so nested imports nest safely. */
+static int run_source(Interp *I, const char *src, const char *path) {
+    char *owned = NULL;
+    if (src == NULL) {
+        owned = read_file(path);
+        if (!owned) return 74;
+        src = owned;
+    }
     const char *prev_path = I->path;
     I->path = path;
+
     Parser P;
     P.I = I; P.had_error = false;
     lex_init(&P.lex, I, src);
     p_advance(&P);
     Node *prog = parse_program(&P);
-    if (P.had_error) { I->path = prev_path; return 65; }
+    if (P.had_error) { free(owned); I->path = prev_path; return 65; }
 
+    ObjProto *script = compile_script(I, prog);
+    if (!script) { free(owned); I->path = prev_path; return 65; }
+
+    /* save the enclosing error landing pad for safe nesting (imports) */
+    jmp_buf saved; memcpy(saved, I->err_jmp, sizeof(jmp_buf));
+    VM *vm = xmalloc(sizeof(VM));
+    vm->I = I; vm->stack_top = vm->stack; vm->frame_count = 0; vm->open_upvalues = NULL;
+
+    int rc = 0;
     if (setjmp(I->err_jmp)) {
         fprintf(stderr, "%s\n", I->err_msg);
-        I->path = prev_path;
-        return 70;
+        rc = 70;
+    } else {
+        ObjClosure *cl = new_closure(I, script);
+        vm_push(vm, obj_val((Obj *)cl));
+        vm_call_closure(vm, cl, 0);
+        run_vm(vm);
     }
-    for (int i = 0; i < prog->item_count; i++) {
-        Exec ex = exec_stmt(I, prog->items[i], I->globals);
-        (void)ex;
-    }
+    free(vm);
+    free(owned);
+    memcpy(I->err_jmp, saved, sizeof(jmp_buf)); /* restore enclosing landing pad */
     I->path = prev_path;
-    return 0;
+    return rc;
 }
 
-static void run_module(Interp *I, const char *path) {
-    char *src = read_file(path);
-    if (!src) runtime_error(I, 0, "import: modulo '%s' non trovato", path);
-    /* run in global scope (simple module model for v0.1) */
-    Parser P;
-    P.I = I; P.had_error = false;
-    const char *prev = I->path;
-    I->path = path;
-    lex_init(&P.lex, I, src);
-    p_advance(&P);
-    Node *prog = parse_program(&P);
-    if (!P.had_error)
-        for (int i = 0; i < prog->item_count; i++) exec_stmt(I, prog->items[i], I->globals);
-    I->path = prev;
+static int interpret(Interp *I, const char *src, const char *path) {
+    return run_source(I, src, path);
 }
 
 static void interp_init(Interp *I) {
@@ -1742,7 +2280,8 @@ static void interp_init(Interp *I) {
     I->path = NULL;
     I->has_error = false;
     I->err_msg[0] = '\0';
-    I->globals = env_new(NULL);
+    I->globals = xmalloc(sizeof(Table));
+    table_init(I->globals);
     install_stdlib(I);
 }
 
