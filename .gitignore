@@ -8,3 +8,6 @@ loqic
 # editor
 .vscode/
 .idea/
+
+# local work tracker (untracked)
+TODO.md

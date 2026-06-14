@@ -104,7 +104,8 @@ struct ObjProto {
     int arity;
     int upvalue_count;
     Chunk chunk;
-    char *name;     /* for diagnostics; NULL for the top-level script */
+    char *name;            /* for diagnostics; NULL for the top-level script */
+    Table *module_globals; /* the globals table of the module this proto belongs to */
 };
 
 /* A captured variable that may outlive the stack frame that created it. */
@@ -172,6 +173,7 @@ static inline Value obj_val(Obj *o)   { Value v; v.type = VAL_OBJ;   v.as.obj = 
 struct Interp {
     Obj *arena;        /* all heap objects, for cleanup */
     Table *globals;    /* global names -> values (hash table, O(1)) */
+    Table *base_stdlib;/* names of the built-ins (separates module defs from stdlib) */
     const char *path;  /* current source path for diagnostics */
     VM *vm;            /* the currently running VM (for native -> closure callbacks) */
     jmp_buf err_jmp;   /* runtime error landing pad */
@@ -1015,6 +1017,12 @@ static Node *parse_statement(Parser *P) {
         Node *n = new_node(N_IMPORT, P->prev.line);
         p_consume(P, T_STRING, "atteso percorso del modulo come stringa");
         n->name = P->prev.str_val;
+        /* optional: as <name>  (namespaced import) */
+        if (p_check(P, T_IDENT) && P->cur.length == 2 && memcmp(P->cur.start, "as", 2) == 0) {
+            p_advance(P);
+            p_consume(P, T_IDENT, "atteso un nome dopo 'as'");
+            n->literal = string_val(P->I, P->prev.start, P->prev.length);
+        }
         end_statement(P);
         return n;
     }
@@ -1377,7 +1385,7 @@ typedef enum {
     OP_CALL, OP_CLOSURE, OP_CLOSE_UPVALUE, OP_RETURN,
     OP_BUILD_LIST, OP_BUILD_MAP,
     OP_GET_INDEX, OP_SET_INDEX, OP_GET_PROPERTY, OP_SET_PROPERTY,
-    OP_ITER_SEQ, OP_FOR_NEXT, OP_IMPORT,
+    OP_ITER_SEQ, OP_FOR_NEXT, OP_IMPORT, OP_IMPORT_AS,
     OP_TRY_BEGIN, OP_TRY_END
 } OpCode;
 
@@ -1402,6 +1410,7 @@ static int chunk_add_const(Chunk *c, Value v) {
 static ObjProto *new_proto(Interp *I) {
     ObjProto *p = (ObjProto *)alloc_obj(I, sizeof(ObjProto), OBJ_PROTO);
     p->arity = 0; p->upvalue_count = 0; p->name = NULL;
+    p->module_globals = I->globals; /* globals of the module being compiled */
     chunk_init(&p->chunk);
     return p;
 }
@@ -1823,7 +1832,14 @@ static void compile_stmt(Compiler *C, Node *n) {
         case N_BREAK: compile_break(C, n->line); break;
         case N_CONTINUE: compile_continue(C, n->line); break;
         case N_IMPORT:
-            emit_byte(C, OP_IMPORT, n->line); emit_u16(C, name_const(C, n->name), n->line);
+            if (IS_STRING(n->literal)) { /* import "path" as name */
+                emit_byte(C, OP_IMPORT_AS, n->line);
+                emit_u16(C, name_const(C, n->name), n->line);
+                emit_u16(C, add_const(C, n->literal), n->line);
+            } else {
+                emit_byte(C, OP_IMPORT, n->line);
+                emit_u16(C, name_const(C, n->name), n->line);
+            }
             break;
         case N_TRY: {
             int catchJump = emit_jump(C, OP_TRY_BEGIN, n->line); /* operand = offset to catch */
@@ -1880,6 +1896,7 @@ struct VM {
 };
 
 static int run_source(Interp *I, const char *src, const char *path);
+static Value run_module_ns(Interp *I, const char *path);
 static void vm_error(VM *vm, const char *fmt, ...);
 
 static inline void vm_push(VM *vm, Value v) {
@@ -2087,23 +2104,26 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_SET_LOCAL: { uint8_t s = READ_BYTE(); frame->slots[s] = vm_peek(vm, 0); break; }
             case OP_GET_GLOBAL: {
                 ObjString *name = AS_STRING(READ_CONST());
-                Value *v = table_get(vm->I->globals, name->chars, hash_string(name->chars, (size_t)name->length));
-                if (!v) vm_error(vm, "nome non definito: '%s'", name->chars);
+                Table *g = frame->closure->proto->module_globals;
+                Value *v = table_get(g, name->chars, hash_string(name->chars, (size_t)name->length));
+                if (!v) vm_error(vm, "undefined name: '%s'", name->chars);
                 vm_push(vm, *v);
                 break;
             }
             case OP_DEFINE_GLOBAL: {
                 ObjString *name = AS_STRING(READ_CONST());
-                table_set(vm->I->globals, name->chars, hash_string(name->chars, (size_t)name->length), vm_peek(vm, 0));
+                Table *g = frame->closure->proto->module_globals;
+                table_set(g, name->chars, hash_string(name->chars, (size_t)name->length), vm_peek(vm, 0));
                 vm_pop(vm);
                 break;
             }
             case OP_SET_GLOBAL: {
                 ObjString *name = AS_STRING(READ_CONST());
+                Table *g = frame->closure->proto->module_globals;
                 uint32_t h = hash_string(name->chars, (size_t)name->length);
-                if (!table_get(vm->I->globals, name->chars, h))
-                    vm_error(vm, "assegnamento a variabile non dichiarata '%s' (usa 'let')", name->chars);
-                table_set(vm->I->globals, name->chars, h, vm_peek(vm, 0));
+                if (!table_get(g, name->chars, h))
+                    vm_error(vm, "assignment to undeclared variable '%s' (use 'let')", name->chars);
+                table_set(g, name->chars, h, vm_peek(vm, 0));
                 break;
             }
             case OP_GET_UPVALUE: { uint8_t i = READ_BYTE(); vm_push(vm, *frame->closure->upvalues[i]->location); break; }
@@ -2271,6 +2291,13 @@ static void run_vm(VM *vm, int stop_at) {
                 } else if (rc != 0) {
                     vm_error(vm, "import di '%s' fallito (codice %d)", path->chars, rc);
                 }
+                break;
+            }
+            case OP_IMPORT_AS: {
+                ObjString *path = AS_STRING(READ_CONST());
+                ObjString *alias = AS_STRING(READ_CONST());
+                Value ns = run_module_ns(vm->I, path->chars); /* raises on failure */
+                table_set(vm->I->globals, alias->chars, hash_string(alias->chars, (size_t)alias->length), ns);
                 break;
             }
             default: vm_error(vm, "istruzione sconosciuta %d", inst);
@@ -3345,6 +3372,34 @@ static int interpret(Interp *I, const char *src, const char *path) {
     return run_source(I, src, path);
 }
 
+/* Run a module in a fresh global namespace (seeded with the stdlib) and return a
+ * map of its own top-level definitions, for `import "path" as name`. */
+static Value run_module_ns(Interp *I, const char *path) {
+    Table *saved = I->globals;
+    Table *mod = xmalloc(sizeof(Table));
+    table_init(mod);
+    I->globals = mod;
+    install_stdlib(I);                 /* the module sees the built-ins */
+    int rc = run_source(I, NULL, path);
+    I->globals = saved;                /* restore before raising / building the map */
+    if (rc != 0) {
+        if (rc == 70) {
+            char cause[512];
+            snprintf(cause, sizeof(cause), "%s", I->err_msg);
+            runtime_error(I, 0, "import di '%s' fallito: %s", path, cause);
+        }
+        runtime_error(I, 0, "import di '%s' fallito (codice %d)", path, rc);
+    }
+    /* namespace = module globals minus the stdlib names */
+    ObjMap *ns = new_map(I);
+    for (int i = 0; i < mod->cap; i++) {
+        char *k = mod->entries[i].key;
+        if (k && !table_get(I->base_stdlib, k, mod->entries[i].hash))
+            map_set(ns, k, mod->entries[i].value);
+    }
+    return obj_val((Obj *)ns);
+}
+
 static void interp_init(Interp *I) {
     I->arena = NULL;
     I->path = NULL;
@@ -3354,6 +3409,12 @@ static void interp_init(Interp *I) {
     I->globals = xmalloc(sizeof(Table));
     table_init(I->globals);
     install_stdlib(I);
+    /* snapshot the built-in names so module namespaces can exclude them */
+    I->base_stdlib = xmalloc(sizeof(Table));
+    table_init(I->base_stdlib);
+    for (int i = 0; i < I->globals->cap; i++)
+        if (I->globals->entries[i].key)
+            table_set(I->base_stdlib, I->globals->entries[i].key, I->globals->entries[i].hash, NIL_VAL);
 }
 
 #define LOQI_VERSION "0.2.0"
