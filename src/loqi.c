@@ -181,6 +181,7 @@ struct Interp {
     jmp_buf err_jmp;   /* runtime error landing pad */
     bool has_error;
     char err_msg[512];
+    char err_trace[1024]; /* call-stack backtrace for an uncaught runtime error */
     int import_depth;  /* number of files currently being loaded (import stack height) */
     const char *import_stack[64]; /* paths currently loading, for cycle detection */
     /* mark-sweep garbage collector */
@@ -209,8 +210,10 @@ static int clamp_written(int n, size_t cap) {
 /* Routes a built error message to the nearest try/catch handler, or to the
  * top-level landing pad if none is active. Defined after the VM. */
 static void raise_error(Interp *I);
+static int vm_current_line(Interp *I); /* line of the instruction currently executing */
 
 static void runtime_error(Interp *I, int line, const char *fmt, ...) {
+    if (line == 0) line = vm_current_line(I); /* natives pass 0 -> use the call site */
     va_list ap;
     va_start(ap, fmt);
     int n = snprintf(I->err_msg, sizeof(I->err_msg),
@@ -1966,6 +1969,45 @@ static void vm_error(VM *vm, const char *fmt, ...) {
 /* Routes to the nearest try/catch handler (longjmp to the VM trap, with the
  * error value on the stack) or to the top-level landing pad. */
 static void close_upvalues(VM *vm, Value *last);
+
+/* Line of the bytecode instruction the top frame is currently executing. */
+static int vm_current_line(Interp *I) {
+    VM *vm = I->vm;
+    if (!vm || vm->frame_count <= 0) return 0;
+    CallFrame *fr = &vm->frames[vm->frame_count - 1];
+    Chunk *ch = &fr->closure->proto->chunk;
+    int idx = (int)(fr->ip - ch->code) - 1;
+    return (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
+}
+
+/* Build a human-readable backtrace of the live call stack at error time, newest
+ * frame first. Captured before the longjmp so the frames are still intact; the
+ * top-level reporter prints it under the error message for an uncaught error. */
+#define MAX_TRACE_FRAMES 16
+static void build_backtrace(Interp *I) {
+    I->err_trace[0] = '\0';
+    VM *vm = I->vm;
+    if (!vm || vm->frame_count <= 0) return;
+    size_t off = 0;
+    int shown = 0;
+    for (int i = vm->frame_count - 1; i >= 0 && shown < MAX_TRACE_FRAMES; i--, shown++) {
+        CallFrame *fr = &vm->frames[i];
+        Chunk *ch = &fr->closure->proto->chunk;
+        int idx = (int)(fr->ip - ch->code) - 1;
+        int line = (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
+        const char *name = (i == 0) ? "<script>"
+                         : (fr->closure->proto->name ? fr->closure->proto->name : "<anonymous>");
+        int w = snprintf(I->err_trace + off, sizeof(I->err_trace) - off,
+                         "  at %s (%s:%d)\n", name, I->path ? I->path : "?", line);
+        if (w < 0) break;
+        off += (size_t)w;
+        if (off >= sizeof(I->err_trace)) { off = sizeof(I->err_trace) - 1; break; }
+    }
+    if (vm->frame_count > MAX_TRACE_FRAMES && off < sizeof(I->err_trace))
+        snprintf(I->err_trace + off, sizeof(I->err_trace) - off,
+                 "  ... %d more frame(s)\n", vm->frame_count - MAX_TRACE_FRAMES);
+}
+
 static void raise_error(Interp *I) {
     I->has_error = true;
     VM *vm = I->vm;
@@ -1979,6 +2021,7 @@ static void raise_error(Interp *I) {
         *vm->stack_top++ = errval;   /* push error (room guaranteed: we just unwound) */
         longjmp(vm->trap, 1);
     }
+    build_backtrace(I);              /* uncaught: capture the stack for the reporter */
     longjmp(I->err_jmp, 1);
 }
 
@@ -3590,7 +3633,10 @@ static int run_source(Interp *I, const char *src, const char *path) {
            try/catch may handle it; printing here would spam stderr for a fully
            recovered import failure. The outer handler/top-level is the sole
            reporter in that case. */
-        if (prev_vm == NULL) fprintf(stderr, "%s\n", I->err_msg);
+        if (prev_vm == NULL) {
+            fprintf(stderr, "%s\n", I->err_msg);
+            if (I->err_trace[0]) fputs(I->err_trace, stderr);
+        }
         rc = 70;
     } else {
         ObjClosure *cl = new_closure(I, script);
@@ -3647,6 +3693,7 @@ static void interp_init(Interp *I) {
     I->vm = NULL;
     I->has_error = false;
     I->err_msg[0] = '\0';
+    I->err_trace[0] = '\0';
     I->import_depth = 0;
     I->obj_count = 0;
     I->next_gc = 1u << 14;   /* ~16k objects before the first collection */

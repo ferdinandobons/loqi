@@ -1,0 +1,8 @@
+# An uncaught error deep in a call chain — exercises the backtrace reporter.
+# Run by the suite's backtrace check (not as a standalone test).
+fn deepest() {
+  return [][3]          # out-of-range -> uncaught runtime error
+}
+fn middle() { return deepest() }
+fn outer() { return middle() }
+outer()

@@ -33,6 +33,8 @@ imply for the next step.
 | AI | concurrency for parallel `ai`/`http` calls | 🔜 next |
 | Core | garbage collector (mark-sweep) | ✅ done |
 | Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
+| Diagnostics | backtrace on uncaught errors | ✅ done |
+| Diagnostics | source-line snippet + caret (needs column tracking) | 🔜 next |
 | Core | module cache (single-evaluation) | 📋 planned |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |
 | Speed | AOT: emit C and compile (`loqi build`) | 🔬 exploring |

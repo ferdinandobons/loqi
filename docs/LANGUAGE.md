@@ -220,6 +220,17 @@ try { risky() } catch { print("handled") }
 `return` works from inside a `try`. (Avoid `break`/`continue` that jump out of a
 `try` block before it finishes — that edge case isn't supported yet.)
 
+An **uncaught** error prints the message and a backtrace of the call stack, so
+you see exactly where it came from:
+
+```
+runtime error [app.lq:4]: index 3 out of bounds (len 0)
+  at deepest (app.lq:4)
+  at middle (app.lq:6)
+  at outer (app.lq:7)
+  at <script> (app.lq:8)
+```
+
 ## Functions and closures
 
 Declare with `fn name(params) { ... }`. Functions are first-class values and can

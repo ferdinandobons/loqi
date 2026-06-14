@@ -40,6 +40,19 @@ for t in tests/errors/*.lq; do
   fi
 done
 
+# Backtrace: an uncaught error must print the full call stack to stderr.
+trace="$("$LOQI" tests/fixtures/backtrace_uncaught.lq 2>&1 1>/dev/null)"
+if printf '%s' "$trace" | grep -q "at deepest" \
+   && printf '%s' "$trace" | grep -q "at outer" \
+   && printf '%s' "$trace" | grep -q "at <script>"; then
+  echo "  ✓ (trace) uncaught-error backtrace shows the call stack"
+  pass=$((pass+1))
+else
+  echo "  ✗ (trace) backtrace missing expected frames:"
+  printf '%s\n' "$trace" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
