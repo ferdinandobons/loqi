@@ -22,6 +22,9 @@
 #include <math.h>
 #include <setjmp.h>
 #include <time.h>
+#include <errno.h>
+#include <limits.h>
+#include <sys/stat.h>
 
 /* ===========================================================================
  * Forward declarations
@@ -173,12 +176,21 @@ struct Interp {
     char err_msg[512];
 };
 
+/* snprintf returns the would-be length; clamp it so reusing it as an offset
+ * into a fixed buffer can never run past the end (long paths/names). */
+static int clamp_written(int n, size_t cap) {
+    if (n < 0) return 0;
+    if ((size_t)n >= cap) return (int)cap - 1;
+    return n;
+}
+
 static void runtime_error(Interp *I, int line, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     int n = snprintf(I->err_msg, sizeof(I->err_msg),
                      "errore a runtime [%s:%d]: ", I->path ? I->path : "?", line);
-    vsnprintf(I->err_msg + n, sizeof(I->err_msg) - n, fmt, ap);
+    n = clamp_written(n, sizeof(I->err_msg));
+    vsnprintf(I->err_msg + n, sizeof(I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
     I->has_error = true;
     longjmp(I->err_jmp, 1);
@@ -320,8 +332,13 @@ static void skip_trivia(Lexer *L) {
         char c = peek_ch(L);
         if (c == ' ' || c == '\t' || c == '\r') { advance_ch(L); }
         else if (c == '#') { while (!is_at_end(L) && peek_ch(L) != '\n') advance_ch(L); }
-        else if (c == '\\' && peek_next(L) == '\n') { /* line continuation */
+        else if (c == '\\' && peek_next(L) == '\n') { /* line continuation (LF) */
             advance_ch(L); advance_ch(L); L->line++;
+        }
+        else if (c == '\\' && peek_next(L) == '\r') { /* line continuation (CRLF) */
+            advance_ch(L); advance_ch(L);
+            if (peek_ch(L) == '\n') advance_ch(L);
+            L->line++;
         }
         else return;
     }
@@ -382,8 +399,14 @@ static Token lex_number(Lexer *L) {
         if (*p != '_') buf[bi++] = *p;
     buf[bi] = '\0';
     Token tok = make_token(L, is_float ? T_FLOAT : T_INT);
-    if (is_float) tok.float_val = strtod(buf, NULL);
-    else          tok.int_val = strtoll(buf, NULL, 10);
+    errno = 0;
+    if (is_float) {
+        tok.float_val = strtod(buf, NULL);
+        if (errno == ERANGE) return error_token(L, "numero in virgola mobile fuori range");
+    } else {
+        tok.int_val = strtoll(buf, NULL, 10);
+        if (errno == ERANGE) return error_token(L, "intero fuori dal range a 64 bit");
+    }
     return tok;
 }
 
@@ -398,6 +421,11 @@ static Token lex_string(Lexer *L) {
         if (interp == 0 && peek_ch(L) == '"') break; /* end of string literal */
         char c = advance_ch(L);
         if (c == '\n') L->line++;
+        if ((unsigned char)c == 0x01 || (unsigned char)c == 0x02) {
+            /* these bytes are reserved as internal escaped-brace sentinels */
+            free(buf);
+            return error_token(L, "byte di controllo non valido nella stringa");
+        }
         if (interp == 0) {
             if (c == '\\') {
                 char e = advance_ch(L);
@@ -436,7 +464,12 @@ static Token lex_string(Lexer *L) {
             else PUSH(c);
         }
     }
-    if (is_at_end(L)) { free(buf); return error_token(L, "stringa non terminata"); }
+    if (is_at_end(L)) {
+        free(buf);
+        return error_token(L, interp > 0
+            ? "interpolazione '{' non chiusa nella stringa (per una graffa letterale usa \\{ )"
+            : "stringa non terminata");
+    }
     advance_ch(L); /* closing quote */
     PUSH('\0');
 #undef PUSH
@@ -521,12 +554,15 @@ static void node_add(Node ***arr, int *count, Node *child) {
 /* ===========================================================================
  * Parser (recursive descent + Pratt for binary precedence)
  * ========================================================================= */
+#define MAX_PARSE_DEPTH 500
+
 typedef struct {
     Interp *I;
     Lexer lex;
     Token cur;
     Token prev;
     bool had_error;
+    int depth; /* recursion depth guard against pathological nesting */
 } Parser;
 
 static void parser_error_at(Parser *P, Token *t, const char *msg) {
@@ -620,10 +656,8 @@ static Node *parse_primary(Parser *P) {
                 Node *key;
                 if (p_check(P, T_IDENT)) {
                     p_advance(P);
+                    /* bare identifier key: treat as a string literal key */
                     key = new_node(N_STR, P->prev.line);
-                    key->literal = cstring_val(P->I, "");
-                    key->name = copy_lexeme(&P->prev); /* keep raw key */
-                    /* store the key string in literal too */
                     key->literal = string_val(P->I, P->prev.start, P->prev.length);
                 } else {
                     key = parse_expression(P);
@@ -696,14 +730,23 @@ static Node *parse_postfix(Parser *P) {
 }
 
 static Node *parse_unary(Parser *P) {
+    if (++P->depth > MAX_PARSE_DEPTH) {
+        parser_error_at(P, &P->cur, "espressione troppo annidata");
+        P->depth--;
+        return new_node(N_NIL, P->cur.line);
+    }
+    Node *result;
     if (p_check(P, T_NOT) || p_check(P, T_MINUS)) {
         p_advance(P);
         Node *n = new_node(N_UNARY, P->prev.line);
         n->op = P->prev.type;
         n->a = parse_unary(P);
-        return n;
+        result = n;
+    } else {
+        result = parse_postfix(P);
     }
-    return parse_postfix(P);
+    P->depth--;
+    return result;
 }
 
 /* precedence climbing for binary operators */
@@ -797,9 +840,7 @@ static Node *parse_if(Parser *P) {
     n->a = parse_expression(P);          /* condition */
     skip_newlines(P);
     n->b = parse_block(P);               /* then */
-    /* allow newline(s) before else */
-    Parser save = *P; (void)save;
-    skip_newlines(P);
+    skip_newlines(P);                    /* allow newline(s) before else */
     if (p_match(P, T_ELSE)) {
         skip_newlines(P);
         if (p_check(P, T_IF)) { p_advance(P); n->c = parse_if(P); }
@@ -883,11 +924,13 @@ static Node *parse_program(Parser *P) {
  * string interpolation). Returns NULL on error. */
 static Node *parse_expr_from_source(Interp *I, const char *src) {
     Parser P;
-    P.I = I; P.had_error = false;
+    P.I = I; P.had_error = false; P.depth = 0;
     lex_init(&P.lex, I, src);
     p_advance(&P);
     skip_newlines(&P);
     Node *e = parse_expression(&P);
+    skip_newlines(&P);
+    if (!p_check(&P, T_EOF)) return NULL; /* trailing junk in {interpolation} */
     if (P.had_error) return NULL;
     return e;
 }
@@ -943,13 +986,10 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
             Node *expr = parse_expr_from_source(P->I, ebuf);
             free(ebuf);
             if (!expr) { parser_error_at(P, strtok, "espressione non valida in interpolazione"); expr = new_node(N_NIL, line); }
-            /* wrap in str() coercion via a special marker: use N_CALL of builtin 'str' */
-            Node *call = new_node(N_CALL, line);
-            Node *fnref = new_node(N_IDENT, line);
-            fnref->name = strdup("str");
-            call->a = fnref;
-            node_add(&call->items, &call->item_count, expr);
-            Node *b = new_node(N_BINARY, line); b->op = T_PLUS; b->a = concat; b->b = call;
+            /* concat is always string-typed here (starts as a string literal), so
+             * '+' coerces the interpolated value via the VM's string concatenation.
+             * No dependency on a (shadowable) global 'str'. */
+            Node *b = new_node(N_BINARY, line); b->op = T_PLUS; b->a = concat; b->b = expr;
             concat = b;
             any_interp = true;
         } else if ((unsigned char)s[i] == 0x01) {
@@ -979,9 +1019,6 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
     return concat;
 }
 
-/* ===========================================================================
- * Environments
- * ========================================================================= */
 /* ===========================================================================
  * Table — open-addressing hash map with string keys, for global variables.
  * O(1) average lookup; this is what replaces the old linear-scan environment.
@@ -1095,6 +1132,8 @@ static bool values_equal(Value a, Value b) {
 /* stringify a value into a freshly heap string buffer (caller frees) */
 static char *value_to_cstr(Interp *I, Value v);
 
+#define REPR_BUF 64 /* buffer size for the <fn ...>/<native ...>/<proto ...> reprs */
+
 static void append_str(char **buf, size_t *len, size_t *cap, const char *s, size_t n) {
     if (*len + n + 1 > *cap) {
         while (*len + n + 1 > *cap) *cap = *cap < 16 ? 32 : *cap * 2;
@@ -1103,6 +1142,21 @@ static void append_str(char **buf, size_t *len, size_t *cap, const char *s, size
     memcpy(*buf + *len, s, n);
     *len += n;
     (*buf)[*len] = '\0';
+}
+
+/* Append a value's display form to buf; strings are quoted. Shared by the
+ * list and map stringify branches of value_to_cstr. */
+static void append_value_repr(Interp *I, char **buf, size_t *len, size_t *cap, Value v) {
+    if (IS_STRING(v)) {
+        ObjString *s = AS_STRING(v);
+        append_str(buf, len, cap, "\"", 1);
+        append_str(buf, len, cap, s->chars, (size_t)s->length);
+        append_str(buf, len, cap, "\"", 1);
+    } else {
+        char *s = value_to_cstr(I, v);
+        append_str(buf, len, cap, s, strlen(s));
+        free(s);
+    }
 }
 
 static char *value_to_cstr(Interp *I, Value v) {
@@ -1121,19 +1175,19 @@ static char *value_to_cstr(Interp *I, Value v) {
             switch (OBJ_TYPE(v)) {
                 case OBJ_STRING: return strdup(AS_STRING(v)->chars);
                 case OBJ_NATIVE: {
-                    char *b = xmalloc(64);
-                    snprintf(b, 64, "<native %s>", AS_NATIVE(v)->name);
+                    char *b = xmalloc(REPR_BUF);
+                    snprintf(b, REPR_BUF, "<native %s>", AS_NATIVE(v)->name);
                     return b;
                 }
                 case OBJ_CLOSURE: {
                     ObjProto *p = AS_CLOSURE(v)->proto;
-                    char *b = xmalloc(64);
-                    snprintf(b, 64, "<fn %s>", p->name ? p->name : "anon");
+                    char *b = xmalloc(REPR_BUF);
+                    snprintf(b, REPR_BUF, "<fn %s>", p->name ? p->name : "anon");
                     return b;
                 }
                 case OBJ_PROTO: {
-                    char *b = xmalloc(64);
-                    snprintf(b, 64, "<proto %s>", AS_PROTO(v)->name ? AS_PROTO(v)->name : "script");
+                    char *b = xmalloc(REPR_BUF);
+                    snprintf(b, REPR_BUF, "<proto %s>", AS_PROTO(v)->name ? AS_PROTO(v)->name : "script");
                     return b;
                 }
                 case OBJ_UPVALUE: return strdup("<upvalue>");
@@ -1143,17 +1197,7 @@ static char *value_to_cstr(Interp *I, Value v) {
                     size_t len = 1, cap = 2;
                     for (int i = 0; i < l->count; i++) {
                         if (i) append_str(&b, &len, &cap, ", ", 2);
-                        char *s;
-                        if (IS_STRING(l->items[i])) {
-                            ObjString *str = AS_STRING(l->items[i]);
-                            append_str(&b, &len, &cap, "\"", 1);
-                            append_str(&b, &len, &cap, str->chars, (size_t)str->length);
-                            append_str(&b, &len, &cap, "\"", 1);
-                        } else {
-                            s = value_to_cstr(I, l->items[i]);
-                            append_str(&b, &len, &cap, s, strlen(s));
-                            free(s);
-                        }
+                        append_value_repr(I, &b, &len, &cap, l->items[i]);
                     }
                     append_str(&b, &len, &cap, "]", 1);
                     return b;
@@ -1166,16 +1210,7 @@ static char *value_to_cstr(Interp *I, Value v) {
                         if (i) append_str(&b, &len, &cap, ", ", 2);
                         append_str(&b, &len, &cap, m->entries[i].key, strlen(m->entries[i].key));
                         append_str(&b, &len, &cap, ": ", 2);
-                        if (IS_STRING(m->entries[i].value)) {
-                            ObjString *str = AS_STRING(m->entries[i].value);
-                            append_str(&b, &len, &cap, "\"", 1);
-                            append_str(&b, &len, &cap, str->chars, (size_t)str->length);
-                            append_str(&b, &len, &cap, "\"", 1);
-                        } else {
-                            char *s = value_to_cstr(I, m->entries[i].value);
-                            append_str(&b, &len, &cap, s, strlen(s));
-                            free(s);
-                        }
+                        append_value_repr(I, &b, &len, &cap, m->entries[i].value);
                     }
                     append_str(&b, &len, &cap, "}", 1);
                     return b;
@@ -1273,11 +1308,13 @@ static ObjUpvalue *new_upvalue(Interp *I, Value *slot) {
 typedef struct { const char *name; int name_len; int depth; bool is_captured; } CompLocal;
 typedef struct { uint8_t index; bool is_local; } CompUpvalue;
 
+#define MAX_BREAKS_PER_LOOP 256
+
 typedef struct LoopCtx {
     struct LoopCtx *enclosing;
     int continue_target;
     int body_local_base;
-    int breaks[256];
+    int breaks[MAX_BREAKS_PER_LOOP];
     int break_count;
 } LoopCtx;
 
@@ -1432,10 +1469,12 @@ static void compile_expr(Compiler *C, Node *n) {
         case N_INT: case N_FLOAT: case N_STR: emit_const(C, n->literal, n->line); break;
         case N_IDENT: named_get(C, n->name, n->line); break;
         case N_LIST:
+            if (n->item_count > 0xffff) { *C->had_error = true; fprintf(stderr, "troppi elementi nel literal di list (max 65535)\n"); break; }
             for (int i = 0; i < n->item_count; i++) compile_expr(C, n->items[i]);
             emit_byte(C, OP_BUILD_LIST, n->line); emit_u16(C, n->item_count, n->line);
             break;
         case N_MAP:
+            if (n->item_count > 0xffff) { *C->had_error = true; fprintf(stderr, "troppe coppie nel literal di map (max 65535)\n"); break; }
             for (int i = 0; i < n->item_count; i++) {
                 compile_expr(C, n->items[i]);
                 compile_expr(C, n->items2[i]);
@@ -1486,6 +1525,7 @@ static void compile_expr(Compiler *C, Node *n) {
             break;
         }
         case N_CALL: {
+            if (n->item_count > 255) { *C->had_error = true; fprintf(stderr, "troppi argomenti in una chiamata (max 255)\n"); break; }
             compile_expr(C, n->a);
             for (int i = 0; i < n->item_count; i++) compile_expr(C, n->items[i]);
             emit_byte(C, OP_CALL, n->line); emit_byte(C, (uint8_t)n->item_count, n->line);
@@ -1507,6 +1547,9 @@ static void compile_expr(Compiler *C, Node *n) {
 
 static void compile_break(Compiler *C, int line) {
     if (!C->loop) { *C->had_error = true; fprintf(stderr, "'break' fuori da un ciclo\n"); return; }
+    if (C->loop->break_count >= MAX_BREAKS_PER_LOOP) {
+        *C->had_error = true; fprintf(stderr, "troppi 'break' in un singolo ciclo\n"); return;
+    }
     for (int i = C->local_count - 1; i >= C->loop->body_local_base; i--)
         emit_byte(C, C->locals[i].is_captured ? OP_CLOSE_UPVALUE : OP_POP, line);
     int j = emit_jump(C, OP_JUMP, line);
@@ -1586,6 +1629,9 @@ static void compile_for(Compiler *C, Node *n) {
 }
 
 static void compile_function(Compiler *enc, Node *fn_node, int line) {
+    if (fn_node->item_count > 255) {
+        *enc->had_error = true; fprintf(stderr, "troppi parametri in una funzione (max 255)\n");
+    }
     Compiler sub;
     init_compiler(&sub, enc->I, enc, fn_node->name, enc->had_error);
     sub.proto->arity = fn_node->item_count;
@@ -1679,8 +1725,13 @@ typedef struct {
 } VM;
 
 static int run_source(Interp *I, const char *src, const char *path);
+static void vm_error(VM *vm, const char *fmt, ...);
 
-static inline void vm_push(VM *vm, Value v) { *vm->stack_top++ = v; }
+static inline void vm_push(VM *vm, Value v) {
+    if (vm->stack_top >= vm->stack + STACK_MAX)
+        vm_error(vm, "stack dei valori esaurito (espressione o struttura troppo grande)");
+    *vm->stack_top++ = v;
+}
 static inline Value vm_pop(VM *vm) { return *(--vm->stack_top); }
 static inline Value vm_peek(VM *vm, int distance) { return vm->stack_top[-1 - distance]; }
 
@@ -1692,6 +1743,7 @@ static void vm_error(VM *vm, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     int n = snprintf(vm->I->err_msg, sizeof(vm->I->err_msg),
                      "errore a runtime [%s:%d]: ", vm->I->path ? vm->I->path : "?", line);
+    n = clamp_written(n, sizeof(vm->I->err_msg));
     vsnprintf(vm->I->err_msg + n, sizeof(vm->I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
     vm->I->has_error = true;
@@ -1763,9 +1815,18 @@ static void vm_binary(VM *vm, OpCode op) {
         vm_error(vm, "operatore aritmetico non supportato tra %s e %s", type_name(a), type_name(b));
     bool both_int = IS_INT(a) && IS_INT(b);
     switch (op) {
-        case OP_ADD: vm_push(vm, both_int ? int_val(AS_INT(a) + AS_INT(b)) : float_val(as_double(a) + as_double(b))); break;
-        case OP_SUB: vm_push(vm, both_int ? int_val(AS_INT(a) - AS_INT(b)) : float_val(as_double(a) - as_double(b))); break;
-        case OP_MUL: vm_push(vm, both_int ? int_val(AS_INT(a) * AS_INT(b)) : float_val(as_double(a) * as_double(b))); break;
+        case OP_ADD:
+            if (both_int) { int64_t r; if (__builtin_add_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "overflow intero in '+'"); vm_push(vm, int_val(r)); }
+            else vm_push(vm, float_val(as_double(a) + as_double(b)));
+            break;
+        case OP_SUB:
+            if (both_int) { int64_t r; if (__builtin_sub_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "overflow intero in '-'"); vm_push(vm, int_val(r)); }
+            else vm_push(vm, float_val(as_double(a) - as_double(b)));
+            break;
+        case OP_MUL:
+            if (both_int) { int64_t r; if (__builtin_mul_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "overflow intero in '*'"); vm_push(vm, int_val(r)); }
+            else vm_push(vm, float_val(as_double(a) * as_double(b)));
+            break;
         case OP_DIV: {
             double db = as_double(b);
             if (db == 0.0) vm_error(vm, "divisione per zero");
@@ -1774,6 +1835,7 @@ static void vm_binary(VM *vm, OpCode op) {
         case OP_FLOORDIV:
             if (both_int) {
                 if (AS_INT(b) == 0) vm_error(vm, "divisione per zero");
+                if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) { vm_push(vm, int_val(INT64_MIN)); break; } /* avoid overflow UB */
                 int64_t q = AS_INT(a) / AS_INT(b);
                 if ((AS_INT(a) % AS_INT(b) != 0) && ((AS_INT(a) < 0) != (AS_INT(b) < 0))) q--;
                 vm_push(vm, int_val(q));
@@ -1786,6 +1848,7 @@ static void vm_binary(VM *vm, OpCode op) {
         case OP_MOD:
             if (both_int) {
                 if (AS_INT(b) == 0) vm_error(vm, "modulo per zero");
+                if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) { vm_push(vm, int_val(0)); break; } /* avoid overflow UB */
                 vm_push(vm, int_val(AS_INT(a) % AS_INT(b)));
             } else vm_push(vm, float_val(fmod(as_double(a), as_double(b))));
             break;
@@ -1862,8 +1925,10 @@ static void run_vm(VM *vm) {
                 vm_binary(vm, (OpCode)inst); break;
             case OP_NEGATE: {
                 Value v = vm_pop(vm);
-                if (IS_INT(v)) vm_push(vm, int_val(-AS_INT(v)));
-                else if (IS_FLOAT(v)) vm_push(vm, float_val(-AS_FLOAT(v)));
+                if (IS_INT(v)) {
+                    if (AS_INT(v) == INT64_MIN) vm_error(vm, "overflow intero in negazione");
+                    vm_push(vm, int_val(-AS_INT(v)));
+                } else if (IS_FLOAT(v)) vm_push(vm, float_val(-AS_FLOAT(v)));
                 else vm_error(vm, "'-' richiede un numero, trovato %s", type_name(v));
                 break;
             }
@@ -1986,7 +2051,8 @@ static void run_vm(VM *vm) {
             }
             case OP_IMPORT: {
                 ObjString *path = AS_STRING(READ_CONST());
-                run_source(vm->I, NULL, path->chars); /* NULL src => read file */
+                int rc = run_source(vm->I, NULL, path->chars); /* NULL src => read file */
+                if (rc != 0) vm_error(vm, "import di '%s' fallito (codice %d)", path->chars, rc);
                 break;
             }
             default: vm_error(vm, "istruzione sconosciuta %d", inst);
@@ -2046,7 +2112,8 @@ static Value nat_float(Interp *I, int argc, Value *argv) {
     return NIL_VAL;
 }
 static Value nat_push(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "push() richiede una list");
+    if (argc < 1) runtime_error(I, 0, "push() richiede almeno una list");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "push() richiede una list, trovato %s", type_name(argv[0]));
     for (int i = 1; i < argc; i++) list_push(AS_LIST(argv[0]), argv[i]);
     return argv[0];
 }
@@ -2086,15 +2153,20 @@ static Value nat_has(Interp *I, int argc, Value *argv) {
     return NIL_VAL;
 }
 static Value nat_range(Interp *I, int argc, Value *argv) {
+    if (argc < 1 || argc > 3) runtime_error(I, 0, "range() attende 1-3 argomenti, ricevuti %d", argc);
+    for (int i = 0; i < argc; i++)
+        if (!IS_INT(argv[i])) runtime_error(I, 0, "range() richiede argomenti int, trovato %s", type_name(argv[i]));
     int64_t start = 0, stop = 0, step = 1;
     if (argc == 1) { stop = AS_INT(argv[0]); }
     else if (argc == 2) { start = AS_INT(argv[0]); stop = AS_INT(argv[1]); }
-    else if (argc == 3) { start = AS_INT(argv[0]); stop = AS_INT(argv[1]); step = AS_INT(argv[2]); }
-    else runtime_error(I, 0, "range() attende 1-3 argomenti");
+    else { start = AS_INT(argv[0]); stop = AS_INT(argv[1]); step = AS_INT(argv[2]); }
     if (step == 0) runtime_error(I, 0, "range() step non può essere 0");
     ObjList *l = new_list(I);
-    if (step > 0) for (int64_t i = start; i < stop; i += step) list_push(l, int_val(i));
-    else          for (int64_t i = start; i > stop; i += step) list_push(l, int_val(i));
+    int64_t i = start;
+    while (step > 0 ? i < stop : i > stop) {
+        list_push(l, int_val(i));
+        if (__builtin_add_overflow(i, step, &i)) break; /* avoid int64 overflow UB */
+    }
     return obj_val((Obj *)l);
 }
 static Value nat_upper(Interp *I, int argc, Value *argv) {
@@ -2173,6 +2245,7 @@ static Value nat_input(Interp *I, int argc, Value *argv) {
     return v;
 }
 static Value nat_assert(Interp *I, int argc, Value *argv) {
+    if (argc < 1) runtime_error(I, 0, "assert() richiede una condizione");
     if (!is_truthy(argv[0])) {
         const char *msg = (argc >= 2 && IS_STRING(argv[1])) ? AS_STRING(argv[1])->chars : "assert fallita";
         runtime_error(I, 0, "assert: %s", msg);
@@ -2215,14 +2288,24 @@ static void install_stdlib(Interp *I) {
  * Driver
  * ========================================================================= */
 static char *read_file(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "'%s' è una directory, non un file\n", path);
+        return NULL;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "impossibile aprire '%s'\n", path); return NULL; }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = xmalloc((size_t)size + 1);
-    size_t read = fread(buf, 1, (size_t)size, f);
-    buf[read] = '\0';
+    /* stream-read: works for regular files and unseekable pipes/stdin alike */
+    size_t cap = 4096, len = 0;
+    char *buf = xmalloc(cap);
+    for (;;) {
+        if (cap - len < 4096) { cap *= 2; buf = xrealloc(buf, cap); }
+        size_t got = fread(buf + len, 1, cap - len, f);
+        len += got;
+        if (got == 0) break;
+    }
+    if (ferror(f)) { fprintf(stderr, "errore di lettura su '%s'\n", path); free(buf); fclose(f); return NULL; }
+    buf[len] = '\0';
     fclose(f);
     return buf;
 }
@@ -2240,7 +2323,7 @@ static int run_source(Interp *I, const char *src, const char *path) {
     I->path = path;
 
     Parser P;
-    P.I = I; P.had_error = false;
+    P.I = I; P.had_error = false; P.depth = 0;
     lex_init(&P.lex, I, src);
     p_advance(&P);
     Node *prog = parse_program(&P);

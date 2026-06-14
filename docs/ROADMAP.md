@@ -108,6 +108,27 @@ These need network I/O. v0.1 of the AI layer shells out to the always-present
 
 ---
 
+## Iteration 2.5 — the review loop hardens the VM (✅)
+
+The build loop now includes a **continuous adversarial code review**. A multi-agent
+pass (6 review dimensions → per-finding skeptical verification → synthesis) raised
+29 findings; 28 were confirmed and all were fixed in one hardening pass:
+
+- **Critical:** VM stack had no overflow guard — a large literal could write past
+  `stack[]` and corrupt the heap. Now guarded; raises a clean error. (Reproduced
+  by the reviewer, fixed, re-verified under ASan.)
+- **High:** `snprintf` offset misuse; variadic-native arg/type checks; `import`
+  swallowing errors; unbounded parser recursion; interpolation trailing-junk and
+  the shadowable-`str` dependency.
+- **Medium:** integer-overflow UB across arithmetic/negation/`INT64_MIN` division;
+  `read_file` not validating directories / unseekable streams; control-byte
+  corruption in strings; `break` array overflow.
+- **Low/quality:** silent truncation limits, integer-literal range checks, CRLF
+  continuation, dead-code removal, de-duplicated `value_to_cstr`.
+
+The whole suite stays green under AddressSanitizer/UBSan. This pass runs every
+iteration from now on.
+
 ## Backlog (📋)
 
 - Mark-sweep garbage collector (today: heap is freed at exit).

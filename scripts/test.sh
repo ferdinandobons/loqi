@@ -26,6 +26,20 @@ for e in examples/*.lm; do
   fi
 done
 
+# Error tests: these MUST fail cleanly (non-zero exit), never crash/segfault.
+for t in tests/errors/*.lm; do
+  [ -e "$t" ] || continue
+  "$LUME" "$t" >/dev/null 2>&1
+  rc=$?
+  if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ]; then
+    echo "  ✓ (error) $t  (exit $rc)"
+    pass=$((pass+1))
+  else
+    echo "  ✗ (error) $t  — atteso errore pulito, exit=$rc"
+    fail=$((fail+1))
+  fi
+done
+
 echo "-----------------------------------------"
 echo "  passati: $pass   falliti: $fail"
 [ "$fail" -eq 0 ]
