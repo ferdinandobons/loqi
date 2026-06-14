@@ -258,7 +258,9 @@ file doing the import**, so a module works no matter which directory you run it 
 
 **Namespaced import** — the recommended form. The module runs in its own global
 scope and is exposed under a name; its functions keep resolving *their own* globals,
-so a module's internal constants never leak into — or clash with — yours:
+so a module's internal constants never leak into — or clash with — yours. A module
+exports exactly the top-level names it defines with `let`/`fn` — including ones that
+shadow a built-in (a module may define and export its own `PI`):
 
 ```loqi
 # geometry.lq

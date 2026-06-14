@@ -1,0 +1,39 @@
+# Math + random standard-library tests.
+
+# --- constants ---
+assert(PI > 3.1415 and PI < 3.1416, "PI constant")
+assert(E > 2.7182 and E < 2.7183, "E constant")
+
+# --- trig ---
+assert(sin(0.0) == 0.0, "sin(0)")
+assert(cos(0.0) == 1.0, "cos(0)")
+assert(sin(PI / 2) > 0.9999 and sin(PI / 2) < 1.0001, "sin(PI/2)")
+let x = 0.7
+let id = sin(x) * sin(x) + cos(x) * cos(x)
+assert(id > 0.9999 and id < 1.0001, "sin^2 + cos^2 == 1")
+assert(tan(0.0) == 0.0, "tan(0)")
+
+# --- log / exp ---
+assert(exp(0.0) == 1.0, "exp(0) == 1")
+assert(log(exp(1.0)) > 0.9999 and log(exp(1.0)) < 1.0001, "log(exp(1)) == 1")
+assert(log(8, 2) > 2.999 and log(8, 2) < 3.001, "log base 2 of 8 == 3")
+assert(log(1000, 10) > 2.999 and log(1000, 10) < 3.001, "log base 10 of 1000 == 3")
+
+# --- random: reproducible with a seed, in range ---
+seed(12345)
+let a = random()
+assert(a >= 0.0 and a < 1.0, "random in [0, 1)")
+seed(12345)
+assert(random() == a, "seed makes random() reproducible")
+
+assert(randint(5, 5) == 5, "randint single-value range")
+let ok = true
+let i = 0
+while i < 2000 {
+  let r = randint(1, 6)
+  if r < 1 or r > 6 { ok = false }
+  i = i + 1
+}
+assert(ok, "randint(1, 6) stays within [1, 6]")
+
+print("test_math: all tests passed ✓")

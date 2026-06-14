@@ -175,7 +175,7 @@ static inline Value obj_val(Obj *o)   { Value v; v.type = VAL_OBJ;   v.as.obj = 
 struct Interp {
     Obj *arena;        /* all heap objects, for cleanup */
     Table *globals;    /* global names -> values (hash table, O(1)) */
-    Table *base_stdlib;/* names of the built-ins (separates module defs from stdlib) */
+    Table *module_defines; /* while running a namespaced module: names it defines (for export) */
     const char *path;  /* current source path for diagnostics */
     VM *vm;            /* the currently running VM (for native -> closure callbacks) */
     jmp_buf err_jmp;   /* runtime error landing pad */
@@ -191,6 +191,7 @@ struct Interp {
     Obj **gray;        /* worklist of marked-but-not-yet-scanned objects */
     int gray_count, gray_cap;
     bool gc_stress;    /* LOQI_GC_STRESS=1 -> collect at every safe-point (testing) */
+    uint64_t rng_state; /* xorshift64 state for random()/randint() */
 };
 
 /* An import that re-enters another file recurses through run_source on the C
@@ -2321,8 +2322,13 @@ static void run_vm(VM *vm, int stop_at) {
             }
             case OP_DEFINE_GLOBAL: {
                 ObjString *name = AS_STRING(READ_CONST());
+                uint32_t h = hash_string(name->chars, (size_t)name->length);
                 Table *g = frame->closure->proto->module_globals;
-                table_set(g, name->chars, hash_string(name->chars, (size_t)name->length), vm_peek(vm, 0));
+                table_set(g, name->chars, h, vm_peek(vm, 0));
+                /* record module-level definitions so `import .. as` can export exactly
+                   the names the module defines (even ones that shadow a built-in). */
+                if (vm->I->module_defines)
+                    table_set(vm->I->module_defines, name->chars, h, NIL_VAL);
                 vm_pop(vm);
                 break;
             }
@@ -3386,6 +3392,61 @@ static Value nat_pow(Interp *I, int argc, Value *argv) {
     if (!IS_NUM(argv[0]) || !IS_NUM(argv[1])) runtime_error(I, 0, "pow() requires two numbers");
     return float_val(pow(as_double(argv[0]), as_double(argv[1])));
 }
+static Value nat_sin(Interp *I, int argc, Value *argv) {
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "sin() requires a number");
+    return float_val(sin(as_double(argv[0])));
+}
+static Value nat_cos(Interp *I, int argc, Value *argv) {
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "cos() requires a number");
+    return float_val(cos(as_double(argv[0])));
+}
+static Value nat_tan(Interp *I, int argc, Value *argv) {
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "tan() requires a number");
+    return float_val(tan(as_double(argv[0])));
+}
+static Value nat_log(Interp *I, int argc, Value *argv) {
+    /* log(x) = natural log; log(x, base) = log base b */
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "log() requires a number");
+    double x = as_double(argv[0]);
+    if (argc >= 2) {
+        if (!IS_NUM(argv[1])) runtime_error(I, 0, "log(): base must be a number");
+        return float_val(log(x) / log(as_double(argv[1])));
+    }
+    return float_val(log(x));
+}
+static Value nat_exp(Interp *I, int argc, Value *argv) {
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "exp() requires a number");
+    return float_val(exp(as_double(argv[0])));
+}
+
+/* xorshift64 — small, fast, decent-quality PRNG (state is never zero). */
+static uint64_t rng_next(Interp *I) {
+    uint64_t x = I->rng_state;
+    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+    I->rng_state = x;
+    return x;
+}
+static Value nat_random(Interp *I, int argc, Value *argv) {
+    (void)argc; (void)argv;
+    /* 53 random mantissa bits -> a double uniformly in [0, 1) */
+    uint64_t bits = rng_next(I) >> 11;
+    return float_val((double)bits * (1.0 / 9007199254740992.0));
+}
+static Value nat_randint(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_INT(argv[0]) || !IS_INT(argv[1])) runtime_error(I, 0, "randint() requires (int, int)");
+    int64_t a = AS_INT(argv[0]), b = AS_INT(argv[1]);
+    if (a > b) runtime_error(I, 0, "randint(): low must be <= high");
+    uint64_t span = (uint64_t)(b - a) + 1;        /* inclusive range */
+    return int_val(a + (int64_t)(rng_next(I) % span));
+}
+static Value nat_seed(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_INT(argv[0])) runtime_error(I, 0, "seed() requires an int");
+    uint64_t s = (uint64_t)AS_INT(argv[0]);
+    I->rng_state = s ? s : 0x9e3779b97f4a7c15ULL; /* avoid the zero fixed point */
+    return NIL_VAL;
+}
 static Value nat_del(Interp *I, int argc, Value *argv) {
     if (!IS_MAP(argv[0])) runtime_error(I, 0, "del() requires a map");
     char *key = value_to_cstr(I, argv[1]);
@@ -3528,6 +3589,16 @@ static void install_stdlib(Interp *I) {
     define_native(I, "round", nat_round, 1);
     define_native(I, "ceil", nat_ceil, 1);
     define_native(I, "pow", nat_pow, 2);
+    define_native(I, "sin", nat_sin, 1);
+    define_native(I, "cos", nat_cos, 1);
+    define_native(I, "tan", nat_tan, 1);
+    define_native(I, "log", nat_log, -1);   /* log(x) | log(x, base) */
+    define_native(I, "exp", nat_exp, 1);
+    define_native(I, "random", nat_random, 0);
+    define_native(I, "randint", nat_randint, 2);
+    define_native(I, "seed", nat_seed, 1);
+    table_set(I->globals, "PI", hash_string("PI", 2), float_val(3.14159265358979323846));
+    table_set(I->globals, "E", hash_string("E", 1), float_val(2.71828182845904523536));
 
     /* --- AI-first batteries --- */
     define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model) */
@@ -3659,31 +3730,42 @@ static int interpret(Interp *I, const char *src, const char *path) {
 
 /* Run a module in a fresh global namespace (seeded with the stdlib) and return a
  * map of its own top-level definitions, for `import "path" as name`. */
+static void table_free(Table *t) {
+    for (int i = 0; i < t->cap; i++) free(t->entries[i].key);
+    free(t->entries);
+    table_init(t);
+}
 static Value run_module_ns(Interp *I, char *path /* owned */) {
     Table *saved = I->globals;
+    Table *prev_defines = I->module_defines;
+    Table defines; table_init(&defines);   /* names the module defines, for export */
     Table *mod = xmalloc(sizeof(Table));
     table_init(mod);
     I->globals = mod;
-    install_stdlib(I);                 /* the module sees the built-ins */
+    I->module_defines = &defines;
+    install_stdlib(I);                 /* seeds built-ins (not via OP_DEFINE_GLOBAL, so unrecorded) */
     int rc = run_source(I, NULL, path);
     I->globals = saved;                /* restore before raising / building the map */
+    I->module_defines = prev_defines;
     if (rc != 0) {
         /* copy what the message needs, then free `path` before longjmp-ing out */
         char name[512]; snprintf(name, sizeof(name), "%s", path);
         char cause[512]; cause[0] = '\0';
         if (rc == 70) snprintf(cause, sizeof(cause), "%s", I->err_msg);
-        free(path);
+        free(path); table_free(&defines);
         if (rc == 70) runtime_error(I, 0, "import of '%s' failed: %s", name, cause);
         runtime_error(I, 0, "import of '%s' failed (code %d)", name, rc);
     }
     free(path);
-    /* namespace = module globals minus the stdlib names */
+    /* namespace = exactly the names the module defined at top level (so a module
+       can export a name even when it shadows a built-in, e.g. PI or log). */
     ObjMap *ns = new_map(I);
     for (int i = 0; i < mod->cap; i++) {
         char *k = mod->entries[i].key;
-        if (k && !table_get(I->base_stdlib, k, mod->entries[i].hash))
+        if (k && table_get(&defines, k, mod->entries[i].hash))
             map_set(ns, k, mod->entries[i].value);
     }
+    table_free(&defines);
     return obj_val((Obj *)ns);
 }
 
@@ -3700,15 +3782,12 @@ static void interp_init(Interp *I) {
     I->gc_gen = 0;
     I->gray = NULL; I->gray_count = 0; I->gray_cap = 0;
     I->gc_stress = getenv("LOQI_GC_STRESS") != NULL;
+    { uint64_t s = (uint64_t)time(NULL) * 0x2545F4914F6CDD1DULL + 0x9e3779b97f4a7c15ULL;
+      I->rng_state = s ? s : 0x9e3779b97f4a7c15ULL; } /* non-zero xorshift seed */
+    I->module_defines = NULL;
     I->globals = xmalloc(sizeof(Table));
     table_init(I->globals);
     install_stdlib(I);
-    /* snapshot the built-in names so module namespaces can exclude them */
-    I->base_stdlib = xmalloc(sizeof(Table));
-    table_init(I->base_stdlib);
-    for (int i = 0; i < I->globals->cap; i++)
-        if (I->globals->entries[i].key)
-            table_set(I->base_stdlib, I->globals->entries[i].key, I->globals->entries[i].hash, NIL_VAL);
 }
 
 #define LOQI_VERSION "0.2.0"

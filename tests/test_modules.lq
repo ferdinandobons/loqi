@@ -8,6 +8,12 @@ assert(m.double(21) == 42, "module function via namespace")
 assert(m.area(2) > 12.56 and m.area(2) < 12.57, "module fn resolves its own PI")
 assert(m.PI == 3.14159, "module exposes its constants")
 
+# a module exports exactly the names it defines — even ones that shadow a built-in
+# (PI is a built-in constant, yet the module's own PI is what gets exported)...
+assert(has(m, "PI") and has(m, "area") and has(m, "double"), "module exports its definitions")
+# ...and built-ins the module did NOT define are not part of its namespace
+assert(not has(m, "sqrt") and not has(m, "map"), "undeclared built-ins are not exported")
+
 # --- flat import binds into the current scope ---
 import "fixtures/mathmod.lq"
 assert(double(10) == 20, "flat import binds names into current scope")

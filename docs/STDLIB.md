@@ -155,7 +155,25 @@ print(sort(map([3, 1, 2], fn(x) { return x * 10 })))             # [10, 20, 30]
 | `round(x)` | nearest integer |
 | `ceil(x)` | smallest integer ≥ x |
 | `pow(a, b)` | `a` to the power `b` (float) |
+| `sin(x)` `cos(x)` `tan(x)` | trigonometric functions (radians) |
+| `log(x)` / `log(x, base)` | natural log, or log to `base` |
+| `exp(x)` | e to the power `x` |
 | `now()` | wall-clock seconds (Unix time) |
+
+Constants `PI` and `E` are predefined globals.
+
+## Random
+| Function | Result |
+|----------|--------|
+| `random()` | a float uniformly in `[0, 1)` |
+| `randint(a, b)` | a random int in `[a, b]` (inclusive) |
+| `seed(n)` | seed the generator (same seed → same sequence) |
+
+```loqi
+seed(42)
+let roll = randint(1, 6)          # reproducible dice roll
+let jitter = random() * 0.1
+```
 
 ---
 
