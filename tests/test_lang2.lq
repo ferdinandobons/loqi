@@ -1,0 +1,57 @@
+# Regression tests for match, try/catch, and the expanded stdlib.
+
+# --- match ---
+fn kind(n) {
+  match n {
+    0: { return "zero" }
+    1, 2, 3: { return "small" }
+    _: { return "big" }
+  }
+}
+assert(kind(0) == "zero", "match literal")
+assert(kind(2) == "small", "match multi-pattern")
+assert(kind(50) == "big", "match default")
+
+# --- try/catch ---
+let caught = false
+try { let x = [1][9] } catch e { caught = true }
+assert(caught, "try catches runtime error")
+
+let v = 0
+try { v = json.parse(`{bad`) } catch e { v = -1 }
+assert(v == -1, "try catches native error")
+
+fn safe(a, b) { try { return a // b } catch e { return -1 } }
+assert(safe(9, 3) == 3, "return from try")
+assert(safe(9, 0) == -1, "catch on divide by zero")
+
+# error variable is the message string
+let msg = ""
+try { [][0] } catch e { msg = e }
+assert(type(msg) == "str" and len(msg) > 0, "error value is a string")
+
+# --- expanded stdlib ---
+assert(sort([3, 1, 2]) == [1, 2, 3], "sort")
+assert(reverse([1, 2, 3]) == [3, 2, 1], "reverse")
+assert(sum([1, 2, 3, 4]) == 10, "sum")
+assert(min([5, 3, 8]) == 3 and max([5, 3, 8]) == 8, "min/max list")
+assert(min(4, 2, 9) == 2 and max(4, 2, 9) == 9, "min/max args")
+assert(slice([10, 20, 30, 40], 1, 3) == [20, 30], "slice list")
+assert(slice("ciao mondo", 0, 4) == "ciao", "slice str")
+assert(index_of([1, 2, 3], 2) == 1, "index_of list")
+assert(index_of("hello", "ll") == 2, "index_of str")
+assert(contains("hello world", "world"), "contains str")
+assert(trim("  x  ") == "x", "trim")
+assert(replace("a-b-c", "-", "+") == "a+b+c", "replace")
+assert(starts_with("ciao", "ci") and ends_with("ciao", "ao"), "starts/ends_with")
+assert(repeat("ab", 3) == "ababab", "repeat")
+assert(round(3.6) == 4 and ceil(3.1) == 4, "round/ceil")
+assert(pow(2, 10) == 1024.0, "pow")
+
+# --- higher-order ---
+assert(map([1, 2, 3], fn(x) { return x * x }) == [1, 4, 9], "map")
+assert(filter([1, 2, 3, 4], fn(x) { return x % 2 == 0 }) == [2, 4], "filter")
+assert(reduce([1, 2, 3, 4], fn(a, b) { return a + b }, 0) == 10, "reduce")
+assert(find([1, 2, 3], fn(x) { return x > 1 }) == 2, "find")
+
+print("test_lang2: tutti i test superati ✓")

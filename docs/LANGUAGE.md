@@ -182,6 +182,44 @@ for i in range(0, 10) {
 `for ... in` iterates over lists, maps (keys), and strings. `range(stop)`,
 `range(start, stop)` and `range(start, stop, step)` produce lists of ints.
 
+### Pattern matching
+
+`match` compares a value against patterns and runs the first arm that matches.
+Patterns are values; `_` is the default. Comma-separate patterns to match any of
+them. (Each arm is a block.)
+
+```loqi
+fn categoria(voto) {
+  match voto {
+    "A", "B": { return "ottimo" }
+    "C":      { return "sufficiente" }
+    _:        { return "da rivedere" }
+  }
+}
+```
+
+### Error handling: `try` / `catch`
+
+A program shouldn't die at the first failed network call or bad JSON. Wrap risky
+code in `try`; if anything raises (a runtime error *or* a built-in like
+`json.parse`, `http.get`, `ai`), control jumps to `catch`, with the error message
+bound to the optional variable.
+
+```loqi
+try {
+  let data = json.parse(http.get(url))
+  print(data.title)
+} catch err {
+  print("richiesta fallita: {err}")
+}
+
+# the catch variable is optional
+try { rischioso() } catch { print("gestito") }
+```
+
+`return` works from inside a `try`. (Avoid `break`/`continue` that jump out of a
+`try` block before it finishes — that edge case isn't supported yet.)
+
 ## Functions and closures
 
 Declare with `fn name(params) { ... }`. Functions are first-class values and can

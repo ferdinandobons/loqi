@@ -111,6 +111,52 @@ Aborts with a runtime error if `cond` is falsey. Used by the test suite.
 assert(2 + 2 == 4, "la matematica è rotta")
 ```
 
+## More collections
+
+| Function | Result |
+|----------|--------|
+| `sort(list)` | new list sorted ascending (numbers or strings) |
+| `reverse(x)` | reversed `list` or `str` |
+| `sum(list)` | sum of a numeric list |
+| `min(list)` / `max(list)` | extremum of a list |
+| `min(a, b, ...)` / `max(a, b, ...)` | extremum of the arguments |
+| `slice(coll, start[, end])` | sub-`list`/`str` (negative indices ok) |
+| `index_of(coll, x)` | first index of `x` (substring for `str`), or `-1` |
+| `contains(coll, x)` | membership in `str` (substring), `list`, or `map` (key) |
+| `del(map, key)` | remove a key (mutates), returns the map |
+
+### Higher-order
+| Function | Result |
+|----------|--------|
+| `map(list, fn)` | apply `fn` to each element → new list |
+| `filter(list, fn)` | keep elements where `fn(x)` is truthy |
+| `reduce(list, fn, init)` | fold left: `fn(acc, x)` |
+| `each(list, fn)` | call `fn(x)` for side effects |
+| `find(list, fn)` | first element where `fn(x)` is truthy, else `nil` |
+
+```loqi
+let evens = filter([1, 2, 3, 4], fn(x) { return x % 2 == 0 })   # [2, 4]
+let total = reduce([1, 2, 3], fn(a, b) { return a + b }, 0)       # 6
+print(sort(map([3, 1, 2], fn(x) { return x * 10 })))             # [10, 20, 30]
+```
+
+## More strings
+| Function | Result |
+|----------|--------|
+| `trim(s)` | strip leading/trailing whitespace |
+| `replace(s, old, new)` | replace all occurrences |
+| `starts_with(s, p)` / `ends_with(s, p)` | prefix/suffix test |
+| `repeat(s, n)` | `s` repeated `n` times |
+| `chars(s)` | list of single-character strings |
+
+## More math
+| Function | Result |
+|----------|--------|
+| `round(x)` | nearest integer |
+| `ceil(x)` | smallest integer ≥ x |
+| `pow(a, b)` | `a` to the power `b` (float) |
+| `now()` | wall-clock seconds (Unix time) |
+
 ---
 
 # AI-first batteries

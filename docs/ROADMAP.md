@@ -141,10 +141,30 @@ pass (6 review dimensions → per-finding skeptical verification → synthesis) 
 The whole suite stays green under AddressSanitizer/UBSan. This pass runs every
 iteration from now on.
 
+## Iteration 4 — completeness: learning from other languages (✅)
+
+Renamed **Lume → Loqi** (the old name was already taken — an AI-first language, a
+Rust language, and a CLI all shipped as "lume"; "Loqi" is verified free). Then
+closed the biggest gaps that make other languages painful for real work:
+
+- **`try` / `catch`** — the headline fix. Previously *any* error (bad JSON, a
+  failed `http.get`, an out-of-bounds index) killed the whole program. Now risky
+  code is recoverable; the error message binds to the catch variable. Catches both
+  VM errors and built-in failures, across `map`/`filter` callbacks, with `return`
+  from inside `try`. Implemented as a VM handler stack (no per-call C recursion).
+- **`match`** — pattern matching over values, with `_` default and comma-OR arms.
+- **A real standard library** — `sort`, `reverse`, `sum`, `min`/`max`, `slice`,
+  `index_of`, `contains`, `del`, `map`/`filter`/`reduce`/`each`/`find`,
+  `trim`/`replace`/`starts_with`/`ends_with`/`repeat`/`chars`, `round`/`ceil`/`pow`,
+  `now`. Higher-order built-ins call back into the VM via a re-entrant `vm_invoke`.
+
+All green under ASan/UBSan; regression tests in `tests/test_lang2.lq`.
+
 ## Backlog (📋)
 
 - Mark-sweep garbage collector (today: heap is freed at exit).
-- Namespaced modules (`import math` → `math.sin`).
+- Namespaced modules (`import math as m` → `m.sin`).
+- `embed()` (embeddings API), structured generation with schema.
 - `loqi fmt`, `loqi test`, an LSP for editor support.
-- Pattern matching (`match`), optional type annotations.
+- Optional type annotations; `break`/`continue` out of a `try`.
 - `loqi build`: AOT-compile a program to a native binary via emitted C.

@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Renamed
+- **Lume → Loqi.** "Lume" was already taken (an AI-first language, a Rust language,
+  and a `lume` CLI). After live availability research, the project is now **Loqi**
+  (Latin *loqui*, "to speak"): no existing language, all package registries and the
+  `loqi-lang` GitHub org free. Extension `.lm` → `.lq`, CLI `lume` → `loqi`.
+
+### Added — language completeness (learning from other languages)
+- **`try` / `catch`** error handling — recoverable errors (VM errors *and* built-in
+  failures like `json.parse`/`http`/`ai`), with the message bound to the catch var.
+  A program no longer dies at the first bad input or failed request.
+- **`match`** pattern matching — `_` default, comma-OR patterns.
+- **Standard library** filled out: `sort`, `reverse`, `sum`, `min`/`max`, `slice`,
+  `index_of`, `contains`, `del`, `map`/`filter`/`reduce`/`each`/`find`,
+  `trim`/`replace`/`starts_with`/`ends_with`/`repeat`/`chars`, `round`/`ceil`/`pow`,
+  `now`. Higher-order built-ins via a re-entrant `vm_invoke`.
+- Published to a public repository: https://github.com/ferdinandobons/loqi
+
+
 ### Changed
 - **New execution engine: a stack-based bytecode VM** replaces the v0.1
   tree-walking interpreter. Locals are stack slots, globals live in an

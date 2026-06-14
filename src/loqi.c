@@ -187,6 +187,10 @@ static int clamp_written(int n, size_t cap) {
     return n;
 }
 
+/* Routes a built error message to the nearest try/catch handler, or to the
+ * top-level landing pad if none is active. Defined after the VM. */
+static void raise_error(Interp *I);
+
 static void runtime_error(Interp *I, int line, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -195,8 +199,7 @@ static void runtime_error(Interp *I, int line, const char *fmt, ...) {
     n = clamp_written(n, sizeof(I->err_msg));
     vsnprintf(I->err_msg + n, sizeof(I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
-    I->has_error = true;
-    longjmp(I->err_jmp, 1);
+    raise_error(I);
 }
 
 static void *xmalloc(size_t n) {
@@ -277,6 +280,7 @@ typedef enum {
     /* keywords */
     T_LET, T_FN, T_RETURN, T_IF, T_ELSE, T_WHILE, T_FOR, T_IN,
     T_TRUE, T_FALSE, T_NIL, T_AND, T_OR, T_NOT, T_BREAK, T_CONTINUE, T_IMPORT,
+    T_MATCH, T_TRY, T_CATCH,
     /* punctuation / operators */
     T_LPAREN, T_RPAREN, T_LBRACE, T_RBRACE, T_LBRACKET, T_RBRACKET,
     T_COMMA, T_DOT, T_COLON,
@@ -361,6 +365,7 @@ static TokType keyword_type(const char *s, int len) {
             if (!memcmp(s, "nil", 3)) return T_NIL;
             if (!memcmp(s, "and", 3)) return T_AND;
             if (!memcmp(s, "not", 3)) return T_NOT;
+            if (!memcmp(s, "try", 3)) return T_TRY;
             break;
         case 4:
             if (!memcmp(s, "else", 4)) return T_ELSE;
@@ -370,6 +375,8 @@ static TokType keyword_type(const char *s, int len) {
             if (!memcmp(s, "while", 5)) return T_WHILE;
             if (!memcmp(s, "false", 5)) return T_FALSE;
             if (!memcmp(s, "break", 5)) return T_BREAK;
+            if (!memcmp(s, "match", 5)) return T_MATCH;
+            if (!memcmp(s, "catch", 5)) return T_CATCH;
             break;
         case 6:
             if (!memcmp(s, "return", 6)) return T_RETURN;
@@ -551,7 +558,7 @@ typedef enum {
     N_LIST, N_MAP, N_UNARY, N_BINARY, N_LOGICAL,
     N_CALL, N_INDEX, N_MEMBER, N_ASSIGN,
     N_LET, N_BLOCK, N_IF, N_WHILE, N_FOR, N_FN, N_RETURN,
-    N_BREAK, N_CONTINUE, N_EXPRSTMT, N_PROGRAM, N_IMPORT
+    N_BREAK, N_CONTINUE, N_EXPRSTMT, N_PROGRAM, N_IMPORT, N_TRY
 } NodeType;
 
 struct Node {
@@ -901,6 +908,69 @@ static Node *parse_for(Parser *P) {
     return n;
 }
 
+/* match subj { p1, p2: {..}  _: {..} } desugars to a let + if/else == chain. */
+static Node *parse_match(Parser *P) {
+    int line = P->prev.line;
+    Node *subj = parse_expression(P);
+    skip_newlines(P);
+    p_consume(P, T_LBRACE, "attesa '{' dopo l'espressione di match");
+
+    Node *outer = new_node(N_BLOCK, line);
+    Node *letm = new_node(N_LET, line); letm->name = "$m"; letm->a = subj;
+    node_add(&outer->items, &outer->item_count, letm);
+
+    Node *first_if = NULL, *last_if = NULL, *default_body = NULL;
+    skip_newlines(P);
+    while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
+        bool is_default = false;
+        Node *cond = NULL;
+        for (;;) {
+            if (p_check(P, T_IDENT) && P->cur.length == 1 && P->cur.start[0] == '_') {
+                p_advance(P); is_default = true;
+            } else {
+                Node *pat = parse_expression(P);
+                Node *eq = new_node(N_BINARY, line); eq->op = T_EQEQ;
+                Node *mref = new_node(N_IDENT, line); mref->name = "$m";
+                eq->a = mref; eq->b = pat;
+                if (!cond) cond = eq;
+                else { Node *orn = new_node(N_LOGICAL, line); orn->op = T_OR; orn->a = cond; orn->b = eq; cond = orn; }
+            }
+            if (p_match(P, T_COMMA)) { skip_newlines(P); continue; }
+            break;
+        }
+        p_consume(P, T_COLON, "atteso ':' dopo il pattern di match");
+        skip_newlines(P);
+        Node *body = parse_block(P);
+        if (is_default) {
+            default_body = body;
+        } else {
+            Node *ifn = new_node(N_IF, line); ifn->a = cond; ifn->b = body;
+            if (last_if) last_if->c = ifn; else first_if = ifn;
+            last_if = ifn;
+        }
+        skip_newlines(P);
+    }
+    p_consume(P, T_RBRACE, "attesa '}' a fine match");
+    if (default_body) { if (last_if) last_if->c = default_body; else first_if = default_body; }
+    if (first_if) node_add(&outer->items, &outer->item_count, first_if);
+    return outer;
+}
+
+/* try { ... } catch e { ... } */
+static Node *parse_try(Parser *P) {
+    int line = P->prev.line;
+    Node *n = new_node(N_TRY, line);
+    skip_newlines(P);
+    n->a = parse_block(P);                    /* try body */
+    skip_newlines(P);
+    p_consume(P, T_CATCH, "atteso 'catch' dopo il blocco try");
+    if (p_check(P, T_IDENT)) { p_advance(P); n->name = copy_lexeme(&P->prev); } /* error variable */
+    else n->name = NULL;
+    skip_newlines(P);
+    n->b = parse_block(P);                    /* catch body */
+    return n;
+}
+
 static Node *parse_statement(Parser *P) {
     skip_newlines(P);
     if (p_match(P, T_LET))    return parse_let(P);
@@ -908,6 +978,8 @@ static Node *parse_statement(Parser *P) {
     if (p_match(P, T_IF))     return parse_if(P);
     if (p_match(P, T_WHILE))  return parse_while(P);
     if (p_match(P, T_FOR))    return parse_for(P);
+    if (p_match(P, T_MATCH))  return parse_match(P);
+    if (p_match(P, T_TRY))    return parse_try(P);
     if (p_match(P, T_LBRACE)) { /* bare block — '{' already consumed, build it here */
         Node *block = new_node(N_BLOCK, P->prev.line);
         skip_newlines(P);
@@ -1287,7 +1359,8 @@ typedef enum {
     OP_CALL, OP_CLOSURE, OP_CLOSE_UPVALUE, OP_RETURN,
     OP_BUILD_LIST, OP_BUILD_MAP,
     OP_GET_INDEX, OP_SET_INDEX, OP_GET_PROPERTY, OP_SET_PROPERTY,
-    OP_ITER_SEQ, OP_FOR_NEXT, OP_IMPORT
+    OP_ITER_SEQ, OP_FOR_NEXT, OP_IMPORT,
+    OP_TRY_BEGIN, OP_TRY_END
 } OpCode;
 
 static void chunk_init(Chunk *c) { memset(c, 0, sizeof(Chunk)); }
@@ -1723,6 +1796,20 @@ static void compile_stmt(Compiler *C, Node *n) {
         case N_IMPORT:
             emit_byte(C, OP_IMPORT, n->line); emit_u16(C, name_const(C, n->name), n->line);
             break;
+        case N_TRY: {
+            int catchJump = emit_jump(C, OP_TRY_BEGIN, n->line); /* operand = offset to catch */
+            compile_stmt(C, n->a);              /* try body (its own scope) */
+            emit_byte(C, OP_TRY_END, n->line);  /* pop handler on the success path */
+            int endJump = emit_jump(C, OP_JUMP, n->line);
+            patch_jump(C, catchJump);           /* catch starts here; error value is on the stack */
+            begin_scope(C);
+            if (n->name) { add_local(C, n->name, (int)strlen(n->name)); mark_initialized(C); }
+            else emit_byte(C, OP_POP, n->line); /* discard the error value if unnamed */
+            compile_stmt(C, n->b);              /* catch body */
+            end_scope(C, n->line);
+            patch_jump(C, endJump);
+            break;
+        }
         default: compile_expr(C, n); emit_byte(C, OP_POP, n->line); break;
     }
 }
@@ -1746,6 +1833,9 @@ static ObjProto *compile_script(Interp *I, Node *program) {
 
 typedef struct { ObjClosure *closure; uint8_t *ip; Value *slots; } CallFrame;
 
+#define MAX_HANDLERS 64
+typedef struct { uint8_t *catch_ip; Value *stack_top; int frame_count; } TryHandler;
+
 struct VM {
     Interp *I;
     Value stack[STACK_MAX];
@@ -1753,6 +1843,9 @@ struct VM {
     CallFrame frames[FRAMES_MAX];
     int frame_count;
     ObjUpvalue *open_upvalues;
+    TryHandler handlers[MAX_HANDLERS];
+    int handler_count;
+    jmp_buf trap;          /* landing pad for try/catch within this VM */
 };
 
 static int run_source(Interp *I, const char *src, const char *path);
@@ -1777,8 +1870,26 @@ static void vm_error(VM *vm, const char *fmt, ...) {
     n = clamp_written(n, sizeof(vm->I->err_msg));
     vsnprintf(vm->I->err_msg + n, sizeof(vm->I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
-    vm->I->has_error = true;
-    longjmp(vm->I->err_jmp, 1);
+    raise_error(vm->I);
+}
+
+/* Routes to the nearest try/catch handler (longjmp to the VM trap, with the
+ * error value on the stack) or to the top-level landing pad. */
+static void close_upvalues(VM *vm, Value *last);
+static void raise_error(Interp *I) {
+    I->has_error = true;
+    VM *vm = I->vm;
+    if (vm && vm->handler_count > 0) {
+        TryHandler h = vm->handlers[--vm->handler_count];
+        close_upvalues(vm, h.stack_top);
+        vm->frame_count = h.frame_count;
+        vm->stack_top = h.stack_top;
+        Value errval = cstring_val(I, I->err_msg);
+        vm->frames[vm->frame_count - 1].ip = h.catch_ip;
+        *vm->stack_top++ = errval;   /* push error (room guaranteed: we just unwound) */
+        longjmp(vm->trap, 1);
+    }
+    longjmp(I->err_jmp, 1);
 }
 
 static ObjUpvalue *capture_upvalue(VM *vm, Value *local) {
@@ -1914,7 +2025,19 @@ static Value iter_seq(VM *vm, Value it) {
 /* Run until the current frame count drops back to `stop_at` (0 for the top-level
  * script; a higher baseline for a re-entrant vm_invoke). */
 static void run_vm(VM *vm, int stop_at) {
-    CallFrame *frame = &vm->frames[vm->frame_count - 1];
+    /* Save the enclosing try landing pad so nested vm_invoke runs nest safely. */
+    jmp_buf prev_trap;
+    memcpy(prev_trap, vm->trap, sizeof(jmp_buf));
+    CallFrame *frame;
+    if (setjmp(vm->trap)) {
+        /* raise_error landed us here after setting up a catch. If the catch
+         * belongs to an outer run_vm invocation, re-propagate to it. */
+        if (vm->frame_count <= stop_at) {
+            memcpy(vm->trap, prev_trap, sizeof(jmp_buf));
+            longjmp(vm->trap, 1);
+        }
+    }
+    frame = &vm->frames[vm->frame_count - 1];
 #define READ_BYTE() (*frame->ip++)
 #define READ_U16() (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
 #define READ_CONST() (frame->closure->proto->chunk.constants[READ_U16()])
@@ -1992,12 +2115,28 @@ static void run_vm(VM *vm, int stop_at) {
                 Value result = vm_pop(vm);
                 close_upvalues(vm, frame->slots);
                 vm->frame_count--;
+                /* drop any try handlers belonging to the frame we're leaving
+                 * (e.g. `return` from inside a try block) */
+                while (vm->handler_count > 0 && vm->handlers[vm->handler_count - 1].frame_count > vm->frame_count)
+                    vm->handler_count--;
                 vm->stack_top = frame->slots;   /* discard callee + locals */
                 vm_push(vm, result);            /* leave result on the stack */
-                if (vm->frame_count == stop_at) return;
+                if (vm->frame_count == stop_at) { memcpy(vm->trap, prev_trap, sizeof(jmp_buf)); return; }
                 frame = &vm->frames[vm->frame_count - 1];
                 break;
             }
+            case OP_TRY_BEGIN: {
+                uint16_t off = READ_U16();
+                if (vm->handler_count >= MAX_HANDLERS) vm_error(vm, "troppi 'try' annidati");
+                TryHandler *h = &vm->handlers[vm->handler_count++];
+                h->catch_ip = frame->ip + off;
+                h->stack_top = vm->stack_top;
+                h->frame_count = vm->frame_count;
+                break;
+            }
+            case OP_TRY_END:
+                if (vm->handler_count > 0) vm->handler_count--;
+                break;
             case OP_BUILD_LIST: {
                 int count = READ_U16();
                 ObjList *l = new_list(vm->I);
@@ -3076,6 +3215,8 @@ static int run_source(Interp *I, const char *src, const char *path) {
     VM *prev_vm = I->vm;
     VM *vm = xmalloc(sizeof(VM));
     vm->I = I; vm->stack_top = vm->stack; vm->frame_count = 0; vm->open_upvalues = NULL;
+    vm->handler_count = 0;
+    memset(vm->trap, 0, sizeof(jmp_buf));
     I->vm = vm;
 
     int rc = 0;
