@@ -22,11 +22,14 @@ print(poem)
 
 ---
 
+> **🌐 Live site: [ferdinandobons.github.io/loqi](https://ferdinandobons.github.io/loqi/)**
+
 > **Status: v0.2 — early but real, and it does what it says.** The core language,
-> a **bytecode VM** (on par with CPython, ~5× faster than the first cut), and the
-> **AI-native layer** (`ai`, `json`, `http`, `read`/`write`, `similarity`) all work
-> today — implemented in dependency-free C, built with nothing but `clang`. Every
-> claim here is backed by code, tests, and an honest [ROADMAP](docs/ROADMAP.md).
+> a **bytecode VM** (on par with CPython, ~5× faster than the first cut), the
+> **AI-native layer** (`ai`, `json`, `http`, `read`/`write`, `similarity`), plus
+> **`match`** and **`try`/`catch`** all work today — implemented in dependency-free
+> C, built with nothing but `clang`. Every claim here is backed by code, tests, and
+> an honest [ROADMAP](docs/ROADMAP.md).
 
 ## Why Loqi
 
