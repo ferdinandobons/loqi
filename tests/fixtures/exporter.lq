@@ -1,0 +1,5 @@
+# A module that imports a helper two ways and defines its own surface.
+import "helper.lq"           # flat: helper_fn usable here, but NOT re-exported
+import "helper.lq" as h      # namespaced: h usable here, but NOT re-exported
+let own = 1
+fn own_fn() { return helper_fn() + h.helper_fn() }   # uses both imports internally

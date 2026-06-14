@@ -2493,7 +2493,14 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_IMPORT: {
                 ObjString *path = AS_STRING(READ_CONST());
                 char *resolved = resolve_import_path(vm->I->path, path->chars);
+                /* A flat sub-import binds into the current module's scope but its
+                   names are NOT part of the importing module's public surface, so
+                   suspend define-recording for the duration (a module re-exports
+                   only what it defines itself — like Python/JS/Rust). */
+                Table *saved_defines = vm->I->module_defines;
+                vm->I->module_defines = NULL;
                 int rc = run_source(vm->I, NULL, resolved); /* NULL src => read file */
+                vm->I->module_defines = saved_defines;
                 free(resolved);
                 /* On a runtime failure inside the module (rc==70), run_source left
                    the underlying message in I->err_msg without printing it (nested);

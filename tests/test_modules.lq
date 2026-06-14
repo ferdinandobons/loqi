@@ -19,6 +19,13 @@ import "fixtures/mathmod.lq"
 assert(double(10) == 20, "flat import binds names into current scope")
 assert(area(1) > 3.14 and area(1) < 3.15, "flat-imported fn works with shared globals")
 
+# --- a module re-exports only what IT defines, not its own imports ---
+import "fixtures/exporter.lq" as ex
+assert(has(ex, "own") and has(ex, "own_fn"), "module exports its own definitions")
+assert(not has(ex, "helper_fn"), "flat sub-import names are not re-exported")
+assert(not has(ex, "h"), "namespaced sub-import alias is not re-exported")
+assert(ex.own_fn() == 20, "the module still uses its imports internally")
+
 # --- a cyclic import raises a CATCHABLE error; it must never crash the process ---
 let cycled = false
 try { import "fixtures/cycle_a.lq" } catch e { cycled = true }

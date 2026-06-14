@@ -1,0 +1,2 @@
+# Helper module imported by exporter.lq (both flat and namespaced).
+fn helper_fn() { return 10 }
