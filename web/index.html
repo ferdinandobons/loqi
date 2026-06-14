@@ -5,6 +5,71 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Loqi — The AI-first language</title>
 <meta name="description" content="Loqi is the AI-first programming language: simple to read, fast on Apple Silicon. ai(), json, http and similarity are built into the runtime. Single native binary, no dependency hell." />
+<meta name="keywords" content="Loqi, AI-first programming language, AI language, LLM programming language, json built-in, http built-in, ai() function, Apple Silicon language, bytecode VM, dependency-free" />
+<meta name="author" content="Loqi contributors" />
+<meta name="theme-color" content="#0e0e10" />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<link rel="canonical" href="https://ferdinandobons.github.io/loqi/" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Loqi" />
+<meta property="og:title" content="Loqi — the AI-first programming language" />
+<meta property="og:description" content="ai(), json, http and similarity are built into the language. Simple to read, fast on Apple Silicon, one binary, no dependency hell." />
+<meta property="og:url" content="https://ferdinandobons.github.io/loqi/" />
+<meta property="og:image" content="https://ferdinandobons.github.io/loqi/og.svg" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Loqi — the AI-first programming language" />
+<meta name="twitter:description" content="ai(), json, http and similarity are built into the language. Fast on Apple Silicon, single binary, no dependency hell." />
+<meta name="twitter:image" content="https://ferdinandobons.github.io/loqi/og.svg" />
+
+<!-- Structured data: software + FAQ (boosts AI-search citation) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareSourceCode",
+      "name": "Loqi",
+      "description": "An AI-first programming language with ai(), JSON, HTTP and vector similarity built into the runtime. Implemented in dependency-free C as a bytecode VM; fast on Apple Silicon.",
+      "url": "https://ferdinandobons.github.io/loqi/",
+      "codeRepository": "https://github.com/ferdinandobons/loqi",
+      "programmingLanguage": "C",
+      "runtimePlatform": "macOS (Apple Silicon)",
+      "license": "https://opensource.org/licenses/MIT",
+      "keywords": "AI-first language, LLM, JSON, HTTP, bytecode VM, Apple Silicon"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is Loqi?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Loqi is an AI-first programming language: calling a large language model with ai(), parsing JSON, making HTTP requests, and computing vector similarity are built into the language and its runtime, not separate packages. It is implemented in dependency-free C as a bytecode virtual machine and is on par with CPython on recursion and about 1.4x faster on tight loops." }
+        },
+        {
+          "@type": "Question",
+          "name": "What makes Loqi AI-first?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Loqi ships ai(prompt), json.parse/json.stringify, http.get/http.post, similarity(), env, read and write as built-ins. You write an AI program without installing an HTTP client, a JSON library, or an LLM SDK, and without a virtualenv or node_modules." }
+        },
+        {
+          "@type": "Question",
+          "name": "How fast is Loqi?",
+          "acceptedAnswer": { "@type": "Answer", "text": "On fib(30) Loqi runs in about 0.097s versus CPython 3.13 at 0.094s (on par), and on a 50-million-iteration loop Loqi is about 1.4x faster than CPython. It does not yet JIT, so V8 is faster on micro-benchmarks. Loqi is built in C with a stack bytecode VM and compiled with -O3 for Apple Silicon." }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I install Loqi?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Clone the repository from github.com/ferdinandobons/loqi and run ./scripts/build.sh, which produces ./build/loqi using clang. The only requirement is the macOS Xcode Command Line Tools." }
+        }
+      ]
+    }
+  ]
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -784,6 +849,33 @@
 <span class="tc"># 3. run your first program</span>
 <span class="tp">$</span> ./build/loqi examples/01_hello.lq
 <span class="ts">Ciao, mondo!</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FAQ ===================== -->
+<section id="faq" style="padding: 64px 0;">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Frequently asked questions</h2>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:18px; max-width:820px;">
+      <div class="code-card" style="padding:22px 24px;">
+        <h3 style="font-size:19px; margin-bottom:8px;">What is Loqi?</h3>
+        <p style="color:var(--text-dim); margin:0;">Loqi is an AI-first programming language: calling an LLM with <code>ai()</code>, parsing JSON, making HTTP requests, and computing vector similarity are built into the language and its runtime, not separate packages. It's implemented in dependency-free C as a bytecode VM and is on par with CPython on recursion, ~1.4× faster on tight loops.</p>
+      </div>
+      <div class="code-card" style="padding:22px 24px;">
+        <h3 style="font-size:19px; margin-bottom:8px;">What makes it AI-first?</h3>
+        <p style="color:var(--text-dim); margin:0;"><code>ai(prompt)</code>, <code>json.parse</code>/<code>json.stringify</code>, <code>http.get</code>/<code>http.post</code>, <code>similarity()</code>, <code>env</code>, <code>read</code> and <code>write</code> are built in. You write an AI program with no HTTP client, no JSON library, no LLM SDK, and no virtualenv or node_modules to install.</p>
+      </div>
+      <div class="code-card" style="padding:22px 24px;">
+        <h3 style="font-size:19px; margin-bottom:8px;">How fast is it?</h3>
+        <p style="color:var(--text-dim); margin:0;">On <code>fib(30)</code>, Loqi runs in ~0.097s versus CPython 3.13's ~0.094s (on par); on a 50-million-iteration loop it's ~1.4× faster than CPython. It doesn't JIT yet, so V8 wins micro-benchmarks — that's the next speed iteration.</p>
+      </div>
+      <div class="code-card" style="padding:22px 24px;">
+        <h3 style="font-size:19px; margin-bottom:8px;">How do I install it?</h3>
+        <p style="color:var(--text-dim); margin:0;">Clone <a href="https://github.com/ferdinandobons/loqi" style="color:var(--amber);">github.com/ferdinandobons/loqi</a> and run <code>./scripts/build.sh</code> (needs only the macOS Xcode Command Line Tools) to get <code>./build/loqi</code>.</p>
       </div>
     </div>
   </div>

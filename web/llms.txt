@@ -1,0 +1,44 @@
+# Loqi
+
+> Loqi is an AI-first programming language: calling an LLM with `ai()`, parsing
+> JSON, making HTTP requests, and computing vector similarity are built into the
+> language and its runtime — not separate packages. It is implemented in
+> dependency-free C as a stack bytecode VM and is fast on Apple Silicon.
+
+Loqi (from Latin *loqui*, "to speak") is designed for people building AI features
+who are tired of gluing together an HTTP library, a JSON library, an LLM SDK, and a
+virtualenv or node_modules. Reads like Python; ships as a single native binary.
+
+## Key facts
+
+- **AI-first built-ins:** `ai(prompt[, model])` calls a large language model
+  (Anthropic Messages API, `ANTHROPIC_API_KEY`); `json.parse` / `json.stringify`;
+  `http.get` / `http.post`; `similarity(a, b)` cosine similarity; `env`, `read`, `write`.
+- **Speed (measured, Apple Silicon):** `fib(30)` ≈ 0.097s vs CPython 3.13 ≈ 0.094s
+  (on par); a 50M-iteration loop ≈ 1.4x faster than CPython. No JIT yet, so V8 is
+  faster on micro-benchmarks. ~5x faster than Loqi's own first tree-walking interpreter.
+- **Implementation:** dependency-free C11, built with `clang -O3 -mcpu=apple-m1 -flto`.
+  Pipeline: lexer → Pratt parser → AST → single-pass bytecode compiler → stack VM
+  (stack-slot locals, hash-table globals, closures via upvalues).
+- **Language:** `let`/`fn`, closures, `if`/`while`/`for-in`, `match` pattern matching,
+  `try`/`catch` error handling, `"{interpolation}"` strings and `` `raw` `` strings,
+  `#` comments, no semicolons. Types: nil, bool, int (i64), float (f64), str, list, map, fn.
+- **Honest limitations:** no JIT yet, no garbage collector yet (arena freed at exit),
+  Apple-Silicon-first, `http`/`ai` shell out to `curl` today.
+- **License:** MIT. **Repository:** https://github.com/ferdinandobons/loqi
+
+## Example
+
+```loqi
+let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
+print("{repo.full_name}: {repo.stargazers_count} stars")
+let summary = ai("Summarize in one line: {repo.description}")
+print(summary)
+```
+
+## Docs
+
+- Language guide: https://github.com/ferdinandobons/loqi/blob/main/docs/LANGUAGE.md
+- Standard library: https://github.com/ferdinandobons/loqi/blob/main/docs/STDLIB.md
+- Comparison vs Python/JS/Go/Rust/Mojo: https://github.com/ferdinandobons/loqi/blob/main/docs/COMPARISON.md
+- Roadmap & benchmarks: https://github.com/ferdinandobons/loqi/blob/main/docs/ROADMAP.md

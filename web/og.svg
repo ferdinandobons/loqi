@@ -1,0 +1,39 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Loqi — the AI-first language">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="0%" r="75%">
+      <stop offset="0%" stop-color="#f5b942" stop-opacity="0.18"/>
+      <stop offset="60%" stop-color="#f5b942" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#0e0e10"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <rect x="0" y="0" width="1200" height="6" fill="#f5b942"/>
+
+  <!-- spark glyph -->
+  <g transform="translate(96 96)">
+    <circle cx="40" cy="40" r="39" fill="none" stroke="#f5b942" stroke-width="2.5" stroke-opacity="0.30"/>
+    <path d="M40 10 C 49 24, 62 33, 62 48 a 22 22 0 0 1 -44 0 c 0 -10, 7 -17, 12 -23 c 1 6, 5 10, 10 12 c -3 -8, 1 -17, 0 -27 Z" fill="#f5b942"/>
+  </g>
+
+  <text x="190" y="150" font-family="'Space Grotesk',Arial,sans-serif" font-size="92" font-weight="700" letter-spacing="-3">
+    <tspan fill="#ECECEC">Loq</tspan><tspan fill="#f5b942">i</tspan>
+  </text>
+
+  <text x="96" y="300" font-family="'Space Grotesk',Arial,sans-serif" font-size="58" font-weight="600" fill="#ECECEC" letter-spacing="-1.5">The AI-first programming language.</text>
+  <text x="96" y="370" font-family="Arial,sans-serif" font-size="32" fill="#9a9aa3">The language you speak to machines — fast on Apple Silicon.</text>
+
+  <!-- feature chips -->
+  <g font-family="'JetBrains Mono',monospace" font-size="26" fill="#f5b942">
+    <rect x="96"  y="430" width="180" height="56" rx="12" fill="rgba(245,185,66,0.10)" stroke="rgba(245,185,66,0.30)"/>
+    <text x="120" y="467">ai()</text>
+    <rect x="292" y="430" width="200" height="56" rx="12" fill="rgba(245,185,66,0.10)" stroke="rgba(245,185,66,0.30)"/>
+    <text x="316" y="467">json</text>
+    <rect x="508" y="430" width="200" height="56" rx="12" fill="rgba(245,185,66,0.10)" stroke="rgba(245,185,66,0.30)"/>
+    <text x="532" y="467">http</text>
+    <rect x="724" y="430" width="300" height="56" rx="12" fill="rgba(245,185,66,0.10)" stroke="rgba(245,185,66,0.30)"/>
+    <text x="748" y="467">similarity()</text>
+  </g>
+
+  <text x="96" y="560" font-family="Arial,sans-serif" font-size="26" fill="#6b6b73">Batteries included · single binary · no dependency hell · MIT</text>
+  <text x="96" y="600" font-family="'JetBrains Mono',monospace" font-size="24" fill="#6b6b73">github.com/ferdinandobons/loqi</text>
+</svg>

@@ -1,0 +1,27 @@
+# Loqi — crawlers welcome, including AI search engines
+User-agent: *
+Allow: /
+
+# AI / generative search crawlers (explicitly allowed)
+User-agent: GPTBot
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: anthropic-ai
+Allow: /
+User-agent: Claude-Web
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+User-agent: Bingbot
+Allow: /
+User-agent: Applebot-Extended
+Allow: /
+
+Sitemap: https://ferdinandobons.github.io/loqi/sitemap.xml
