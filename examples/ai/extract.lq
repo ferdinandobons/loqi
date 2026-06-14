@@ -2,13 +2,16 @@
 # All built-in: no HTTP libraries, no JSON parser, no SDK.
 #   ANTHROPIC_API_KEY=... loqi examples/ai/extract.lq
 
+# Models often wrap JSON in ```markdown fences```, so strip them before parsing.
+# (A first-class `ai.json(prompt)` that handles this for you is on the roadmap.)
+fn json_only(s) {
+  return trim(replace(replace(s, "```json", ""), "```", ""))
+}
+
 let text = "Ada Lovelace, born in 1815, is considered the first programmer."
+let prompt = "Extract name, birth_year (int) and role from the text below. Respond ONLY with valid JSON (keys: name, birth_year, role).\n\n{text}"
 
-let prompt = "Extract name, birth_year (int) and role from the text. " +
-             "Respond ONLY with valid JSON, no other text.\n\n" + text
-
-let json_str = ai(prompt)
-let data = json.parse(json_str)
+let data = json.parse(json_only(ai(prompt)))
 
 print("Name: {data.name}")
 print("Year: {data.birth_year}")

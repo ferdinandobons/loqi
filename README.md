@@ -111,17 +111,18 @@ try {
 print(classify(len(keys(config))))
 ```
 
-**AI-native: turn messy text into structured data in one call.**
+**AI-native: a model call is a language primitive.**
 
 ```loqi
-let text = "Ada Lovelace, born 1815, is regarded as the first programmer."
-
-# Ask a model for JSON, then parse it with the built-in parser — no SDK in between.
-let raw = ai("Extract name and birth_year as JSON from: {text}. Output only JSON.")
-let person = json.parse(raw)
-
-print("{person.name} was born in {person.birth_year}")   # Ada Lovelace was born in 1815
+# No SDK, no HTTP client, no API plumbing — `ai(...)` IS the call.
+let review = "Shipping took forever, but the product itself is fantastic."
+let sentiment = ai("Classify the sentiment as positive, negative, or mixed. One word: {review}")
+print("sentiment: {sentiment}")          # sentiment: Mixed
 ```
+
+Need structured data back? Ask for JSON and parse it with the built-in `json.parse` —
+see [`examples/ai/extract.lq`](examples/ai/extract.lq). (A first-class `ai.json()` that
+returns native data directly is on the [roadmap](docs/ROADMAP.md).)
 
 **Split your program into modules.**
 
