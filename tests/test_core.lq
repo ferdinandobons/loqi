@@ -1,4 +1,4 @@
-# Regression suite for the Lume core language.
+# Regression suite for the Loqi core language.
 # Each section asserts behaviour; a failed assert aborts with non-zero exit.
 
 # --- arithmetic ---
@@ -18,11 +18,11 @@ assert((false or "x") == "x", "or restituisce operando")
 
 # --- strings ---
 assert("a" + "b" == "ab", "concatenazione")
-assert(len("lume") == 4, "len str")
+assert(len("loqi") == 4, "len str")
 assert(upper("ab") == "AB", "upper")
-assert("lume"[0] == "l", "indicizzazione str")
-let nome = "Lume"
-assert("ciao {nome}!" == "ciao Lume!", "interpolazione")
+assert("loqi"[0] == "l", "indicizzazione str")
+let nome = "Loqi"
+assert("ciao {nome}!" == "ciao Loqi!", "interpolazione")
 assert(join(split("a,b,c", ","), "-") == "a-b-c", "split/join")
 
 # --- lists ---

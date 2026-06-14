@@ -1,5 +1,5 @@
 # Conteggio parole: mostra map, liste, e funzioni di alto livello.
-let testo = "lume e semplice lume e veloce lume e ai first"
+let testo = "loqi e semplice loqi e veloce loqi e ai first"
 
 let conteggi = {}
 for parola in split(testo, " ") {

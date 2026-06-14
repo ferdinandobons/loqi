@@ -1,6 +1,6 @@
-# Lume — Roadmap & Engineering Log
+# Loqi — Roadmap & Engineering Log
 
-Lume is built in a deliberate loop: **build → measure → decide the next
+Loqi is built in a deliberate loop: **build → measure → decide the next
 improvement → build again.** This document is the honest record of that loop.
 Each iteration states what was done, what the measurements showed, and what they
 imply for the next step.
@@ -30,24 +30,24 @@ imply for the next step.
 | AI | structured generation with schema | 🔜 next |
 | Core | garbage collector (mark-sweep) | 📋 planned |
 | Core | namespaced modules / packages | 📋 planned |
-| Tooling | `lume fmt`, `lume test`, LSP | 📋 planned |
-| Speed | AOT: emit C and compile (`lume build`) | 🔬 exploring |
+| Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |
+| Speed | AOT: emit C and compile (`loqi build`) | 🔬 exploring |
 
 ---
 
 ## Iteration 1 — a correct, complete core (✅)
 
-**Built.** A dependency-free reference interpreter in C11 (`src/lume.c`):
+**Built.** A dependency-free reference interpreter in C11 (`src/loqi.c`):
 lexer, Pratt parser, tree-walking evaluator, 22 native functions, REPL.
-Compiles with nothing but `clang`. The whole language in `examples/02_basics.lm`
+Compiles with nothing but `clang`. The whole language in `examples/02_basics.lq`
 runs correctly: recursion, closures, higher-order functions, maps, list ops,
 recursive string interpolation.
 
 **Measured.** `fib(30)`, single thread, M-series, `process_time`:
 
-| Engine | Time | vs Lume |
+| Engine | Time | vs Loqi |
 |--------|------|---------|
-| Lume v0.1 (tree-walker) | ~0.55 s | 1.0× |
+| Loqi v0.1 (tree-walker) | ~0.55 s | 1.0× |
 | CPython 3.13 | ~0.094 s | **5.8× faster** |
 | Node 26 (V8 JIT) | ~0.017 s | **33× faster** |
 
@@ -77,7 +77,7 @@ and every example pass unchanged — same language, new engine.
 
 **Measured.** Same machine, `process_time`:
 
-| Workload | Lume v0.1 (tree-walk) | Lume v0.2 (VM) | CPython 3.13 | Node 26 (JIT) |
+| Workload | Loqi v0.1 (tree-walk) | Loqi v0.2 (VM) | CPython 3.13 | Node 26 (JIT) |
 |----------|----------------------:|---------------:|-------------:|--------------:|
 | `fib(30)` | 0.55 s | **0.105 s** | 0.094 s | 0.017 s |
 | tight loop to 50M | — | **3.0 s** | 4.3 s | — |
@@ -98,11 +98,11 @@ AI-native surface — and the loop now also runs a continuous code-review pass.
 ## Iteration 3 — the AI-first surface (✅)
 
 The differentiator, now real. The things you install separately in other
-languages are part of Lume's runtime:
+languages are part of Loqi's runtime:
 
 - `ai(prompt)` / `ai(prompt, model)` — a first-class LLM call (Anthropic Messages
   API). Reads `ANTHROPIC_API_KEY`; model defaults to `claude-sonnet-4-6` (override
-  per-call or via `LUME_AI_MODEL`).
+  per-call or via `LOQI_AI_MODEL`).
 - `json.parse` / `json.stringify` — a real JSON codec to/from native values.
 - `http.get` / `http.post` — an HTTP client.
 - `similarity(a, b)` — cosine similarity for semantic search.
@@ -145,6 +145,6 @@ iteration from now on.
 
 - Mark-sweep garbage collector (today: heap is freed at exit).
 - Namespaced modules (`import math` → `math.sin`).
-- `lume fmt`, `lume test`, an LSP for editor support.
+- `loqi fmt`, `loqi test`, an LSP for editor support.
 - Pattern matching (`match`), optional type annotations.
-- `lume build`: AOT-compile a program to a native binary via emitted C.
+- `loqi build`: AOT-compile a program to a native binary via emitted C.

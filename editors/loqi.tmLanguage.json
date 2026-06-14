@@ -1,0 +1,73 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Loqi",
+  "scopeName": "source.loqi",
+  "fileTypes": ["lq"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#functions" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.number-sign.loqi", "match": "#.*$" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.loqi", "match": "\\b(if|else|while|for|in|return|break|continue|import)\\b" },
+        { "name": "storage.type.loqi", "match": "\\b(let|fn)\\b" },
+        { "name": "keyword.operator.logical.loqi", "match": "\\b(and|or|not)\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.loqi", "match": "\\b(true|false|nil)\\b" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.loqi", "match": "\\b[0-9][0-9_]*(\\.[0-9_]+)?([eE][+-]?[0-9]+)?\\b" }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.loqi",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.loqi", "match": "\\\\([ntr0\"\\\\{}])" },
+        {
+          "name": "meta.interpolation.loqi",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.loqi" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.loqi" } },
+          "patterns": [{ "include": "$self" }]
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.loqi",
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.loqi" },
+            "2": { "name": "entity.name.function.loqi" }
+          }
+        },
+        { "name": "entity.name.function.call.loqi", "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.loqi", "match": "(==|!=|<=|>=|//|[+\\-*/%<>=])" }
+      ]
+    }
+  }
+}

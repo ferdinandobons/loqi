@@ -1,7 +1,7 @@
-<svg width="360" height="100" viewBox="0 0 360 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="lumeTitle lumeDesc">
-  <title id="lumeTitle">Lume</title>
-  <desc id="lumeDesc">The Lume wordmark beside a warm amber light-spark glyph.</desc>
-  <!-- Glyph: a flame / light mark built from layered amber tones -->
+<svg width="360" height="100" viewBox="0 0 360 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="loqiTitle loqiDesc">
+  <title id="loqiTitle">Loqi</title>
+  <desc id="loqiDesc">The Loqi wordmark beside a warm amber spark glyph.</desc>
+  <!-- Glyph: a warm amber spark mark built from layered amber tones -->
   <g transform="translate(20 18)">
     <!-- outer halo ring -->
     <circle cx="32" cy="32" r="31" fill="none" stroke="#f5b942" stroke-width="2" stroke-opacity="0.28"/>

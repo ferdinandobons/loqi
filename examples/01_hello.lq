@@ -1,4 +1,4 @@
-# Il primo programma in Lume.
+# Il primo programma in Loqi.
 let nome = "mondo"
 print("Ciao, {nome}!")
 

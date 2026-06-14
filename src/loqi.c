@@ -1,5 +1,5 @@
 /*
- * Lume — the AI-first language.
+ * Loqi — the AI-first language.
  * Reference implementation in C11, dependency-free (builds with nothing but clang).
  *
  * Pipeline: source -> lexer -> Pratt parser -> AST -> single-pass bytecode
@@ -38,6 +38,7 @@ typedef struct Table Table;
 typedef struct ObjProto ObjProto;
 typedef struct ObjClosure ObjClosure;
 typedef struct ObjUpvalue ObjUpvalue;
+typedef struct VM VM;
 
 /* ===========================================================================
  * Values
@@ -172,6 +173,7 @@ struct Interp {
     Obj *arena;        /* all heap objects, for cleanup */
     Table *globals;    /* global names -> values (hash table, O(1)) */
     const char *path;  /* current source path for diagnostics */
+    VM *vm;            /* the currently running VM (for native -> closure callbacks) */
     jmp_buf err_jmp;   /* runtime error landing pad */
     bool has_error;
     char err_msg[512];
@@ -1744,14 +1746,14 @@ static ObjProto *compile_script(Interp *I, Node *program) {
 
 typedef struct { ObjClosure *closure; uint8_t *ip; Value *slots; } CallFrame;
 
-typedef struct {
+struct VM {
     Interp *I;
     Value stack[STACK_MAX];
     Value *stack_top;
     CallFrame frames[FRAMES_MAX];
     int frame_count;
     ObjUpvalue *open_upvalues;
-} VM;
+};
 
 static int run_source(Interp *I, const char *src, const char *path);
 static void vm_error(VM *vm, const char *fmt, ...);
@@ -1909,7 +1911,9 @@ static Value iter_seq(VM *vm, Value it) {
     return NIL_VAL;
 }
 
-static void run_vm(VM *vm) {
+/* Run until the current frame count drops back to `stop_at` (0 for the top-level
+ * script; a higher baseline for a re-entrant vm_invoke). */
+static void run_vm(VM *vm, int stop_at) {
     CallFrame *frame = &vm->frames[vm->frame_count - 1];
 #define READ_BYTE() (*frame->ip++)
 #define READ_U16() (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
@@ -1988,9 +1992,9 @@ static void run_vm(VM *vm) {
                 Value result = vm_pop(vm);
                 close_upvalues(vm, frame->slots);
                 vm->frame_count--;
-                if (vm->frame_count == 0) { vm_pop(vm); return; }
-                vm->stack_top = frame->slots;
-                vm_push(vm, result);
+                vm->stack_top = frame->slots;   /* discard callee + locals */
+                vm_push(vm, result);            /* leave result on the stack */
+                if (vm->frame_count == stop_at) return;
                 frame = &vm->frames[vm->frame_count - 1];
                 break;
             }
@@ -2092,6 +2096,28 @@ static void run_vm(VM *vm) {
 #undef READ_CONST
 }
 
+/* Call a Loqi callable (closure or native) from C — enables higher-order
+ * built-ins like map/filter/reduce. Re-enters the VM for closures. */
+static Value vm_invoke(VM *vm, Value callee, int argc, Value *argv) {
+    vm_push(vm, callee);
+    for (int i = 0; i < argc; i++) vm_push(vm, argv[i]);
+    if (IS_NATIVE(callee)) {
+        ObjNative *nat = AS_NATIVE(callee);
+        if (nat->arity >= 0 && nat->arity != argc)
+            vm_error(vm, "%s() attende %d argomenti, ricevuti %d", nat->name, nat->arity, argc);
+        Value r = nat->fn(vm->I, argc, vm->stack_top - argc);
+        vm->stack_top -= argc + 1;
+        return r;
+    }
+    if (IS_CLOSURE(callee)) {
+        int base = vm->frame_count;
+        vm_call_closure(vm, AS_CLOSURE(callee), argc);
+        run_vm(vm, base);          /* runs until the invoked frame returns */
+        return vm_pop(vm);         /* result left on top by OP_RETURN */
+    }
+    vm_error(vm, "valore di tipo %s non è chiamabile", type_name(callee));
+    return NIL_VAL;
+}
 
 /* ===========================================================================
  * Native functions (the "batteries included" standard library — core set)
@@ -2550,7 +2576,7 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     if (!key || !*key)
         runtime_error(I, 0, "ai(): imposta la variabile d'ambiente ANTHROPIC_API_KEY");
     const char *model = (argc >= 2 && IS_STRING(argv[1])) ? AS_STRING(argv[1])->chars
-                       : (getenv("LUME_AI_MODEL") ? getenv("LUME_AI_MODEL") : "claude-sonnet-4-6");
+                       : (getenv("LOQI_AI_MODEL") ? getenv("LOQI_AI_MODEL") : "claude-sonnet-4-6");
 
     /* build the request JSON safely via the value stringifier */
     ObjMap *body = new_map(I);
@@ -2567,7 +2593,7 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     json_stringify_value(I, &jbuf, &jl, &jc, obj_val((Obj *)body), 0);
 
     /* request body -> temp file so the prompt never touches the shell */
-    char tmpl[] = "/tmp/lume_ai_XXXXXX";
+    char tmpl[] = "/tmp/loqi_ai_XXXXXX";
     int fd = mkstemp(tmpl); /* mkstemp creates the file 0600 */
     if (fd < 0) { free(jbuf); runtime_error(I, 0, "ai(): impossibile creare file temporaneo"); }
     if (write(fd, jbuf, jl) < 0) { close(fd); unlink(tmpl); free(jbuf); runtime_error(I, 0, "ai(): scrittura temporanea fallita"); }
@@ -2575,7 +2601,7 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     free(jbuf);
 
     /* curl config (0600) so the API key never appears in the process argv (ps) */
-    char cfgtmpl[] = "/tmp/lume_aicfg_XXXXXX";
+    char cfgtmpl[] = "/tmp/loqi_aicfg_XXXXXX";
     int cfd = mkstemp(cfgtmpl);
     if (cfd < 0) { unlink(tmpl); runtime_error(I, 0, "ai(): impossibile creare file di config"); }
     FILE *cf = fdopen(cfd, "w");
@@ -2665,6 +2691,259 @@ static Value nat_similarity(Interp *I, int argc, Value *argv) {
     return float_val(dot / (sqrt(na) * sqrt(nb)));
 }
 
+/* ---- collections, strings, math: completeness for everyday tasks ---- */
+static int value_compare(Interp *I, Value a, Value b) {
+    if (IS_NUM(a) && IS_NUM(b)) { double x = as_double(a), y = as_double(b); return x < y ? -1 : (x > y ? 1 : 0); }
+    if (IS_STRING(a) && IS_STRING(b)) { int c = strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars); return c < 0 ? -1 : (c > 0 ? 1 : 0); }
+    runtime_error(I, 0, "confronto non valido tra %s e %s", type_name(a), type_name(b));
+    return 0;
+}
+static int sort_cmp(void *thunk, const void *pa, const void *pb) {
+    return value_compare((Interp *)thunk, *(const Value *)pa, *(const Value *)pb);
+}
+static Value nat_sort(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "sort() richiede una list");
+    ObjList *src = AS_LIST(argv[0]);
+    ObjList *out = new_list(I);
+    for (int i = 0; i < src->count; i++) list_push(out, src->items[i]);
+    if (out->count > 1) qsort_r(out->items, (size_t)out->count, sizeof(Value), I, sort_cmp);
+    return obj_val((Obj *)out);
+}
+static Value nat_reverse(Interp *I, int argc, Value *argv) {
+    if (IS_LIST(argv[0])) {
+        ObjList *src = AS_LIST(argv[0]); ObjList *out = new_list(I);
+        for (int i = src->count - 1; i >= 0; i--) list_push(out, src->items[i]);
+        return obj_val((Obj *)out);
+    }
+    if (IS_STRING(argv[0])) {
+        ObjString *s = AS_STRING(argv[0]); ObjString *r = new_string_n(I, s->chars, s->length);
+        for (int i = 0; i < s->length; i++) r->chars[i] = s->chars[s->length - 1 - i];
+        return obj_val((Obj *)r);
+    }
+    runtime_error(I, 0, "reverse() richiede list o str");
+    return NIL_VAL;
+}
+static Value nat_sum(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "sum() richiede una list");
+    ObjList *l = AS_LIST(argv[0]);
+    int64_t si = 0; double sf = 0; bool is_float = false;
+    for (int i = 0; i < l->count; i++) {
+        if (!IS_NUM(l->items[i])) runtime_error(I, 0, "sum(): elemento non numerico (%s)", type_name(l->items[i]));
+        if (IS_FLOAT(l->items[i])) is_float = true;
+        sf += as_double(l->items[i]); si += IS_INT(l->items[i]) ? AS_INT(l->items[i]) : 0;
+    }
+    return is_float ? float_val(sf) : int_val(si);
+}
+static Value nat_min(Interp *I, int argc, Value *argv) {
+    if (argc == 0) runtime_error(I, 0, "min() richiede almeno un argomento");
+    if (argc == 1 && IS_LIST(argv[0])) {
+        ObjList *l = AS_LIST(argv[0]);
+        if (l->count == 0) runtime_error(I, 0, "min() di list vuota");
+        Value best = l->items[0];
+        for (int i = 1; i < l->count; i++) if (value_compare(I, l->items[i], best) < 0) best = l->items[i];
+        return best;
+    }
+    Value best = argv[0];
+    for (int i = 1; i < argc; i++) if (value_compare(I, argv[i], best) < 0) best = argv[i];
+    return best;
+}
+static Value nat_max(Interp *I, int argc, Value *argv) {
+    if (argc == 0) runtime_error(I, 0, "max() richiede almeno un argomento");
+    if (argc == 1 && IS_LIST(argv[0])) {
+        ObjList *l = AS_LIST(argv[0]);
+        if (l->count == 0) runtime_error(I, 0, "max() di list vuota");
+        Value best = l->items[0];
+        for (int i = 1; i < l->count; i++) if (value_compare(I, l->items[i], best) > 0) best = l->items[i];
+        return best;
+    }
+    Value best = argv[0];
+    for (int i = 1; i < argc; i++) if (value_compare(I, argv[i], best) > 0) best = argv[i];
+    return best;
+}
+static void norm_range(int64_t *start, int64_t *end, int len) {
+    if (*start < 0) *start += len; if (*end < 0) *end += len;
+    if (*start < 0) *start = 0; if (*end > len) *end = len;
+    if (*end < *start) *end = *start;
+}
+static Value nat_slice(Interp *I, int argc, Value *argv) {
+    if (argc < 2 || !IS_INT(argv[1]) || (argc >= 3 && !IS_INT(argv[2])))
+        runtime_error(I, 0, "slice() richiede (coll, start:int [, end:int])");
+    if (IS_LIST(argv[0])) {
+        ObjList *l = AS_LIST(argv[0]);
+        int64_t s = AS_INT(argv[1]), e = (argc >= 3) ? AS_INT(argv[2]) : l->count;
+        norm_range(&s, &e, l->count);
+        ObjList *out = new_list(I);
+        for (int64_t i = s; i < e; i++) list_push(out, l->items[i]);
+        return obj_val((Obj *)out);
+    }
+    if (IS_STRING(argv[0])) {
+        ObjString *str = AS_STRING(argv[0]);
+        int64_t s = AS_INT(argv[1]), e = (argc >= 3) ? AS_INT(argv[2]) : str->length;
+        norm_range(&s, &e, str->length);
+        return string_val(I, str->chars + s, (int)(e - s));
+    }
+    runtime_error(I, 0, "slice() richiede list o str");
+    return NIL_VAL;
+}
+static Value nat_index_of(Interp *I, int argc, Value *argv) {
+    if (IS_LIST(argv[0])) {
+        ObjList *l = AS_LIST(argv[0]);
+        for (int i = 0; i < l->count; i++) if (values_equal(l->items[i], argv[1])) return int_val(i);
+        return int_val(-1);
+    }
+    if (IS_STRING(argv[0]) && IS_STRING(argv[1])) {
+        const char *h = AS_STRING(argv[0])->chars, *n = AS_STRING(argv[1])->chars;
+        const char *hit = strstr(h, n);
+        return int_val(hit ? (int64_t)(hit - h) : -1);
+    }
+    runtime_error(I, 0, "index_of() richiede (list, x) o (str, str)");
+    return NIL_VAL;
+}
+static Value nat_contains(Interp *I, int argc, Value *argv) {
+    if (IS_STRING(argv[0]) && IS_STRING(argv[1]))
+        return bool_val(strstr(AS_STRING(argv[0])->chars, AS_STRING(argv[1])->chars) != NULL);
+    if (IS_LIST(argv[0])) {
+        ObjList *l = AS_LIST(argv[0]);
+        for (int i = 0; i < l->count; i++) if (values_equal(l->items[i], argv[1])) return bool_val(true);
+        return bool_val(false);
+    }
+    if (IS_MAP(argv[0])) {
+        char *k = value_to_cstr(I, argv[1]); bool f = map_get(AS_MAP(argv[0]), k) != NULL; free(k);
+        return bool_val(f);
+    }
+    runtime_error(I, 0, "contains() richiede str, list o map");
+    return NIL_VAL;
+}
+static Value nat_trim(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "trim() richiede str");
+    ObjString *s = AS_STRING(argv[0]);
+    int a = 0, b = s->length;
+    while (a < b && isspace((unsigned char)s->chars[a])) a++;
+    while (b > a && isspace((unsigned char)s->chars[b - 1])) b--;
+    return string_val(I, s->chars + a, b - a);
+}
+static Value nat_replace(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1]) || !IS_STRING(argv[2]))
+        runtime_error(I, 0, "replace() richiede (str, str, str)");
+    ObjString *s = AS_STRING(argv[0]), *o = AS_STRING(argv[1]), *n = AS_STRING(argv[2]);
+    if (o->length == 0) return argv[0];
+    char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
+    const char *p = s->chars, *end = s->chars + s->length;
+    while (p < end) {
+        const char *hit = strstr(p, o->chars);
+        if (!hit) { append_str(&buf, &len, &cap, p, (size_t)(end - p)); break; }
+        append_str(&buf, &len, &cap, p, (size_t)(hit - p));
+        append_str(&buf, &len, &cap, n->chars, (size_t)n->length);
+        p = hit + o->length;
+    }
+    Value out = string_val(I, buf, (int)len); free(buf); return out;
+}
+static Value nat_starts_with(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "starts_with() richiede (str, str)");
+    ObjString *s = AS_STRING(argv[0]), *p = AS_STRING(argv[1]);
+    return bool_val(s->length >= p->length && memcmp(s->chars, p->chars, (size_t)p->length) == 0);
+}
+static Value nat_ends_with(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "ends_with() richiede (str, str)");
+    ObjString *s = AS_STRING(argv[0]), *p = AS_STRING(argv[1]);
+    return bool_val(s->length >= p->length && memcmp(s->chars + s->length - p->length, p->chars, (size_t)p->length) == 0);
+}
+static Value nat_repeat(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0]) || !IS_INT(argv[1])) runtime_error(I, 0, "repeat() richiede (str, int)");
+    ObjString *s = AS_STRING(argv[0]); int64_t n = AS_INT(argv[1]);
+    if (n < 0) n = 0;
+    if (n > 0 && s->length > (int)(100 * 1024 * 1024) / (n ? (int)n : 1)) runtime_error(I, 0, "repeat(): risultato troppo grande");
+    char *buf = xmalloc((size_t)s->length * (size_t)n + 1);
+    for (int64_t i = 0; i < n; i++) memcpy(buf + i * s->length, s->chars, (size_t)s->length);
+    Value out = string_val(I, buf, (int)(s->length * n)); free(buf); return out;
+}
+static Value nat_round(Interp *I, int argc, Value *argv) {
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "round() richiede un numero");
+    return int_val((int64_t)llround(as_double(argv[0])));
+}
+static Value nat_ceil(Interp *I, int argc, Value *argv) {
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "ceil() richiede un numero");
+    return int_val((int64_t)ceil(as_double(argv[0])));
+}
+static Value nat_pow(Interp *I, int argc, Value *argv) {
+    if (!IS_NUM(argv[0]) || !IS_NUM(argv[1])) runtime_error(I, 0, "pow() richiede due numeri");
+    return float_val(pow(as_double(argv[0]), as_double(argv[1])));
+}
+static Value nat_del(Interp *I, int argc, Value *argv) {
+    if (!IS_MAP(argv[0])) runtime_error(I, 0, "del() richiede una map");
+    char *key = value_to_cstr(I, argv[1]);
+    ObjMap *m = AS_MAP(argv[0]);
+    for (int i = 0; i < m->count; i++) {
+        if (strcmp(m->entries[i].key, key) == 0) {
+            free(m->entries[i].key);
+            for (int j = i; j < m->count - 1; j++) m->entries[j] = m->entries[j + 1];
+            m->count--;
+            break;
+        }
+    }
+    free(key);
+    return argv[0];
+}
+static Value nat_chars(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "chars() richiede str");
+    ObjString *s = AS_STRING(argv[0]); ObjList *l = new_list(I);
+    for (int i = 0; i < s->length; i++) list_push(l, string_val(I, s->chars + i, 1));
+    return obj_val((Obj *)l);
+}
+static Value nat_now(Interp *I, int argc, Value *argv) {
+    return float_val((double)time(NULL));
+}
+
+/* ---- higher-order: map / filter / reduce / each / find (need a VM callback) ---- */
+static Value nat_map(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "map() richiede (list, fn)");
+    ObjList *src = AS_LIST(argv[0]);
+    ObjList *out = new_list(I);
+    for (int i = 0; i < src->count; i++) {
+        Value a = src->items[i];
+        list_push(out, vm_invoke(I->vm, argv[1], 1, &a));
+    }
+    return obj_val((Obj *)out);
+}
+static Value nat_filter(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "filter() richiede (list, fn)");
+    ObjList *src = AS_LIST(argv[0]);
+    ObjList *out = new_list(I);
+    for (int i = 0; i < src->count; i++) {
+        Value a = src->items[i];
+        if (is_truthy(vm_invoke(I->vm, argv[1], 1, &a))) list_push(out, a);
+    }
+    return obj_val((Obj *)out);
+}
+static Value nat_reduce(Interp *I, int argc, Value *argv) {
+    if (argc < 3 || !IS_LIST(argv[0])) runtime_error(I, 0, "reduce() richiede (list, fn, iniziale)");
+    ObjList *src = AS_LIST(argv[0]);
+    Value acc = argv[2];
+    for (int i = 0; i < src->count; i++) {
+        Value pair[2] = { acc, src->items[i] };
+        acc = vm_invoke(I->vm, argv[1], 2, pair);
+    }
+    return acc;
+}
+static Value nat_each(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "each() richiede (list, fn)");
+    ObjList *src = AS_LIST(argv[0]);
+    for (int i = 0; i < src->count; i++) {
+        Value a = src->items[i];
+        vm_invoke(I->vm, argv[1], 1, &a);
+    }
+    return NIL_VAL;
+}
+static Value nat_find(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "find() richiede (list, fn)");
+    ObjList *src = AS_LIST(argv[0]);
+    for (int i = 0; i < src->count; i++) {
+        Value a = src->items[i];
+        if (is_truthy(vm_invoke(I->vm, argv[1], 1, &a))) return a;
+    }
+    return NIL_VAL;
+}
+
 /* register a native inside a namespace map (e.g. json.parse) */
 static void define_native_in(Interp *I, ObjMap *ns, const char *name, NativeFn fn, int arity) {
     ObjNative *nat = (ObjNative *)alloc_obj(I, sizeof(ObjNative), OBJ_NATIVE);
@@ -2693,8 +2972,38 @@ static void install_stdlib(Interp *I) {
     define_native(I, "sqrt", nat_sqrt, 1);
     define_native(I, "floor", nat_floor, 1);
     define_native(I, "clock", nat_clock, 0);
+    define_native(I, "now", nat_now, 0);
     define_native(I, "input", nat_input, -1);
     define_native(I, "assert", nat_assert, -1);
+
+    /* --- collections --- */
+    define_native(I, "sort", nat_sort, 1);
+    define_native(I, "reverse", nat_reverse, 1);
+    define_native(I, "sum", nat_sum, 1);
+    define_native(I, "min", nat_min, -1);
+    define_native(I, "max", nat_max, -1);
+    define_native(I, "slice", nat_slice, -1);
+    define_native(I, "index_of", nat_index_of, 2);
+    define_native(I, "contains", nat_contains, 2);
+    define_native(I, "del", nat_del, 2);
+    define_native(I, "map", nat_map, 2);
+    define_native(I, "filter", nat_filter, 2);
+    define_native(I, "reduce", nat_reduce, 3);
+    define_native(I, "each", nat_each, 2);
+    define_native(I, "find", nat_find, 2);
+
+    /* --- strings --- */
+    define_native(I, "trim", nat_trim, 1);
+    define_native(I, "replace", nat_replace, 3);
+    define_native(I, "starts_with", nat_starts_with, 2);
+    define_native(I, "ends_with", nat_ends_with, 2);
+    define_native(I, "repeat", nat_repeat, 2);
+    define_native(I, "chars", nat_chars, 1);
+
+    /* --- math --- */
+    define_native(I, "round", nat_round, 1);
+    define_native(I, "ceil", nat_ceil, 1);
+    define_native(I, "pow", nat_pow, 2);
 
     /* --- AI-first batteries --- */
     define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model) */
@@ -2762,10 +3071,12 @@ static int run_source(Interp *I, const char *src, const char *path) {
     ObjProto *script = compile_script(I, prog);
     if (!script) { free(owned); I->path = prev_path; return 65; }
 
-    /* save the enclosing error landing pad for safe nesting (imports) */
+    /* save the enclosing error landing pad + VM for safe nesting (imports) */
     jmp_buf saved; memcpy(saved, I->err_jmp, sizeof(jmp_buf));
+    VM *prev_vm = I->vm;
     VM *vm = xmalloc(sizeof(VM));
     vm->I = I; vm->stack_top = vm->stack; vm->frame_count = 0; vm->open_upvalues = NULL;
+    I->vm = vm;
 
     int rc = 0;
     if (setjmp(I->err_jmp)) {
@@ -2775,10 +3086,11 @@ static int run_source(Interp *I, const char *src, const char *path) {
         ObjClosure *cl = new_closure(I, script);
         vm_push(vm, obj_val((Obj *)cl));
         vm_call_closure(vm, cl, 0);
-        run_vm(vm);
+        run_vm(vm, 0);
     }
     free(vm);
     free(owned);
+    I->vm = prev_vm;
     memcpy(I->err_jmp, saved, sizeof(jmp_buf)); /* restore enclosing landing pad */
     I->path = prev_path;
     return rc;
@@ -2791,6 +3103,7 @@ static int interpret(Interp *I, const char *src, const char *path) {
 static void interp_init(Interp *I) {
     I->arena = NULL;
     I->path = NULL;
+    I->vm = NULL;
     I->has_error = false;
     I->err_msg[0] = '\0';
     I->globals = xmalloc(sizeof(Table));
@@ -2798,13 +3111,13 @@ static void interp_init(Interp *I) {
     install_stdlib(I);
 }
 
-#define LUME_VERSION "0.2.0"
+#define LOQI_VERSION "0.2.0"
 
 static void repl(Interp *I) {
-    printf("Lume %s — REPL. Ctrl-D per uscire.\n", LUME_VERSION);
+    printf("Loqi %s — REPL. Ctrl-D per uscire.\n", LOQI_VERSION);
     char *line = NULL; size_t cap = 0;
     for (;;) {
-        fputs("lume> ", stdout); fflush(stdout);
+        fputs("loqi> ", stdout); fflush(stdout);
         ssize_t got = getline(&line, &cap, stdin);
         if (got < 0) { printf("\n"); break; }
         interpret(I, line, "<repl>");
@@ -2822,7 +3135,7 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2) {
         if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
-            printf("Lume %s\n", LUME_VERSION);
+            printf("Loqi %s\n", LOQI_VERSION);
             return 0;
         }
         char *src = read_file(argv[1]);

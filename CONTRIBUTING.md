@@ -1,6 +1,6 @@
-# Contributing to Lume
+# Contributing to Loqi
 
-Thanks for your interest. Lume is built in a tight loop —
+Thanks for your interest. Loqi is built in a tight loop —
 **build → measure → review → improve** — and contributions follow the same rhythm.
 
 ## Build & test
@@ -18,8 +18,8 @@ suite cleanly under AddressSanitizer/UBSan before it lands.
 
 | Path | What |
 |------|------|
-| `src/lume.c` | the whole implementation: lexer → parser → AST → bytecode compiler → VM |
-| `tests/` | `.lm` programs that assert behaviour (exit non-zero on failure) |
+| `src/loqi.c` | the whole implementation: lexer → parser → AST → bytecode compiler → VM |
+| `tests/` | `.lq` programs that assert behaviour (exit non-zero on failure) |
 | `examples/` | runnable showcase programs |
 | `docs/` | language guide, stdlib reference, comparison, roadmap |
 | `editors/` | TextMate grammar for syntax highlighting |

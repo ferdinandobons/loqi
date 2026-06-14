@@ -1,4 +1,4 @@
-# The Lume Language Guide (v0.1)
+# The Loqi Language Guide (v0.1)
 
 This is the complete reference for the language as it exists today. Anything
 marked *planned* lives in the [roadmap](ROADMAP.md), not here — this guide only
@@ -26,7 +26,7 @@ documents what runs.
 - A long expression can be continued onto the next line with a trailing `\`.
 - Whitespace is otherwise insignificant.
 
-```lume
+```loqi
 # this is a comment
 let x = 1 + \
         2          # line continuation
@@ -34,7 +34,7 @@ let x = 1 + \
 
 ## Values and types
 
-Lume has a small, predictable set of types:
+Loqi has a small, predictable set of types:
 
 | Type    | Examples                        | Notes                                  |
 |---------|---------------------------------|----------------------------------------|
@@ -54,7 +54,7 @@ Lume has a small, predictable set of types:
 Declare with `let`. Assign to an existing variable with `=`. Assigning to an
 undeclared name is an error (this catches typos).
 
-```lume
+```loqi
 let n = 10
 n = n + 1          # ok
 m = 5              # errore: 'm' non dichiarata (usa 'let')
@@ -84,7 +84,7 @@ Notes:
 Strings are double-quoted. Any `{expr}` inside a string is evaluated and spliced
 in (the value is converted with `str`). Use `\{` and `\}` for literal braces.
 
-```lume
+```loqi
 let a = 6
 let b = 7
 print("{a} * {b} = {a * b}")          # 6 * 7 = 42
@@ -94,7 +94,7 @@ print("set: \{ {a}, {b} \}")          # set: { 6, 7 }
 Interpolation is fully recursive — expressions may contain their own strings and
 nested interpolation:
 
-```lume
+```loqi
 print("nomi: {join(["Ada", "Lin"], ", ")}")
 ```
 
@@ -106,21 +106,21 @@ A string in **backticks** is verbatim: no escapes, no interpolation. Ideal for
 JSON, regexes, Windows paths, or anything full of `{`, `}`, `"` and `\`. Write a
 literal backtick as `` `` `` (two backticks). Raw strings may span multiple lines.
 
-```lume
+```loqi
 let payload = `{"name": "Ada", "tags": ["x", "y"]}`   # no escaping needed
 let pattern = `\d+\.\d+`
 let doc = `riga uno
 riga due`
 ```
 
-This is why JSON is pleasant in Lume: `json.parse(`{"k": 1}`)` just works.
+This is why JSON is pleasant in Loqi: `json.parse(`{"k": 1}`)` just works.
 
 ### Indexing and iteration
 
 Strings are indexable and iterable by byte/char:
 
-```lume
-let s = "lume"
+```loqi
+let s = "loqi"
 print(s[0])           # l
 for c in s { print(c) }
 ```
@@ -129,7 +129,7 @@ for c in s { print(c) }
 
 ### Lists
 
-```lume
+```loqi
 let xs = [1, 2, 3]
 push(xs, 4)           # [1, 2, 3, 4]
 let last = pop(xs)    # 4
@@ -142,7 +142,7 @@ print(has(xs, 2))     # true
 
 ### Maps
 
-```lume
+```loqi
 let m = { nome: "Ada", anni: 36 }
 print(m.nome)         # dot access for identifier keys
 print(m["nome"])      # bracket access for any key
@@ -159,7 +159,7 @@ Iterating a map yields its keys.
 
 No parentheses around conditions; blocks are always braced.
 
-```lume
+```loqi
 if x > 0 {
   print("positivo")
 } else if x == 0 {
@@ -188,7 +188,7 @@ Declare with `fn name(params) { ... }`. Functions are first-class values and can
 be anonymous (`fn(x) { ... }`). They close over the scope in which they are
 defined.
 
-```lume
+```loqi
 fn applica(f, x) { return f(x) }
 print(applica(fn(n) { return n * 2 }, 21))   # 42
 
@@ -204,11 +204,11 @@ A function with no `return` returns `nil`. Recursion is supported directly.
 
 ## Modules
 
-`import "path.lm"` executes another file in the current global scope (a simple
+`import "path.lq"` executes another file in the current global scope (a simple
 v0.1 module model; namespaced modules are on the roadmap).
 
-```lume
-import "std/math.lm"
+```loqi
+import "std/math.lq"
 ```
 
 ## Grammar

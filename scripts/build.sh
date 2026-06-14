@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Lume reference interpreter. Tuned for Apple Silicon.
+# Build the Loqi reference interpreter. Tuned for Apple Silicon.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,7 +20,7 @@ case "$MODE" in
     echo "uso: build.sh [release|debug]" >&2; exit 2;;
 esac
 
-echo "==> Compilo lume ($MODE)"
-clang $COMMON $FLAGS src/lume.c -lm -o build/lume
-echo "==> Fatto: build/lume"
-build/lume --version
+echo "==> Compilo loqi ($MODE)"
+clang $COMMON $FLAGS src/loqi.c -lm -o build/loqi
+echo "==> Fatto: build/loqi"
+build/loqi --version

@@ -1,8 +1,8 @@
 # build
 /build/
 *.o
-lume
-lumec
+loqi
+loqic
 *.dSYM/
 .DS_Store
 # editor

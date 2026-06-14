@@ -1,8 +1,8 @@
-# Why Lume
+# Why Loqi
 
 **The AI-first language — simple to read, fast on Apple Silicon.**
 
-This is the positioning document: what Lume is for, what bet it makes, and —
+This is the positioning document: what Loqi is for, what bet it makes, and —
 just as importantly — what it does not yet do. Every claim here is backed by code,
 tests, and the [ROADMAP](ROADMAP.md).
 
@@ -24,7 +24,7 @@ deps, build the environment, hope the versions still agree. The interesting part
 of an AI program — fetch something, ask a model about it, parse the answer — is a
 handful of lines wrapped in a pile of plumbing.
 
-Lume's premise is that this plumbing is so universal it should not be plumbing
+Loqi's premise is that this plumbing is so universal it should not be plumbing
 at all.
 
 ## The bet
@@ -33,7 +33,7 @@ Make the glue first-class. An LLM call, an HTTP client, a JSON codec, and vector
 similarity are not packages you install — they are part of a small, fast, readable
 language and its runtime. One native binary, nothing to assemble.
 
-```lume
+```loqi
 # fetch live data, then let a model explain it — no libraries, no SDK
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
 print("{repo.full_name}: {repo.stargazers_count} stelle")
@@ -42,7 +42,7 @@ let poem = ai("Scrivi un haiku sul codice pulito")
 print(poem)
 ```
 
-No `pip install`, no `npm i`, no SDK import, no venv. If `lume` is on the machine,
+No `pip install`, no `npm i`, no SDK import, no venv. If `loqi` is on the machine,
 this runs.
 
 ## The three strengths
@@ -53,7 +53,7 @@ The things you reach for an external package for are in the language and runtime
 
 - `ai(prompt)` / `ai(prompt, model)` — a first-class LLM call. Hits the Anthropic
   Messages API, reads `ANTHROPIC_API_KEY`, defaults to `claude-sonnet-4-6`
-  (override per call or via `LUME_AI_MODEL`).
+  (override per call or via `LOQI_AI_MODEL`).
 - `json.parse(str)` / `json.stringify(value)` — JSON to and from native values.
 - `http.get(url)` / `http.post(url, body, content_type?)` — an HTTP client.
 - `similarity(a, b)` — cosine similarity over numeric vectors, for semantic search.
@@ -62,7 +62,7 @@ The things you reach for an external package for are in the language and runtime
 Because these compose with native values, the common AI shapes collapse to a line
 or two — for example, "ask a model for structured data and use it directly":
 
-```lume
+```loqi
 let data = json.parse(ai("Estrai nome e anno come JSON da: " + testo))
 print(data.nome)
 ```
@@ -77,25 +77,25 @@ table, closures via upvalues).
 
 Honest numbers, measured on Apple Silicon (`process_time`):
 
-| Benchmark        | Lume   | CPython 3.13 | Node / V8     |
+| Benchmark        | Loqi   | CPython 3.13 | Node / V8     |
 | ---------------- | ------ | ------------ | ------------- |
 | `fib(30)`        | 0.097s | 0.094s       | 0.017s (JIT)  |
 | tight loop, 50M  | 3.0s   | 4.3s         | —             |
 
-Lume is roughly **on par with CPython** on recursion and **~1.4× faster on tight
-loops** — and ~5× faster than Lume's own first tree-walking interpreter. The
+Loqi is roughly **on par with CPython** on recursion and **~1.4× faster on tight
+loops** — and ~5× faster than Loqi's own first tree-walking interpreter. The
 position is simple: *Python-class speed (often faster on loops) from a single
 compiled binary, getting faster each iteration.* V8 wins micro-benchmarks because
-it JIT-compiles; Lume does not (yet). Lume does not claim to beat Go, Rust, C, or
+it JIT-compiles; Loqi does not (yet). Loqi does not claim to beat Go, Rust, C, or
 Node.
 
 ### 3. Simple to read and write
 
 No semicolons, no ceremony. `let` to declare, `fn` for functions, curly-brace
 blocks, `{expr}` string interpolation. If you have read code before, you can read
-Lume.
+Loqi.
 
-```lume
+```loqi
 fn fib(n) {
   if n < 2 { return n }
   return fib(n - 1) + fib(n - 2)
@@ -105,7 +105,7 @@ print("fib(10) = {fib(10)}")
 
 Closures and first-class functions are core, not bolted on:
 
-```lume
+```loqi
 fn contatore() {
   let n = 0
   return fn() { n = n + 1; return n }
@@ -128,7 +128,7 @@ binary they can copy to a machine and run.
 - **Raw strings.** Backtick strings (`` `...` ``) are verbatim — no escapes, no
   interpolation — so JSON and regex go in literally, without escaping wars:
 
-  ```lume
+  ```loqi
   let cfg = json.parse(`{"name": "Ada", "tags": ["x", "y"]}`)
   print(cfg.name)
   ```
@@ -148,9 +148,9 @@ equality is structural for lists and maps; and there are 25+ built-ins
 
 ## Non-goals and current limitations
 
-Honesty is part of the brand. Today, Lume is **v0.2 — early but real**:
+Honesty is part of the brand. Today, Loqi is **v0.2 — early but real**:
 
-- **No JIT yet.** This is why V8 wins micro-benchmarks. Lume runs bytecode on a
+- **No JIT yet.** This is why V8 wins micro-benchmarks. Loqi runs bytecode on a
   stack VM; it does not compile hot paths to machine code.
 - **No garbage collector yet.** Memory lives in an arena freed at exit — fine for
   scripts, and a GC is on the roadmap.
@@ -166,7 +166,7 @@ shaped before the runtime is fully hardened.
 
 ## The loop
 
-Lume is developed in a tight cycle: **build → measure → adversarial review → fix
+Loqi is developed in a tight cycle: **build → measure → adversarial review → fix
 → repeat.** Every change is measured against real interpreters, not vibes. Then a
 multi-agent adversarial code review tries to break it. A recent review raised 29
 findings; 28 were confirmed and **all were fixed**, including a critical VM
@@ -181,4 +181,4 @@ iteration.
 ---
 
 *See the [Language guide](LANGUAGE.md), the [Standard library](STDLIB.md), and the
-[Roadmap](ROADMAP.md). Lume is MIT-licensed.*
+[Roadmap](ROADMAP.md). Loqi is MIT-licensed.*

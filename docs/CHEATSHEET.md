@@ -1,12 +1,12 @@
-# Lume Cheatsheet
+# Loqi Cheatsheet
 
 The AI-first language — simple to read, fast on Apple Silicon. One page, copy-pasteable.
-File extension `.lm`. Run with `lume file.lm`. Comments start with `#`. No semicolons (a
+File extension `.lq`. Run with `loqi file.lq`. Comments start with `#`. No semicolons (a
 newline ends a statement; `;` also separates). Blocks use `{ }`.
 
 ## Variables
 
-```lume
+```loqi
 let nome = "mondo"      # declare with let
 nome = "ciao"          # reassign with = (assigning an undeclared name is an error)
 let a = 1; let b = 2   # ; separates statements on one line
@@ -14,7 +14,7 @@ let a = 1; let b = 2   # ; separates statements on one line
 
 ## Types
 
-```lume
+```loqi
 nil                    # nil
 true                   # bool
 42                     # int (64-bit)
@@ -25,13 +25,13 @@ true                   # bool
 fn() { return 1 }      # fn (first-class)
 ```
 
-```lume
+```loqi
 print(type(42))        # "int"
 ```
 
 ## Operators
 
-```lume
+```loqi
 1 + 2 - 3 * 4          # arithmetic
 7 / 2                  # 3.5   -> / is float division
 7 // 2                 # 3     -> // is floor division
@@ -43,7 +43,7 @@ true and false   true or false   !true   # logical
 
 ## Strings
 
-```lume
+```loqi
 let n = 3
 print("ho {n} mele")           # interpolation: {expr} (recursive)
 print("totale: {n * 2 + 1}")   # any expression inside {}
@@ -52,7 +52,7 @@ let raw = `{"name": "Ada"}`    # raw string: backticks, verbatim, no escapes/int
 
 ## Lists
 
-```lume
+```loqi
 let xs = [1, 2, 3]
 push(xs, 4)            # append
 let last = pop(xs)     # remove & return last
@@ -63,7 +63,7 @@ for x in xs { print(x) }
 
 ## Maps
 
-```lume
+```loqi
 let m = {"nome": "Ada", "anno": 1815}
 print(m["nome"])       # index by key
 print(m.nome)          # dot access
@@ -74,7 +74,7 @@ print(values(m))       # list of values
 
 ## Control flow
 
-```lume
+```loqi
 if n < 0 {
   print("neg")
 } else if n == 0 {
@@ -92,7 +92,7 @@ for ch in "ab" { if ch == "b" { break } print(ch) }
 
 ## Functions, closures, recursion
 
-```lume
+```loqi
 fn fib(n) {
   if n < 2 { return n }
   return fib(n - 1) + fib(n - 2)   # recursion
@@ -111,7 +111,7 @@ print(next(), next(), next())          # 1 2 3
 
 ## AI-first builtins (no installs, no SDK)
 
-```lume
+```loqi
 let poem = ai("Scrivi un haiku sul codice pulito")          # LLM call; reads ANTHROPIC_API_KEY
 let txt  = ai("Riassumi in una riga", "claude-sonnet-4-6")  # override model per-call
 
@@ -130,14 +130,14 @@ write("out.txt", "ciao")              # write whole file
 
 ### Combined: extract structured data from text
 
-```lume
+```loqi
 let data = json.parse(ai("Estrai nome e anno come JSON da: " + testo))
 print(data.nome)
 ```
 
 ### Combined: fetch + parse JSON from the web
 
-```lume
+```loqi
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
 print("{repo.full_name}: {repo.stargazers_count} stelle")
 ```
@@ -147,7 +147,7 @@ print("{repo.full_name}: {repo.stargazers_count} stelle")
 `print` `len` `type` `int` `float` `push` `pop` `keys` `values` `has` `range`
 `upper` `lower` `split` `join` `abs` `sqrt` `floor` `clock` `input` `assert`
 
-```lume
+```loqi
 print(upper("ciao"))                 # "CIAO"
 print(join(split("a,b,c", ","), "-")) # "a-b-c"
 print(sqrt(abs(-9)))                 # 3.0

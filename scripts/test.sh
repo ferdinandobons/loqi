@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Run the Lume test suite. A test passes if it exits 0 (asserts inside).
+# Run the Loqi test suite. A test passes if it exits 0 (asserts inside).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-LUME="${LUME:-build/lume}"
-[ -x "$LUME" ] || { echo "Costruisci prima: ./scripts/build.sh"; exit 1; }
+LOQI="${LOQI:-build/loqi}"
+[ -x "$LOQI" ] || { echo "Costruisci prima: ./scripts/build.sh"; exit 1; }
 
 pass=0; fail=0
-for t in tests/*.lm; do
-  if out="$("$LUME" "$t" 2>&1)"; then
+for t in tests/*.lq; do
+  if out="$("$LOQI" "$t" 2>&1)"; then
     echo "  ✓ $t"
     pass=$((pass+1))
   else
@@ -19,17 +19,17 @@ for t in tests/*.lm; do
 done
 
 # Examples must also run without error (smoke test).
-for e in examples/*.lm; do
-  if out="$("$LUME" "$e" >/dev/null 2>&1)"; then :; else
+for e in examples/*.lq; do
+  if out="$("$LOQI" "$e" >/dev/null 2>&1)"; then :; else
     echo "  ✗ (example) $e"
     fail=$((fail+1))
   fi
 done
 
 # Error tests: these MUST fail cleanly (non-zero exit), never crash/segfault.
-for t in tests/errors/*.lm; do
+for t in tests/errors/*.lq; do
   [ -e "$t" ] || continue
-  "$LUME" "$t" >/dev/null 2>&1
+  "$LOQI" "$t" >/dev/null 2>&1
   rc=$?
   if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ]; then
     echo "  ✓ (error) $t  (exit $rc)"

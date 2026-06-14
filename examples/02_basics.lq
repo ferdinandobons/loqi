@@ -1,4 +1,4 @@
-# Tour delle funzionalità di base di Lume.
+# Tour delle funzionalità di base di Loqi.
 
 # --- funzioni e ricorsione ---
 fn fib(n) {
@@ -27,7 +27,7 @@ for x in numeri {
 print("somma = {somma}, lunghezza = {len(numeri)}")
 
 # --- map ---
-let utente = { nome: "Ada", anni: 36, lingua: "Lume" }
+let utente = { nome: "Ada", anni: 36, lingua: "Loqi" }
 print("{utente.nome} ha {utente.anni} anni")
 for k in utente {
   print("  {k} -> {utente[k]}")
@@ -43,7 +43,7 @@ for i in range(1, 6) {
 }
 
 # --- stringhe ---
-let frase = "lume e veloce e semplice"
+let frase = "loqi e veloce e semplice"
 let parole = split(frase, " ")
 print("parole: {len(parole)} -> {join(parole, "-")}")
 print(upper(frase))

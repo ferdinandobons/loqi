@@ -1,6 +1,6 @@
 # Estrazione strutturata: l'AI produce JSON, `json.parse` lo rende dati nativi.
 # Tutto built-in: niente librerie HTTP, niente parser JSON, niente SDK.
-#   ANTHROPIC_API_KEY=... lume examples/ai/extract.lm
+#   ANTHROPIC_API_KEY=... loqi examples/ai/extract.lq
 
 let testo = "Ada Lovelace, nata nel 1815, è considerata la prima programmatrice."
 

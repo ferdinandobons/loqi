@@ -1,14 +1,15 @@
 <div align="center">
 
-# Lume
+# Loqi
 
-**The AI-first programming language — simple to read, fast on Apple Silicon.**
+**The AI-first programming language — the language you speak to machines.**
 
-*Lume* (light) is a small, modern language with batteries included: an LLM call,
-an HTTP client, JSON and vectors are part of the language, not packages you hunt
-down and install. One binary, no toolchain to assemble.
+*Loqi* (from Latin *loqui*, "to speak") is a small, modern language with batteries
+included: an LLM call, an HTTP client, JSON and vectors are part of the language,
+not packages you hunt down and install. Simple to read, fast on Apple Silicon,
+one binary, no toolchain to assemble.
 
-```lume
+```loqi
 # fetch live data, then let a model explain it — no libraries, no SDK
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
 print("{repo.full_name}: {repo.stargazers_count} ⭐")
@@ -27,7 +28,7 @@ print(poem)
 > today — implemented in dependency-free C, built with nothing but `clang`. Every
 > claim here is backed by code, tests, and an honest [ROADMAP](docs/ROADMAP.md).
 
-## Why Lume
+## Why Loqi
 
 Three ideas drive every decision:
 
@@ -41,9 +42,9 @@ Three ideas drive every decision:
    tree-walker to a bytecode VM tuned for arm64.
 3. **Simple to read and write.** No semicolons, no ceremony. Curly-brace blocks,
    `let`/`fn`, string interpolation with `{}`. If you've read code before, you
-   can read Lume.
+   can read Loqi.
 
-Lume is **not** built on top of another language. It is its own grammar,
+Loqi is **not** built on top of another language. It is its own grammar,
 parser, and runtime.
 
 ## Quickstart
@@ -51,15 +52,15 @@ parser, and runtime.
 Requirements: macOS with the Xcode Command Line Tools (`clang`). Nothing else.
 
 ```sh
-git clone <repo-url> lume && cd lume
-./scripts/build.sh            # produces ./build/lume
-./build/lume examples/01_hello.lm
-./build/lume                  # starts the REPL
+git clone <repo-url> loqi && cd loqi
+./scripts/build.sh            # produces ./build/loqi
+./build/loqi examples/01_hello.lq
+./build/loqi                  # starts the REPL
 ```
 
-A first program (`hello.lm`):
+A first program (`hello.lq`):
 
-```lume
+```loqi
 fn saluta(nome) {
   return "Ciao, {nome}!"
 }
@@ -68,13 +69,13 @@ print(saluta("mondo"))
 ```
 
 ```sh
-./build/lume hello.lm
+./build/loqi hello.lq
 # Ciao, mondo!
 ```
 
 ## A taste
 
-```lume
+```loqi
 # funzioni di ordine superiore + closure
 fn mappa(xs, f) {
   let out = []
@@ -100,22 +101,22 @@ print("totale: {join(mappa([1,2,3], fn(x){ return str(x) }), ", ")}")
 - **[Language guide](docs/LANGUAGE.md)** — the full language reference.
 - **[Standard library](docs/STDLIB.md)** — every built-in (incl. the AI layer), with examples.
 - **[Cheatsheet](docs/CHEATSHEET.md)** — the whole language on one page.
-- **[Why Lume](docs/WHY-LUME.md)** — the positioning and the bet.
-- **[Comparison](docs/COMPARISON.md)** — Lume vs Python, JS/Node, Go, Rust, Mojo (honest).
+- **[Why Loqi](docs/WHY-LOQI.md)** — the positioning and the bet.
+- **[Comparison](docs/COMPARISON.md)** — Loqi vs Python, JS/Node, Go, Rust, Mojo (honest).
 - **[Roadmap & engineering log](docs/ROADMAP.md)** — what's done, what's next, and
   honest benchmarks.
 - **[Landing page](web/index.html)** — open `web/index.html` in a browser.
-- **[Examples](examples/)** — runnable `.lm` programs (`examples/ai/` for AI demos).
+- **[Examples](examples/)** — runnable `.lq` programs (`examples/ai/` for AI demos).
 
 ## Project layout
 
 ```
-src/lume.c        the reference interpreter (lexer, parser, evaluator)
+src/loqi.c        the reference interpreter (lexer, parser, evaluator)
 scripts/build.sh  build script (release / debug)
 examples/         runnable example programs
 tests/            test suite + runner
 docs/             language guide, stdlib reference, roadmap
-std/              Lume-side standard library modules (planned)
+std/              Loqi-side standard library modules (planned)
 ```
 
 ## License

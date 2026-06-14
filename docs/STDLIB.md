@@ -1,4 +1,4 @@
-# Lume Standard Library
+# Loqi Standard Library
 
 Everything here is **built in** — always available, no import, no packages. This
 is the "batteries included" core, including the **AI-native layer** (`ai`, `json`,
@@ -14,14 +14,14 @@ is the "batteries included" core, including the **AI-native layer** (`ai`, `json
 
 ### `print(...)` → nil
 Prints all arguments separated by spaces, followed by a newline.
-```lume
+```loqi
 print("x =", 42)        # x = 42
 ```
 
 ### `input(prompt?) → str | nil`
 Reads one line from stdin (without the trailing newline). Optional prompt is
 printed first. Returns `nil` at end of input.
-```lume
+```loqi
 let nome = input("Come ti chiami? ")
 ```
 
@@ -59,7 +59,7 @@ For a `map`: whether the key `x` exists. For a `list`: whether `x` is an element
 ### `range(stop)` / `range(start, stop)` / `range(start, stop, step) → list`
 A list of ints from `start` (default 0) up to but excluding `stop`, stepping by
 `step` (default 1; may be negative).
-```lume
+```loqi
 range(3)            # [0, 1, 2]
 range(2, 5)         # [2, 3, 4]
 range(10, 0, -2)    # [10, 8, 6, 4, 2]
@@ -72,13 +72,13 @@ Case conversion (ASCII).
 
 ### `split(s, sep) → list`
 Splits `s` on every occurrence of `sep`. An empty `sep` splits into characters.
-```lume
+```loqi
 split("a,b,c", ",")     # ["a", "b", "c"]
 ```
 
 ### `join(list, sep) → str`
 Joins a list into a string with `sep` between elements (elements are `str`-ified).
-```lume
+```loqi
 join([1, 2, 3], "-")    # "1-2-3"
 ```
 
@@ -97,7 +97,7 @@ Largest integer ≤ x.
 
 ### `clock() → float`
 CPU time in seconds since process start — handy for micro-benchmarks.
-```lume
+```loqi
 let t = clock()
 # ... work ...
 print("durata: {clock() - t}s")
@@ -107,7 +107,7 @@ print("durata: {clock() - t}s")
 
 ### `assert(cond, message?) → nil`
 Aborts with a runtime error if `cond` is falsey. Used by the test suite.
-```lume
+```loqi
 assert(2 + 2 == 4, "la matematica è rotta")
 ```
 
@@ -115,28 +115,28 @@ assert(2 + 2 == 4, "la matematica è rotta")
 
 # AI-first batteries
 
-The reason Lume exists. These are **part of the language**, not packages.
+The reason Loqi exists. These are **part of the language**, not packages.
 
 ## `ai(prompt) → str` / `ai(prompt, model) → str`
 Calls a large language model and returns its text answer. Reads
 `ANTHROPIC_API_KEY` from the environment; the model defaults to
-`claude-sonnet-4-6` (override with the 2nd argument or the `LUME_AI_MODEL` env var).
-```lume
+`claude-sonnet-4-6` (override with the 2nd argument or the `LOQI_AI_MODEL` env var).
+```loqi
 let risposta = ai("Spiega la ricorsione a un bambino di 10 anni")
 print(risposta)
 
 let veloce = ai("Riassumi: {testo}", "claude-haiku-4-5")
 ```
 Combine with `json` for structured output:
-```lume
+```loqi
 let dati = json.parse(ai("Estrai nome e anno come JSON da: {testo}"))
 print(dati.nome)
 ```
 
 ## `json.parse(str) → value` / `json.stringify(value) → str`
-A real JSON codec, built in. `parse` returns native Lume values
+A real JSON codec, built in. `parse` returns native Loqi values
 (`map`/`list`/`str`/`int`/`float`/`bool`/`nil`); `stringify` is the inverse.
-```lume
+```loqi
 let m = json.parse(`{"ok": true, "n": [1, 2, 3]}`)   # raw string avoids escaping
 print(m.n[0])                                          # 1
 print(json.stringify({ a: 1, b: [true, nil] }))       # {"a":1,"b":[true,null]}
@@ -146,31 +146,31 @@ print(json.stringify({ a: 1, b: [true, nil] }))       # {"a":1,"b":[true,null]}
 
 ## `http.get(url) → str` / `http.post(url, body, content_type?) → str`
 An HTTP client, built in. Returns the response body.
-```lume
+```loqi
 let zen = http.get("https://api.github.com/zen")
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
 print("{repo.full_name}: {repo.stargazers_count} ⭐")
 
-let reply = http.post("https://httpbin.org/post", json.stringify({ hi: "lume" }))
+let reply = http.post("https://httpbin.org/post", json.stringify({ hi: "loqi" }))
 ```
 
 ## `similarity(a, b) → float`
 Cosine similarity between two numeric vectors (`list` of numbers) — the core of
 semantic search, no library required.
-```lume
+```loqi
 print(similarity([1, 0, 1], [1, 0, 1]))   # 1.0
 print(similarity([1, 0], [0, 1]))          # 0.0
 ```
 
 ## `env(name) → str | nil`
 Reads an environment variable.
-```lume
+```loqi
 let key = env("ANTHROPIC_API_KEY")
 ```
 
 ## `read(path) → str` / `write(path, content) → nil`
 Read and write whole files.
-```lume
-write("note.txt", "ciao da Lume\n")
+```loqi
+write("note.txt", "ciao da Loqi\n")
 print(read("note.txt"))
 ```

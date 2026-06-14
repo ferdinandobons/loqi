@@ -1,6 +1,6 @@
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="favTitle favDesc">
-  <title id="favTitle">Lume</title>
-  <desc id="favDesc">The Lume amber light-spark glyph.</desc>
+  <title id="favTitle">Loqi</title>
+  <desc id="favDesc">The Loqi amber light-spark glyph.</desc>
   <!-- outer halo ring -->
   <circle cx="32" cy="32" r="31" fill="none" stroke="#f5b942" stroke-width="2" stroke-opacity="0.28"/>
   <!-- flame body: warm amber droplet -->

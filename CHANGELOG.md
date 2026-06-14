@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Lume are recorded here.
+All notable changes to Loqi are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
