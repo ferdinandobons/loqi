@@ -1,0 +1,73 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lume",
+  "scopeName": "source.lume",
+  "fileTypes": ["lm"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#functions" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.number-sign.lume", "match": "#.*$" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.lume", "match": "\\b(if|else|while|for|in|return|break|continue|import)\\b" },
+        { "name": "storage.type.lume", "match": "\\b(let|fn)\\b" },
+        { "name": "keyword.operator.logical.lume", "match": "\\b(and|or|not)\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.lume", "match": "\\b(true|false|nil)\\b" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.lume", "match": "\\b[0-9][0-9_]*(\\.[0-9_]+)?([eE][+-]?[0-9]+)?\\b" }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.lume",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.lume", "match": "\\\\([ntr0\"\\\\{}])" },
+        {
+          "name": "meta.interpolation.lume",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.lume" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.lume" } },
+          "patterns": [{ "include": "$self" }]
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.lume",
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.lume" },
+            "2": { "name": "entity.name.function.lume" }
+          }
+        },
+        { "name": "entity.name.function.call.lume", "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.lume", "match": "(==|!=|<=|>=|//|[+\\-*/%<>=])" }
+      ]
+    }
+  }
+}

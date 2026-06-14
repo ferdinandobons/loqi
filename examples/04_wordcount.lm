@@ -1,0 +1,16 @@
+# Conteggio parole: mostra map, liste, e funzioni di alto livello.
+let testo = "lume e semplice lume e veloce lume e ai first"
+
+let conteggi = {}
+for parola in split(testo, " ") {
+  if has(conteggi, parola) {
+    conteggi[parola] = conteggi[parola] + 1
+  } else {
+    conteggi[parola] = 1
+  }
+}
+
+print("Parole uniche: {len(conteggi)}")
+for parola in conteggi {
+  print("  {parola}: {conteggi[parola]}")
+}

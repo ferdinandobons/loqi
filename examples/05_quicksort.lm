@@ -1,0 +1,16 @@
+# Quicksort ricorsivo — ricorsione, liste, closure di confronto.
+fn quicksort(xs) {
+  if len(xs) <= 1 { return xs }
+  let pivot = xs[0]
+  let minori = []
+  let maggiori = []
+  for i in range(1, len(xs)) {
+    if xs[i] < pivot { push(minori, xs[i]) }
+    else { push(maggiori, xs[i]) }
+  }
+  return quicksort(minori) + [pivot] + quicksort(maggiori)
+}
+
+let dati = [9, 3, 7, 1, 8, 2, 6, 5, 4, 0]
+print("prima:  {dati}")
+print("dopo:   {quicksort(dati)}")
