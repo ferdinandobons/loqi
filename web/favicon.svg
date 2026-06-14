@@ -1,0 +1,20 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="favTitle favDesc">
+  <title id="favTitle">Lume</title>
+  <desc id="favDesc">The Lume amber light-spark glyph.</desc>
+  <!-- outer halo ring -->
+  <circle cx="32" cy="32" r="31" fill="none" stroke="#f5b942" stroke-width="2" stroke-opacity="0.28"/>
+  <!-- flame body: warm amber droplet -->
+  <path d="M32 9
+           C 39 19, 49 26, 49 38
+           a 17 17 0 0 1 -34 0
+           c 0 -8, 5 -13, 9 -18
+           c 1 5, 4 8, 8 9
+           c -2 -6, 1 -13, 0 -20 Z"
+        fill="#f5b942"/>
+  <!-- inner highlight: brighter gold core -->
+  <path d="M32 27
+           c 5 4, 8 8, 8 13
+           a 8 8 0 0 1 -16 0
+           c 0 -5, 4 -9, 8 -13 Z"
+        fill="#ffcf6b"/>
+</svg>

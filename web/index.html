@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lume — The AI-first language</title>
+<meta name="description" content="Lume is the AI-first programming language: simple to read, fast on Apple Silicon. ai(), json, http and similarity are built into the runtime. Single native binary, no dependency hell." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0e0e10;
+    --bg-soft: #15151a;
+    --bg-card: #17171c;
+    --bg-card-hover: #1c1c23;
+    --border: #26262e;
+    --border-soft: #1f1f26;
+    --text: #ECECEC;
+    --text-dim: #9a9aa3;
+    --text-faint: #6b6b73;
+    --amber: #f5b942;
+    --amber-bright: #ffcf6b;
+    --amber-dim: rgba(245, 185, 66, 0.12);
+    --green: #9fd99a;
+    --blue-soft: #8ab6e0;
+
+    /* syntax */
+    --syn-key: #f5b942;
+    --syn-str: #a3d9a0;
+    --syn-com: #5f5f68;
+    --syn-num: #e6b673;
+    --syn-fn: #ffcf6b;
+    --syn-punct: #8c8c95;
+    --syn-builtin: #d7a6e8;
+
+    --font-head: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Monaco, monospace;
+
+    --maxw: 1080px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  /* subtle glow behind hero */
+  body::before {
+    content: "";
+    position: fixed;
+    top: -340px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 900px;
+    height: 700px;
+    background: radial-gradient(closest-side, rgba(245, 185, 66, 0.10), transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 1;
+  }
+
+  h1, h2, h3 { font-family: var(--font-head); font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+
+  code, pre { font-family: var(--font-mono); }
+
+  /* ---------- NAV ---------- */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(12px);
+    background: rgba(14, 14, 16, 0.72);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  nav {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .wordmark { font-family: var(--font-head); font-weight: 700; font-size: 21px; letter-spacing: -0.03em; }
+  .nav-links { display: flex; align-items: center; gap: 26px; }
+  .nav-links a { color: var(--text-dim); font-size: 14.5px; transition: color .18s; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-cta {
+    border: 1px solid var(--border);
+    padding: 7px 15px;
+    border-radius: 8px;
+    color: var(--text) !important;
+    font-size: 14px;
+    transition: border-color .18s, background .18s;
+  }
+  .nav-cta:hover { border-color: var(--amber); background: var(--amber-dim); }
+  @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+
+  /* ---------- BUTTONS ---------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--font-head);
+    font-weight: 500;
+    font-size: 15.5px;
+    padding: 12px 22px;
+    border-radius: 10px;
+    transition: transform .14s ease, background .18s, border-color .18s, box-shadow .18s;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary {
+    background: var(--amber);
+    color: #1a1206;
+    box-shadow: 0 0 0 1px rgba(245,185,66,.3), 0 8px 30px -10px rgba(245,185,66,.5);
+  }
+  .btn-primary:hover { background: var(--amber-bright); box-shadow: 0 0 0 1px rgba(245,185,66,.45), 0 10px 34px -8px rgba(245,185,66,.6); }
+  .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn-ghost:hover { border-color: var(--text-faint); background: var(--bg-soft); }
+
+  /* ---------- HERO ---------- */
+  .hero { padding: 78px 0 56px; }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    letter-spacing: 0.04em;
+    color: var(--amber);
+    background: var(--amber-dim);
+    border: 1px solid rgba(245,185,66,.22);
+    padding: 5px 13px;
+    border-radius: 999px;
+    margin-bottom: 26px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .hero h1 {
+    font-size: clamp(40px, 6.6vw, 70px);
+    line-height: 1.02;
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    margin-bottom: 22px;
+    max-width: 13ch;
+  }
+  .hero h1 .accent { color: var(--amber); }
+  .hero .lede {
+    font-size: clamp(17px, 2.1vw, 20px);
+    color: var(--text-dim);
+    max-width: 56ch;
+    margin-bottom: 16px;
+  }
+  .hero .valueprop {
+    font-size: 15px;
+    color: var(--text-faint);
+    font-family: var(--font-mono);
+    margin-bottom: 34px;
+  }
+  .hero-actions { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .hero-meta { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 30px; font-size: 13.5px; color: var(--text-faint); }
+  .hero-meta span { display: inline-flex; align-items: center; gap: 7px; }
+  .hero-meta svg { opacity: .8; }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 52px;
+    align-items: center;
+  }
+  @media (max-width: 880px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 38px; }
+    .hero { padding: 52px 0 40px; }
+  }
+
+  /* ---------- CODE BLOCK ---------- */
+  .code-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px -30px rgba(0,0,0,.8);
+  }
+  .code-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--bg-soft);
+  }
+  .code-head .dots { display: flex; gap: 7px; }
+  .code-head .dots i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .code-head .dots i:nth-child(1){ background:#ff5f57; }
+  .code-head .dots i:nth-child(2){ background:#febc2e; }
+  .code-head .dots i:nth-child(3){ background:#28c840; }
+  .code-head .fname { margin-left: 8px; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-faint); }
+  .code-head .copy {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    padding: 4px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: all .16s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .code-head .copy:hover { border-color: var(--amber); color: var(--amber); }
+  pre {
+    margin: 0;
+    padding: 20px 20px 22px;
+    font-size: 13.5px;
+    line-height: 1.72;
+    overflow-x: auto;
+    tab-size: 2;
+  }
+  pre code { font-size: inherit; }
+
+  /* syntax token classes */
+  .tk { color: var(--syn-key); }       /* keyword */
+  .ts { color: var(--syn-str); }       /* string */
+  .tc { color: var(--syn-com); font-style: italic; } /* comment */
+  .tn { color: var(--syn-num); }       /* number */
+  .tf { color: var(--syn-fn); }        /* function name */
+  .tp { color: var(--syn-punct); }     /* punctuation */
+  .tb { color: var(--syn-builtin); }   /* builtin / namespace */
+  .ti { color: var(--text); }          /* identifier */
+
+  /* ---------- SECTIONS ---------- */
+  section { padding: 70px 0; }
+  .section-head { max-width: 60ch; margin-bottom: 44px; }
+  .kicker {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 14px;
+  }
+  .section-head h2 { font-size: clamp(28px, 3.6vw, 38px); line-height: 1.12; margin-bottom: 16px; }
+  .section-head p { font-size: 17px; color: var(--text-dim); margin: 0; }
+
+  hr.div { border: none; border-top: 1px solid var(--border-soft); margin: 0; }
+
+  /* ---------- WHY CARDS ---------- */
+  .why-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 22px;
+  }
+  @media (max-width: 880px) { .why-grid { grid-template-columns: 1fr; } }
+  .why-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px 26px;
+    transition: border-color .2s, transform .2s, background .2s;
+  }
+  .why-card:hover { border-color: var(--amber); transform: translateY(-3px); background: var(--bg-card-hover); }
+  .why-icon {
+    width: 44px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 11px;
+    background: var(--amber-dim);
+    border: 1px solid rgba(245,185,66,.2);
+    margin-bottom: 20px;
+  }
+  .why-card h3 { font-size: 19px; margin-bottom: 11px; letter-spacing: -0.02em; }
+  .why-card p { color: var(--text-dim); font-size: 15px; margin: 0; }
+
+  /* ---------- BATTERIES GRID ---------- */
+  .bat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+  }
+  @media (max-width: 760px) { .bat-grid { grid-template-columns: 1fr; } }
+  .bat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    padding: 22px 22px 18px;
+    transition: border-color .2s;
+  }
+  .bat-card:hover { border-color: var(--border); }
+  .bat-card .bat-top { display: flex; align-items: center; gap: 11px; margin-bottom: 8px; }
+  .bat-card .bat-name { font-family: var(--font-mono); font-size: 15px; color: var(--amber); font-weight: 500; }
+  .bat-card .bat-desc { color: var(--text-dim); font-size: 14px; margin: 0 0 14px; }
+  .bat-card pre { padding: 14px 15px; background: var(--bg); border: 1px solid var(--border-soft); border-radius: 9px; font-size: 12.5px; line-height: 1.6; }
+  .bat-card .bat-ico { color: var(--amber); display: flex; }
+
+  /* ---------- BENCHMARK ---------- */
+  .bench {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 40px 38px;
+    display: grid;
+    grid-template-columns: 1fr 1.1fr;
+    gap: 44px;
+    align-items: center;
+  }
+  @media (max-width: 880px) { .bench { grid-template-columns: 1fr; gap: 30px; padding: 30px 24px; } }
+  .bench h2 { font-size: clamp(26px, 3.4vw, 34px); margin-bottom: 16px; line-height: 1.12; }
+  .bench p { color: var(--text-dim); font-size: 15.5px; margin: 0 0 12px; }
+  .bench .honest {
+    margin-top: 18px;
+    padding: 14px 16px;
+    border-left: 3px solid var(--amber);
+    background: var(--amber-dim);
+    border-radius: 0 9px 9px 0;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .bench .honest strong { color: var(--amber); font-weight: 600; }
+
+  .bars { display: flex; flex-direction: column; gap: 20px; }
+  .bar-row .bar-label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .bar-row .bar-label .name { font-family: var(--font-mono); font-size: 13.5px; color: var(--text); }
+  .bar-row .bar-label .val { font-family: var(--font-mono); font-size: 13px; color: var(--text-dim); }
+  .bar-track { height: 12px; background: var(--bg); border-radius: 7px; overflow: hidden; border: 1px solid var(--border-soft); }
+  .bar-fill { height: 100%; border-radius: 7px; }
+  .bar-fill.lume { background: linear-gradient(90deg, var(--amber), var(--amber-bright)); }
+  .bar-fill.py { background: #5f6f8a; }
+  .bar-fill.node { background: #3c8a4a; }
+  .bench-cap { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); margin-top: 18px; }
+  .bench-note { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); margin-bottom: 16px; }
+
+  /* ---------- EXAMPLE GALLERY ---------- */
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  @media (max-width: 760px) { .gallery { grid-template-columns: 1fr; } }
+  .ex-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .ex-card .ex-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; gap: 9px;
+    background: var(--bg-soft);
+  }
+  .ex-card .ex-head .ex-title { font-family: var(--font-mono); font-size: 13px; color: var(--text-dim); }
+  .ex-card .ex-head .ex-tag { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--amber); background: var(--amber-dim); padding: 2px 9px; border-radius: 999px; }
+  .ex-card pre { font-size: 13px; flex: 1; }
+
+  /* ---------- INSTALL ---------- */
+  .install-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: start;
+  }
+  @media (max-width: 880px) { .install-grid { grid-template-columns: 1fr; gap: 28px; } }
+  .steps { display: flex; flex-direction: column; gap: 22px; }
+  .step { display: flex; gap: 16px; }
+  .step .num {
+    flex: 0 0 32px;
+    width: 32px; height: 32px;
+    border-radius: 9px;
+    background: var(--amber-dim);
+    border: 1px solid rgba(245,185,66,.25);
+    color: var(--amber);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step .step-body h4 { font-family: var(--font-head); font-size: 16px; font-weight: 500; margin: 4px 0 4px; }
+  .step .step-body p { color: var(--text-dim); font-size: 14px; margin: 0; }
+
+  /* ---------- FOOTER ---------- */
+  footer { border-top: 1px solid var(--border-soft); padding: 50px 0 60px; }
+  .foot-grid { display: flex; justify-content: space-between; gap: 30px; flex-wrap: wrap; align-items: flex-start; }
+  .foot-brand { max-width: 38ch; }
+  .foot-brand p { color: var(--text-dim); font-size: 14px; margin: 14px 0 0; }
+  .foot-honest {
+    margin-top: 18px;
+    font-size: 13px;
+    color: var(--text-faint);
+    font-style: italic;
+    border-left: 2px solid var(--border);
+    padding-left: 12px;
+  }
+  .foot-links { display: flex; gap: 60px; flex-wrap: wrap; }
+  .foot-col h5 { font-family: var(--font-head); font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); font-weight: 500; margin: 0 0 14px; }
+  .foot-col a { display: block; color: var(--text-dim); font-size: 14px; margin-bottom: 10px; transition: color .16s; }
+  .foot-col a:hover { color: var(--amber); }
+  .foot-bottom { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border-soft); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--text-faint); }
+  .foot-bottom .mit { font-family: var(--font-mono); }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+</style>
+</head>
+<body>
+
+<!-- ===================== NAV ===================== -->
+<header>
+  <nav>
+    <a class="brand" href="#top" aria-label="Lume home">
+      <!-- logo mark: a lamp / spark -->
+      <svg width="26" height="26" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <circle cx="16" cy="13" r="9" stroke="#f5b942" stroke-width="2"/>
+        <circle cx="16" cy="13" r="3.4" fill="#ffcf6b"/>
+        <path d="M16 13 L16 3 M16 13 L23 6 M16 13 L9 6 M16 13 L24.5 13 M16 13 L7.5 13" stroke="#f5b942" stroke-width="1.4" stroke-linecap="round" opacity="0.55"/>
+        <path d="M12.5 24 H19.5 M13.3 27 H18.7" stroke="#f5b942" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span class="wordmark">Lume</span>
+    </a>
+    <div class="nav-links">
+      <a href="#why">Why Lume</a>
+      <a href="#batteries">Batteries</a>
+      <a href="#benchmark">Speed</a>
+      <a href="#examples">Examples</a>
+      <a class="nav-cta" href="https://github.com/" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+</header>
+
+<main id="top">
+
+<!-- ===================== HERO ===================== -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <span class="eyebrow"><span class="dot"></span> AI is a keyword, not an SDK</span>
+        <h1>The <span class="accent">AI-first</span> language.</h1>
+        <p class="lede">Lume is a brand-new language with <code>ai()</code>, JSON, HTTP and vector similarity built straight into the runtime. Simple to read, fast on Apple Silicon.</p>
+        <p class="valueprop">$ one binary. no SDK. no venv. no node_modules.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#install">
+            Get started
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/" rel="noopener">
+            <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38v-1.33c-2.23.49-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.05-.49.05-.49.81.06 1.23.83 1.23.83.72 1.23 1.88.88 2.34.67.07-.52.28-.88.51-1.08-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+            GitHub
+          </a>
+        </div>
+        <div class="hero-meta">
+          <span>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 8l4 4 8-8" stroke="#f5b942" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Dependency-free C11
+          </span>
+          <span>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 8l4 4 8-8" stroke="#f5b942" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Single native binary
+          </span>
+          <span>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 8l4 4 8-8" stroke="#f5b942" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            MIT licensed
+          </span>
+        </div>
+      </div>
+
+      <!-- HERO CODE: SNIPPET-WEB -->
+      <div class="code-card" aria-label="Lume code example: fetch, parse JSON, summarize with AI">
+        <div class="code-head">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="fname">repo_stars.lm</span>
+          <button class="copy" data-copy="hero-code" aria-label="Copy code">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" stroke="currentColor" stroke-width="1.4"/></svg>
+            Copy
+          </button>
+        </div>
+        <pre><code id="hero-code"><span class="tc"># fetch, parse JSON, and summarize — all built in</span>
+<span class="tk">let</span> <span class="ti">repo</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="tb">http</span><span class="tp">.</span><span class="tf">get</span><span class="tp">(</span><span class="ts">"https://api.github.com/repos/python/cpython"</span><span class="tp">))</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ts">"{repo.full_name}: {repo.stargazers_count} stelle"</span><span class="tp">)</span>
+
+<span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Scrivi un haiku sul codice pulito"</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ti">poem</span><span class="tp">)</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="div" />
+
+<!-- ===================== WHY LUME ===================== -->
+<section id="why">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="kicker">Why Lume</div>
+      <h2>Built for people gluing an LLM SDK to an HTTP lib to a JSON lib.</h2>
+      <p>You like Python's readability but want a single fast binary. Lume puts the whole AI toolchain inside the language.</p>
+    </div>
+    <div class="why-grid">
+
+      <div class="why-card">
+        <div class="why-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l1.8 5.4L19 10l-4.5 2.3L13 18l-1-4.5L7 12l4.2-1.3L12 3z" stroke="#f5b942" stroke-width="1.6" stroke-linejoin="round"/><circle cx="18.5" cy="5.5" r="1.3" fill="#f5b942"/></svg>
+        </div>
+        <h3>AI is in the language</h3>
+        <p><code>ai(prompt)</code> is a first-class call — not a bolted-on package. It speaks to the Anthropic Messages API, reads <code>ANTHROPIC_API_KEY</code>, and defaults to a sensible model you can override per call.</p>
+      </div>
+
+      <div class="why-card">
+        <div class="why-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="9" width="16" height="9" rx="2" stroke="#f5b942" stroke-width="1.6"/><path d="M8 9V7a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="#f5b942" stroke-width="1.6"/><path d="M9 13.5h2M14 13.5h1" stroke="#f5b942" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+        <h3>Batteries included</h3>
+        <p>One binary, no dependency hell. JSON, HTTP, vector similarity, file and env I/O, plus 25+ core built-ins ship inside the runtime. Nothing to <code>pip install</code>, nothing to vendor.</p>
+      </div>
+
+      <div class="why-card">
+        <div class="why-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z" stroke="#f5b942" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Reads like Python, runs native</h3>
+        <p>Clean, readable syntax with no semicolons and string interpolation — compiled to bytecode for a stack VM. One fast native binary on Apple Silicon, and getting faster each iteration.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<hr class="div" />
+
+<!-- ===================== BATTERIES INCLUDED ===================== -->
+<section id="batteries">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="kicker">Batteries included</div>
+      <h2>The whole AI toolchain, as built-ins.</h2>
+      <p>No installs, no SDK, no virtualenv. These all live in the runtime and work out of the box.</p>
+    </div>
+
+    <div class="bat-grid">
+
+      <div class="bat-card">
+        <div class="bat-top">
+          <span class="bat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+          <span class="bat-name">ai(prompt)</span>
+        </div>
+        <p class="bat-desc">A first-class LLM call to the Anthropic Messages API. Reads <code>ANTHROPIC_API_KEY</code>; pass a model as a second arg or via <code>LUME_AI_MODEL</code>.</p>
+        <pre><code><span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Scrivi un haiku sul codice pulito"</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ti">poem</span><span class="tp">)</span></code></pre>
+      </div>
+
+      <div class="bat-card">
+        <div class="bat-top">
+          <span class="bat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 4H7a3 3 0 0 0-3 3v2a2 2 0 0 1-2 2 2 2 0 0 1 2 2v2a3 3 0 0 0 3 3h2M15 4h2a3 3 0 0 1 3 3v2a2 2 0 0 0 2 2 2 2 0 0 0-2 2v2a3 3 0 0 1-3 3h-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span class="bat-name">json</span>
+        </div>
+        <p class="bat-desc"><code>json.parse(str)</code> and <code>json.stringify(value)</code> — a built-in codec between JSON text and native Lume values.</p>
+        <pre><code><span class="tk">let</span> <span class="ti">cfg</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="ts">`{"name": "Ada"}`</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ti">cfg</span><span class="tp">.</span><span class="ti">name</span><span class="tp">)</span></code></pre>
+      </div>
+
+      <div class="bat-card">
+        <div class="bat-top">
+          <span class="bat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15.5 0 18M12 3c-2.5 2.5-2.5 15.5 0 18" stroke="currentColor" stroke-width="1.4"/></svg></span>
+          <span class="bat-name">http</span>
+        </div>
+        <p class="bat-desc"><code>http.get(url)</code> and <code>http.post(url, body, content_type?)</code> — a built-in HTTP client returning the response body as a string.</p>
+        <pre><code><span class="tk">let</span> <span class="ti">body</span> <span class="tp">=</span> <span class="tb">http</span><span class="tp">.</span><span class="tf">get</span><span class="tp">(</span><span class="ts">"https://api.github.com"</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="tf">len</span><span class="tp">(</span><span class="ti">body</span><span class="tp">))</span></code></pre>
+      </div>
+
+      <div class="bat-card">
+        <div class="bat-top">
+          <span class="bat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.4" stroke="currentColor" stroke-width="1.6"/><circle cx="18" cy="18" r="2.4" stroke="currentColor" stroke-width="1.6"/><path d="M8.2 7.4l7.6 9.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+          <span class="bat-name">similarity(a, b)</span>
+        </div>
+        <p class="bat-desc">Cosine similarity over numeric vectors — the primitive behind semantic search, ranking and clustering.</p>
+        <pre><code><span class="tk">let</span> <span class="ti">s</span> <span class="tp">=</span> <span class="tf">similarity</span><span class="tp">(</span><span class="ti">a</span><span class="tp">,</span> <span class="ti">b</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ti">s</span><span class="tp">)</span>  <span class="tc"># a float in [-1, 1]</span></code></pre>
+      </div>
+
+      <div class="bat-card">
+        <div class="bat-top">
+          <span class="bat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v4h4" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+          <span class="bat-name">read / write</span>
+        </div>
+        <p class="bat-desc"><code>read(path)</code> returns a whole file as a string; <code>write(path, content)</code> writes one back. Simple, whole-file I/O.</p>
+        <pre><code><span class="tf">write</span><span class="tp">(</span><span class="ts">"out.txt"</span><span class="tp">,</span> <span class="ts">"ciao"</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="tf">read</span><span class="tp">(</span><span class="ts">"out.txt"</span><span class="tp">))</span></code></pre>
+      </div>
+
+      <div class="bat-card">
+        <div class="bat-top">
+          <span class="bat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M8 10l-2 2 2 2M13 10h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span class="bat-name">env(name)</span>
+        </div>
+        <p class="bat-desc">Read environment variables straight from the runtime — keys, config and feature flags, no wrapper library.</p>
+        <pre><code><span class="tk">let</span> <span class="ti">key</span> <span class="tp">=</span> <span class="tf">env</span><span class="tp">(</span><span class="ts">"ANTHROPIC_API_KEY"</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="tf">type</span><span class="tp">(</span><span class="ti">key</span><span class="tp">))</span></code></pre>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<hr class="div" />
+
+<!-- ===================== BENCHMARK ===================== -->
+<section id="benchmark">
+  <div class="wrap">
+    <div class="bench">
+      <div class="bench-copy">
+        <div class="kicker">Honest about speed</div>
+        <h2>Python-class speed, often faster on loops.</h2>
+        <p>Measured on Apple Silicon with <code>process_time</code>. On <code>fib(30)</code> Lume is on par with CPython 3.13. On a tight loop to 50M, Lume is about 1.4&times; faster than CPython — and roughly 5&times; faster than Lume's own first tree-walking interpreter.</p>
+        <div class="honest">
+          <strong>The honest part:</strong> Node/V8 runs <code>fib(30)</code> faster (0.017s) because it JITs. Lume does not JIT <em>yet</em>. We do not claim to beat Go, Rust, C or Node — just a single compiled binary with Python-class speed that gets faster each iteration.
+        </div>
+      </div>
+
+      <div class="bench-bars">
+        <p class="bench-note">fib(30), lower is faster</p>
+        <div class="bars">
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">Lume</span><span class="val">0.097s</span></div>
+            <div class="bar-track"><div class="bar-fill lume" style="width:97%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">CPython 3.13</span><span class="val">0.094s</span></div>
+            <div class="bar-track"><div class="bar-fill py" style="width:94%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">Node / V8 (JIT)</span><span class="val">0.017s</span></div>
+            <div class="bar-track"><div class="bar-fill node" style="width:17%"></div></div>
+          </div>
+        </div>
+        <p class="bench-cap">tight loop to 50M — Lume 3.0s vs CPython 4.3s (~1.4&times; faster). Numbers measured on Apple Silicon.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="div" />
+
+<!-- ===================== EXAMPLES ===================== -->
+<section id="examples">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="kicker">By example</div>
+      <h2>Real Lume, top to bottom.</h2>
+      <p>Recursion, closures, AI-powered extraction, and verbatim raw strings for JSON — every snippet below runs as-is.</p>
+    </div>
+
+    <div class="gallery">
+
+      <!-- SNIPPET-FIB -->
+      <div class="ex-card">
+        <div class="ex-head">
+          <span class="ex-title">fib.lm</span>
+          <span class="ex-tag">recursion</span>
+        </div>
+        <pre><code><span class="tk">fn</span> <span class="tf">fib</span><span class="tp">(</span><span class="ti">n</span><span class="tp">)</span> <span class="tp">{</span>
+  <span class="tk">if</span> <span class="ti">n</span> <span class="tp">&lt;</span> <span class="tn">2</span> <span class="tp">{</span> <span class="tk">return</span> <span class="ti">n</span> <span class="tp">}</span>
+  <span class="tk">return</span> <span class="tf">fib</span><span class="tp">(</span><span class="ti">n</span> <span class="tp">-</span> <span class="tn">1</span><span class="tp">)</span> <span class="tp">+</span> <span class="tf">fib</span><span class="tp">(</span><span class="ti">n</span> <span class="tp">-</span> <span class="tn">2</span><span class="tp">)</span>
+<span class="tp">}</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ts">"fib(10) = {fib(10)}"</span><span class="tp">)</span></code></pre>
+      </div>
+
+      <!-- SNIPPET-CLOSURE -->
+      <div class="ex-card">
+        <div class="ex-head">
+          <span class="ex-title">contatore.lm</span>
+          <span class="ex-tag">closures</span>
+        </div>
+        <pre><code><span class="tk">fn</span> <span class="tf">contatore</span><span class="tp">()</span> <span class="tp">{</span>
+  <span class="tk">let</span> <span class="ti">n</span> <span class="tp">=</span> <span class="tn">0</span>
+  <span class="tk">return</span> <span class="tk">fn</span><span class="tp">()</span> <span class="tp">{</span> <span class="ti">n</span> <span class="tp">=</span> <span class="ti">n</span> <span class="tp">+</span> <span class="tn">1</span><span class="tp">;</span> <span class="tk">return</span> <span class="ti">n</span> <span class="tp">}</span>
+<span class="tp">}</span>
+<span class="tk">let</span> <span class="ti">next</span> <span class="tp">=</span> <span class="tf">contatore</span><span class="tp">()</span>
+<span class="tf">print</span><span class="tp">(</span><span class="tf">next</span><span class="tp">(),</span> <span class="tf">next</span><span class="tp">(),</span> <span class="tf">next</span><span class="tp">())</span>   <span class="tc"># 1 2 3</span></code></pre>
+      </div>
+
+      <!-- SNIPPET-EXTRACT -->
+      <div class="ex-card">
+        <div class="ex-head">
+          <span class="ex-title">extract.lm</span>
+          <span class="ex-tag">ai + json</span>
+        </div>
+        <pre><code><span class="tc"># ask the model for JSON, then parse it natively</span>
+<span class="tk">let</span> <span class="ti">data</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="tf">ai</span><span class="tp">(</span><span class="ts">"Estrai nome e anno come JSON da: "</span> <span class="tp">+</span> <span class="ti">testo</span><span class="tp">))</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ti">data</span><span class="tp">.</span><span class="ti">nome</span><span class="tp">)</span></code></pre>
+      </div>
+
+      <!-- SNIPPET-JSON-RAW -->
+      <div class="ex-card">
+        <div class="ex-head">
+          <span class="ex-title">config.lm</span>
+          <span class="ex-tag">raw strings</span>
+        </div>
+        <pre><code><span class="tc"># backticks = verbatim: no escapes, no interpolation</span>
+<span class="tk">let</span> <span class="ti">cfg</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="ts">`{"name": "Ada", "tags": ["x", "y"]}`</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ti">cfg</span><span class="tp">.</span><span class="ti">name</span><span class="tp">)</span></code></pre>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<hr class="div" />
+
+<!-- ===================== INSTALL ===================== -->
+<section id="install">
+  <div class="wrap">
+    <div class="install-grid">
+      <div>
+        <div class="kicker">Quickstart</div>
+        <h2 style="font-size: clamp(28px,3.6vw,38px); line-height:1.12; margin-bottom:16px;">Up and running in three commands.</h2>
+        <p style="color:var(--text-dim); font-size:16px; margin:0 0 30px;">Built with nothing but <code>clang</code> at <code>-O3 -mcpu=apple-m1 -flto</code>. No package manager, no toolchain zoo. Clone, build, run.</p>
+        <div class="steps">
+          <div class="step">
+            <div class="num">1</div>
+            <div class="step-body">
+              <h4>Clone the repo</h4>
+              <p>Grab the source — reference implementation lives in <code>src/lume.c</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">2</div>
+            <div class="step-body">
+              <h4>Build the binary</h4>
+              <p>One script compiles a single native binary into <code>build/lume</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">3</div>
+            <div class="step-body">
+              <h4>Run an example</h4>
+              <p>Point Lume at any <code>.lm</code> file in <code>examples/</code> and go.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="fname">terminal</span>
+          <button class="copy" data-copy="install-code" aria-label="Copy commands">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" stroke="currentColor" stroke-width="1.4"/></svg>
+            Copy
+          </button>
+        </div>
+        <pre><code id="install-code"><span class="tc"># 1. clone</span>
+<span class="tp">$</span> git clone &lt;repo-url&gt; lume
+<span class="tp">$</span> cd lume
+
+<span class="tc"># 2. build — single native binary</span>
+<span class="tp">$</span> ./scripts/build.sh
+
+<span class="tc"># 3. run your first program</span>
+<span class="tp">$</span> ./build/lume examples/01_hello.lm
+<span class="ts">Ciao, mondo!</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ===================== FOOTER ===================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top" aria-label="Lume home">
+          <svg width="24" height="24" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <circle cx="16" cy="13" r="9" stroke="#f5b942" stroke-width="2"/>
+            <circle cx="16" cy="13" r="3.4" fill="#ffcf6b"/>
+            <path d="M16 13 L16 3 M16 13 L23 6 M16 13 L9 6 M16 13 L24.5 13 M16 13 L7.5 13" stroke="#f5b942" stroke-width="1.4" stroke-linecap="round" opacity="0.55"/>
+            <path d="M12.5 24 H19.5 M13.3 27 H18.7" stroke="#f5b942" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span class="wordmark">Lume</span>
+        </a>
+        <p>The AI-first language — simple to read, fast on Apple Silicon. A brand-new language with its own grammar, parser and stack VM, built in dependency-free C11.</p>
+        <p class="foot-honest">Honest about limitations: no JIT yet (so V8 wins micro-benchmarks), no GC yet (the arena is freed at exit — fine for scripts, GC is planned), single-file modules, Apple-Silicon-first, and <code>http</code>/<code>ai</code> shell out to <code>curl</code> today. It's all on the public roadmap.</p>
+      </div>
+
+      <div class="foot-links">
+        <div class="foot-col">
+          <h5>Docs</h5>
+          <a href="../docs/LANGUAGE.md">Language guide</a>
+          <a href="../docs/STDLIB.md">Standard library</a>
+          <a href="../docs/ROADMAP.md">Roadmap &amp; benchmarks</a>
+        </div>
+        <div class="foot-col">
+          <h5>Project</h5>
+          <a href="https://github.com/" rel="noopener">GitHub</a>
+          <a href="../examples/">Examples</a>
+          <a href="../editors/">Editor support</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot-bottom">
+      <span class="mit">MIT licensed</span>
+      <span>Built in a tight loop: build &rarr; measure &rarr; adversarial review &rarr; fix. Memory-clean under ASan/UBSan.</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-copy');
+      var el = document.getElementById(id);
+      if (!el) return;
+      var text = el.innerText;
+      navigator.clipboard.writeText(text).then(function () {
+        var orig = btn.innerHTML;
+        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8l3.5 3.5L13 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Copied';
+        btn.style.color = '#f5b942';
+        btn.style.borderColor = '#f5b942';
+        setTimeout(function () {
+          btn.innerHTML = orig;
+          btn.style.color = '';
+          btn.style.borderColor = '';
+        }, 1600);
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

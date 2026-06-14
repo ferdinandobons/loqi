@@ -97,11 +97,15 @@ print("totale: {join(mappa([1,2,3], fn(x){ return str(x) }), ", ")}")
 
 ## Documentation
 
-- **[Language guide](docs/LANGUAGE.md)** — the full v0.1 reference.
-- **[Standard library](docs/STDLIB.md)** — every built-in, with examples.
+- **[Language guide](docs/LANGUAGE.md)** — the full language reference.
+- **[Standard library](docs/STDLIB.md)** — every built-in (incl. the AI layer), with examples.
+- **[Cheatsheet](docs/CHEATSHEET.md)** — the whole language on one page.
+- **[Why Lume](docs/WHY-LUME.md)** — the positioning and the bet.
+- **[Comparison](docs/COMPARISON.md)** — Lume vs Python, JS/Node, Go, Rust, Mojo (honest).
 - **[Roadmap & engineering log](docs/ROADMAP.md)** — what's done, what's next, and
   honest benchmarks.
-- **[Examples](examples/)** — runnable `.lm` programs.
+- **[Landing page](web/index.html)** — open `web/index.html` in a browser.
+- **[Examples](examples/)** — runnable `.lm` programs (`examples/ai/` for AI demos).
 
 ## Project layout
 

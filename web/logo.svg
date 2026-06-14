@@ -1,0 +1,29 @@
+<svg width="360" height="100" viewBox="0 0 360 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="lumeTitle lumeDesc">
+  <title id="lumeTitle">Lume</title>
+  <desc id="lumeDesc">The Lume wordmark beside a warm amber light-spark glyph.</desc>
+  <!-- Glyph: a flame / light mark built from layered amber tones -->
+  <g transform="translate(20 18)">
+    <!-- outer halo ring -->
+    <circle cx="32" cy="32" r="31" fill="none" stroke="#f5b942" stroke-width="2" stroke-opacity="0.28"/>
+    <!-- flame body: warm amber droplet -->
+    <path d="M32 9
+             C 39 19, 49 26, 49 38
+             a 17 17 0 0 1 -34 0
+             c 0 -8, 5 -13, 9 -18
+             c 1 5, 4 8, 8 9
+             c -2 -6, 1 -13, 0 -20 Z"
+          fill="#f5b942"/>
+    <!-- inner highlight: brighter gold core -->
+    <path d="M32 27
+             c 5 4, 8 8, 8 13
+             a 8 8 0 0 1 -16 0
+             c 0 -5, 4 -9, 8 -13 Z"
+          fill="#ffcf6b"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="92" y="65"
+        font-family="'Space Grotesk','Inter','Helvetica Neue',Arial,system-ui,sans-serif"
+        font-size="52" font-weight="600" letter-spacing="-1.5">
+    <tspan fill="#ECECEC">Lum</tspan><tspan fill="#f5b942">e</tspan>
+  </text>
+</svg>
