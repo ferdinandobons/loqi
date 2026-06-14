@@ -2829,19 +2829,58 @@ static Value nat_http_post(Interp *I, int argc, Value *argv) {
 }
 
 /* ---- ai: a first-class LLM call (Anthropic Messages API via curl) ---- */
+/* Parse model text into a native value for ai(prompt, { json: true }), tolerating
+   the ```/```json markdown fences models often wrap JSON in. json_parse_value
+   reads one value and stops, so any trailing fence is simply ignored. */
+static Value ai_parse_json_text(Interp *I, const char *text) {
+    const char *s = text;
+    while (*s == ' ' || *s == '\n' || *s == '\r' || *s == '\t') s++;
+    if (s[0] == '`' && s[1] == '`' && s[2] == '`') {
+        const char *nl = strchr(s, '\n');
+        s = nl ? nl + 1 : s + 3; /* skip the opening fence line (``` or ```json) */
+    }
+    const char *p = s;
+    return json_parse_value(I, &p, 0);
+}
+
 static Value nat_ai(Interp *I, int argc, Value *argv) {
     if (argc < 1 || !IS_STRING(argv[0]))
         runtime_error(I, 0, "ai() requires a prompt (str)");
     const char *key = getenv("ANTHROPIC_API_KEY");
     if (!key || !*key)
         runtime_error(I, 0, "ai(): set the ANTHROPIC_API_KEY environment variable");
-    const char *model = (argc >= 2 && IS_STRING(argv[1])) ? AS_STRING(argv[1])->chars
-                       : (getenv("LOQI_AI_MODEL") ? getenv("LOQI_AI_MODEL") : "claude-sonnet-4-6");
+
+    /* Second arg: a model name (str) OR an options map
+       { model, system, temperature, max_tokens, json }. */
+    const char *model = getenv("LOQI_AI_MODEL") ? getenv("LOQI_AI_MODEL") : "claude-sonnet-4-6";
+    const char *system = NULL;
+    int64_t max_tokens = 1024;
+    bool has_temp = false; double temperature = 0;
+    bool want_json = false;
+    if (argc >= 2 && IS_STRING(argv[1])) {
+        model = AS_STRING(argv[1])->chars;
+    } else if (argc >= 2 && IS_MAP(argv[1])) {
+        ObjMap *o = AS_MAP(argv[1]);
+        Value *v;
+        if ((v = map_get(o, "model")) && IS_STRING(*v)) model = AS_STRING(*v)->chars;
+        if ((v = map_get(o, "system")) && IS_STRING(*v)) system = AS_STRING(*v)->chars;
+        if ((v = map_get(o, "max_tokens")) && IS_INT(*v)) max_tokens = AS_INT(*v);
+        if ((v = map_get(o, "temperature")) && IS_NUM(*v)) { has_temp = true; temperature = as_double(*v); }
+        if ((v = map_get(o, "json")) != NULL) want_json = is_truthy(*v);
+    } else if (argc >= 2 && !IS_NIL(argv[1])) {
+        runtime_error(I, 0, "ai(): second argument must be a model name (str) or an options map");
+    }
+    if (max_tokens <= 0) runtime_error(I, 0, "ai(): max_tokens must be positive");
+    /* When asking for JSON, steer the model unless the caller set their own system prompt. */
+    if (want_json && !system)
+        system = "Respond with a single valid JSON value and nothing else. Do not wrap it in markdown code fences.";
 
     /* build the request JSON safely via the value stringifier */
     ObjMap *body = new_map(I);
     map_set(body, "model", cstring_val(I, model));
-    map_set(body, "max_tokens", int_val(1024));
+    map_set(body, "max_tokens", int_val(max_tokens));
+    if (has_temp) map_set(body, "temperature", float_val(temperature));
+    if (system) map_set(body, "system", cstring_val(I, system));
     ObjList *msgs = new_list(I);
     ObjMap *msg = new_map(I);
     map_set(msg, "role", cstring_val(I, "user"));
@@ -2897,7 +2936,8 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
             for (int i = 0; i < blocks->count; i++) { /* first text block */
                 if (IS_MAP(blocks->items[i])) {
                     Value *text = map_get(AS_MAP(blocks->items[i]), "text");
-                    if (text && IS_STRING(*text)) return *text;
+                    if (text && IS_STRING(*text))
+                        return want_json ? ai_parse_json_text(I, AS_STRING(*text)->chars) : *text;
                 }
             }
         }

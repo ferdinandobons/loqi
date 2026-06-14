@@ -163,20 +163,33 @@ print(sort(map([3, 1, 2], fn(x) { return x * 10 })))             # [10, 20, 30]
 
 The reason Loqi exists. These are **part of the language**, not packages.
 
-## `ai(prompt) → str` / `ai(prompt, model) → str`
-Calls a large language model and returns its text answer. Reads
-`ANTHROPIC_API_KEY` from the environment; the model defaults to
-`claude-sonnet-4-6` (override with the 2nd argument or the `LOQI_AI_MODEL` env var).
+## `ai(prompt) → str` / `ai(prompt, model) → str` / `ai(prompt, options) → str | value`
+Calls a large language model and returns its answer. Reads `ANTHROPIC_API_KEY`
+from the environment; the model defaults to `claude-sonnet-4-6` (override with the
+2nd argument or the `LOQI_AI_MODEL` env var).
 ```loqi
 let answer = ai("Explain recursion to a 10-year-old")
 print(answer)
 
 let fast = ai("Summarize: {text}", "claude-haiku-4-5")
 ```
-Combine with `json` for structured output:
+The second argument can also be an **options map**:
+
+| key | type | meaning |
+|-----|------|---------|
+| `model` | str | model name |
+| `system` | str | system prompt |
+| `temperature` | float | sampling temperature |
+| `max_tokens` | int | response cap (default 1024) |
+| `json` | bool | return parsed native data instead of text |
+
+With `{ json: true }`, `ai` steers the model toward JSON, tolerates ```` ```json ````
+fences, and returns native Loqi values — no manual parsing:
 ```loqi
-let data = json.parse(ai("Extract name and year as JSON from: {text}"))
-print(data.name)
+let person = ai("Extract name and birth_year from: {text}", { json: true })
+print("{person.name} ({person.birth_year})")          # person.birth_year is an int
+
+let summary = ai("Summarize this.", { system: "Be terse.", temperature: 0.2 })
 ```
 
 ## `json.parse(str) → value` / `json.stringify(value) → str`

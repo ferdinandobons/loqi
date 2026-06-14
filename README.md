@@ -111,18 +111,18 @@ try {
 print(classify(len(keys(config))))
 ```
 
-**AI-native: a model call is a language primitive.**
+**AI-native: structured data straight out of a model — no SDK, no glue.**
 
 ```loqi
-# No SDK, no HTTP client, no API plumbing — `ai(...)` IS the call.
-let review = "Shipping took forever, but the product itself is fantastic."
-let sentiment = ai("Classify the sentiment as positive, negative, or mixed. One word: {review}")
-print("sentiment: {sentiment}")          # sentiment: Mixed
+let text = "Ada Lovelace, born 1815, is regarded as the first programmer."
+
+# `{ json: true }` steers the model, strips markdown fences, and parses for you.
+let person = ai("Extract name and birth_year from: {text}", { json: true })
+print("{person.name} was born in {person.birth_year}")   # Ada Lovelace was born in 1815
 ```
 
-Need structured data back? Ask for JSON and parse it with the built-in `json.parse` —
-see [`examples/ai/extract.lq`](examples/ai/extract.lq). (A first-class `ai.json()` that
-returns native data directly is on the [roadmap](docs/ROADMAP.md).)
+Pass options the same way — `ai(prompt, { model, system, temperature, max_tokens })` —
+or just `ai("...")` for a plain text answer. See [`examples/ai/extract.lq`](examples/ai/extract.lq).
 
 **Split your program into modules.**
 

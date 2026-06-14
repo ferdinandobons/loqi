@@ -26,10 +26,14 @@ imply for the next step.
 | AI | `similarity` (cosine on vectors) | ✅ done |
 | AI | `env`, `read`, `write` | ✅ done |
 | Lang | raw strings (backticks) | ✅ done |
+| AI | `ai(prompt, options)` (model/system/temperature/max_tokens) | ✅ done |
+| AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `embed` (embeddings API) | 🔜 next |
-| AI | structured generation with schema | 🔜 next |
-| Core | garbage collector (mark-sweep) | 📋 planned |
-| Core | namespaced modules / packages | 📋 planned |
+| AI | schema-constrained generation | 🔜 next |
+| AI | concurrency for parallel `ai`/`http` calls | 🔜 next |
+| Core | garbage collector (mark-sweep) | 🔜 next |
+| Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
+| Core | module cache (single-evaluation) | 📋 planned |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |
 | Speed | AOT: emit C and compile (`loqi build`) | 🔬 exploring |
 
@@ -100,9 +104,11 @@ AI-native surface — and the loop now also runs a continuous code-review pass.
 The differentiator, now real. The things you install separately in other
 languages are part of Loqi's runtime:
 
-- `ai(prompt)` / `ai(prompt, model)` — a first-class LLM call (Anthropic Messages
-  API). Reads `ANTHROPIC_API_KEY`; model defaults to `claude-sonnet-4-6` (override
-  per-call or via `LOQI_AI_MODEL`).
+- `ai(prompt)` / `ai(prompt, model)` / `ai(prompt, options)` — a first-class LLM
+  call (Anthropic Messages API). Reads `ANTHROPIC_API_KEY`; model defaults to
+  `claude-sonnet-4-6` (override per-call or via `LOQI_AI_MODEL`). The options map
+  takes `model`, `system`, `temperature`, `max_tokens`, and `json: true` to get
+  parsed native data back (fence-tolerant).
 - `json.parse` / `json.stringify` — a real JSON codec to/from native values.
 - `http.get` / `http.post` — an HTTP client.
 - `similarity(a, b)` — cosine similarity for semantic search.
