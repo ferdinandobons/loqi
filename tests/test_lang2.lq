@@ -54,4 +54,25 @@ assert(filter([1, 2, 3, 4], fn(x) { return x % 2 == 0 }) == [2, 4], "filter")
 assert(reduce([1, 2, 3, 4], fn(a, b) { return a + b }, 0) == 10, "reduce")
 assert(find([1, 2, 3], fn(x) { return x > 1 }) == 2, "find")
 
+# --- break/continue out of a try must not corrupt the handler stack ---
+let cnt = 0
+while true {
+  try { cnt = cnt + 1; if cnt == 3 { break } } catch e { cnt = -100 }
+}
+assert(cnt == 3, "break out of try")
+let recovered = false
+try { let z = [][0] } catch e { recovered = true }
+assert(recovered, "try handler intact after break-from-try")
+
+let seen = 0
+for x in [1, 2, 3, 4] {
+  try { if x % 2 == 0 { continue }; seen = seen + 1 } catch e { seen = -100 }
+}
+assert(seen == 2, "continue out of try")
+
+# --- overflow / range built-ins raise catchable errors ---
+let oflo = false
+try { sum([9223372036854775807, 1]) } catch e { oflo = true }
+assert(oflo, "sum overflow is catchable")
+
 print("test_lang2: tutti i test superati ✓")

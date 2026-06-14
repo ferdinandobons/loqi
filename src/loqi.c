@@ -922,6 +922,13 @@ static Node *parse_match(Parser *P) {
     Node *first_if = NULL, *last_if = NULL, *default_body = NULL;
     skip_newlines(P);
     while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
+        int arm_line = P->cur.line; /* diagnostics point at the arm, not 'match' */
+        Token arm_tok = P->cur;
+        /* A default arm must be the last arm: reject any arm after '_'. */
+        if (default_body) {
+            parser_error_at(P, &P->cur, "il ramo di default '_' deve essere l'ultimo di un match");
+            return outer;
+        }
         bool is_default = false;
         Node *cond = NULL;
         for (;;) {
@@ -929,14 +936,19 @@ static Node *parse_match(Parser *P) {
                 p_advance(P); is_default = true;
             } else {
                 Node *pat = parse_expression(P);
-                Node *eq = new_node(N_BINARY, line); eq->op = T_EQEQ;
-                Node *mref = new_node(N_IDENT, line); mref->name = "$m";
+                Node *eq = new_node(N_BINARY, arm_line); eq->op = T_EQEQ;
+                Node *mref = new_node(N_IDENT, arm_line); mref->name = "$m";
                 eq->a = mref; eq->b = pat;
                 if (!cond) cond = eq;
-                else { Node *orn = new_node(N_LOGICAL, line); orn->op = T_OR; orn->a = cond; orn->b = eq; cond = orn; }
+                else { Node *orn = new_node(N_LOGICAL, arm_line); orn->op = T_OR; orn->a = cond; orn->b = eq; cond = orn; }
             }
             if (p_match(P, T_COMMA)) { skip_newlines(P); continue; }
             break;
+        }
+        /* '_' cannot be combined with other patterns: it would silently swallow them. */
+        if (is_default && cond) {
+            parser_error_at(P, &arm_tok, "il pattern '_' non puo' essere combinato con altri pattern");
+            return outer;
         }
         p_consume(P, T_COLON, "atteso ':' dopo il pattern di match");
         skip_newlines(P);
@@ -944,7 +956,7 @@ static Node *parse_match(Parser *P) {
         if (is_default) {
             default_body = body;
         } else {
-            Node *ifn = new_node(N_IF, line); ifn->a = cond; ifn->b = body;
+            Node *ifn = new_node(N_IF, arm_line); ifn->a = cond; ifn->b = body;
             if (last_if) last_if->c = ifn; else first_if = ifn;
             last_if = ifn;
         }
@@ -1018,6 +1030,9 @@ static Node *parse_program(Parser *P) {
     skip_newlines(P);
     while (!p_check(P, T_EOF)) {
         node_add(&prog->items, &prog->item_count, parse_statement(P));
+        /* Stop after the first parse error: the parser has no panic-mode
+           synchronization, so continuing can spin if the cursor didn't advance. */
+        if (P->had_error) break;
         skip_newlines(P);
     }
     return prog;
@@ -1270,7 +1285,10 @@ static char *value_to_cstr(Interp *I, Value v) {
         case VAL_INT: snprintf(tmp, sizeof(tmp), "%lld", (long long)v.as.i); return strdup(tmp);
         case VAL_FLOAT: {
             double d = v.as.d;
-            if (d == (int64_t)d && fabs(d) < 1e15) snprintf(tmp, sizeof(tmp), "%.1f", d);
+            /* Range-check before the int64 cast: converting an out-of-range double
+               to int64_t is UB, so the magnitude guard must come first. */
+            if (isfinite(d) && fabs(d) < 1e15 && d == (double)(int64_t)d)
+                snprintf(tmp, sizeof(tmp), "%.1f", d);
             else snprintf(tmp, sizeof(tmp), "%g", d);
             return strdup(tmp);
         }
@@ -1418,6 +1436,7 @@ typedef struct LoopCtx {
     struct LoopCtx *enclosing;
     int continue_target;
     int body_local_base;
+    int try_depth_base; /* open try-handler depth when the loop body begins */
     int breaks[MAX_BREAKS_PER_LOOP];
     int break_count;
 } LoopCtx;
@@ -1431,6 +1450,7 @@ typedef struct Compiler {
     CompUpvalue upvalues[MAX_LOCALS];
     int scope_depth;
     LoopCtx *loop;
+    int try_depth; /* number of try handlers currently open in this function */
     bool *had_error; /* shared flag across nested compilers */
 } Compiler;
 
@@ -1475,7 +1495,7 @@ static void emit_loop(Compiler *C, int loop_start, int line) {
 
 static void init_compiler(Compiler *C, Interp *I, Compiler *enclosing, const char *name, bool *had_error) {
     C->enclosing = enclosing; C->I = I; C->local_count = 0; C->scope_depth = 0;
-    C->loop = NULL; C->had_error = had_error;
+    C->loop = NULL; C->try_depth = 0; C->had_error = had_error;
     C->proto = new_proto(I);
     if (name) C->proto->name = strdup(name);
     /* slot 0 holds the executing closure itself */
@@ -1654,6 +1674,10 @@ static void compile_break(Compiler *C, int line) {
     if (C->loop->break_count >= MAX_BREAKS_PER_LOOP) {
         *C->had_error = true; fprintf(stderr, "troppi 'break' in un singolo ciclo\n"); return;
     }
+    /* unwind any try handlers opened inside the loop body so the runtime
+       handler stack is restored to the loop's baseline before leaving it */
+    for (int d = C->try_depth; d > C->loop->try_depth_base; d--)
+        emit_byte(C, OP_TRY_END, line);
     for (int i = C->local_count - 1; i >= C->loop->body_local_base; i--)
         emit_byte(C, C->locals[i].is_captured ? OP_CLOSE_UPVALUE : OP_POP, line);
     int j = emit_jump(C, OP_JUMP, line);
@@ -1661,6 +1685,9 @@ static void compile_break(Compiler *C, int line) {
 }
 static void compile_continue(Compiler *C, int line) {
     if (!C->loop) { *C->had_error = true; fprintf(stderr, "'continue' fuori da un ciclo\n"); return; }
+    /* unwind any try handlers opened inside the loop body (see compile_break) */
+    for (int d = C->try_depth; d > C->loop->try_depth_base; d--)
+        emit_byte(C, OP_TRY_END, line);
     for (int i = C->local_count - 1; i >= C->loop->body_local_base; i--)
         emit_byte(C, C->locals[i].is_captured ? OP_CLOSE_UPVALUE : OP_POP, line);
     emit_loop(C, C->loop->continue_target, line);
@@ -1686,6 +1713,7 @@ static void compile_while(Compiler *C, Node *n) {
     int exitJ = emit_jump(C, OP_JUMP_IF_FALSE, n->line);
     emit_byte(C, OP_POP, n->line);
     loop.body_local_base = C->local_count;
+    loop.try_depth_base = C->try_depth;
     C->loop = &loop;
     compile_stmt(C, n->b);
     C->loop = loop.enclosing;
@@ -1713,6 +1741,7 @@ static void compile_for(Compiler *C, Node *n) {
     int loop_start = cur_chunk(C)->count;
     loop.continue_target = loop_start;
     loop.body_local_base = C->local_count;
+    loop.try_depth_base = C->try_depth;
 
     emit_byte(C, OP_FOR_NEXT, line);
     emit_byte(C, (uint8_t)seq_slot, line);
@@ -1798,7 +1827,9 @@ static void compile_stmt(Compiler *C, Node *n) {
             break;
         case N_TRY: {
             int catchJump = emit_jump(C, OP_TRY_BEGIN, n->line); /* operand = offset to catch */
+            C->try_depth++;                     /* handler is live for the try body */
             compile_stmt(C, n->a);              /* try body (its own scope) */
+            C->try_depth--;                     /* handler consumed by OP_TRY_END / catch */
             emit_byte(C, OP_TRY_END, n->line);  /* pop handler on the success path */
             int endJump = emit_jump(C, OP_JUMP, n->line);
             patch_jump(C, catchJump);           /* catch starts here; error value is on the stack */
@@ -2036,6 +2067,9 @@ static void run_vm(VM *vm, int stop_at) {
             memcpy(vm->trap, prev_trap, sizeof(jmp_buf));
             longjmp(vm->trap, 1);
         }
+        /* The error was handled by a catch in this invocation and execution
+         * resumes below; clear the sticky flag so it reflects "recovered". */
+        vm->I->has_error = false;
     }
     frame = &vm->frames[vm->frame_count - 1];
 #define READ_BYTE() (*frame->ip++)
@@ -2224,7 +2258,19 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_IMPORT: {
                 ObjString *path = AS_STRING(READ_CONST());
                 int rc = run_source(vm->I, NULL, path->chars); /* NULL src => read file */
-                if (rc != 0) vm_error(vm, "import di '%s' fallito (codice %d)", path->chars, rc);
+                /* On a runtime failure inside the module (rc==70), run_source left
+                   the underlying message in I->err_msg without printing it (nested);
+                   re-raise it here so an enclosing try/catch can handle it and an
+                   uncaught import still reports the real cause exactly once.
+                   Copy first: vm_error writes into I->err_msg, so passing it as a
+                   %s argument would alias the vsnprintf destination. */
+                if (rc == 70) {
+                    char cause[512];
+                    snprintf(cause, sizeof(cause), "%s", vm->I->err_msg);
+                    vm_error(vm, "import di '%s' fallito: %s", path->chars, cause);
+                } else if (rc != 0) {
+                    vm_error(vm, "import di '%s' fallito (codice %d)", path->chars, rc);
+                }
                 break;
             }
             default: vm_error(vm, "istruzione sconosciuta %d", inst);
@@ -2249,8 +2295,15 @@ static Value vm_invoke(VM *vm, Value callee, int argc, Value *argv) {
         return r;
     }
     if (IS_CLOSURE(callee)) {
+        ObjClosure *cl = AS_CLOSURE(callee);
+        /* Check arity here so the message names the callback and makes clear it
+           is invoked from a built-in, rather than vm_call_closure raising with
+           the (still-current) caller frame's line and a bare "fn". */
+        if (argc != cl->proto->arity)
+            vm_error(vm, "la callback %s attende %d argomenti, ma il built-in ne passa %d",
+                     cl->proto->name ? cl->proto->name : "(anonima)", cl->proto->arity, argc);
         int base = vm->frame_count;
-        vm_call_closure(vm, AS_CLOSURE(callee), argc);
+        vm_call_closure(vm, cl, argc);
         run_vm(vm, base);          /* runs until the invoked frame returns */
         return vm_pop(vm);         /* result left on top by OP_RETURN */
     }
@@ -2421,9 +2474,18 @@ static Value nat_sqrt(Interp *I, int argc, Value *argv) {
     if (!IS_NUM(argv[0])) runtime_error(I, 0, "sqrt() richiede un numero");
     return float_val(sqrt(as_double(argv[0])));
 }
+/* Safely convert an already-rounded double to int64. Converting a non-finite
+   or out-of-[INT64_MIN,INT64_MAX] double to int64_t is undefined behavior. */
+static Value int_from_double(Interp *I, double r, const char *who) {
+    /* 9223372036854775808.0 == 2^63 is the first double > INT64_MAX; the
+       smallest representable below it is 9223372036854774784.0. */
+    if (!isfinite(r) || r >= 9223372036854775808.0 || r < -9223372036854775808.0)
+        runtime_error(I, 0, who);
+    return int_val((int64_t)r);
+}
 static Value nat_floor(Interp *I, int argc, Value *argv) {
     if (!IS_NUM(argv[0])) runtime_error(I, 0, "floor() richiede un numero");
-    return int_val((int64_t)floor(as_double(argv[0])));
+    return int_from_double(I, floor(as_double(argv[0])), "floor(): valore fuori intervallo");
 }
 static Value nat_clock(Interp *I, int argc, Value *argv) {
     return float_val((double)clock() / CLOCKS_PER_SEC);
@@ -2837,15 +2899,29 @@ static int value_compare(Interp *I, Value a, Value b) {
     runtime_error(I, 0, "confronto non valido tra %s e %s", type_name(a), type_name(b));
     return 0;
 }
+/* qsort_r's argument order and comparator signature differ between the
+   BSD/macOS and glibc/Linux flavors; provide both so the source is portable. */
+#if defined(__GLIBC__)
+static int sort_cmp(const void *pa, const void *pb, void *thunk) {
+    return value_compare((Interp *)thunk, *(const Value *)pa, *(const Value *)pb);
+}
+#else
 static int sort_cmp(void *thunk, const void *pa, const void *pb) {
     return value_compare((Interp *)thunk, *(const Value *)pa, *(const Value *)pb);
 }
+#endif
 static Value nat_sort(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0])) runtime_error(I, 0, "sort() richiede una list");
     ObjList *src = AS_LIST(argv[0]);
     ObjList *out = new_list(I);
     for (int i = 0; i < src->count; i++) list_push(out, src->items[i]);
-    if (out->count > 1) qsort_r(out->items, (size_t)out->count, sizeof(Value), I, sort_cmp);
+    if (out->count > 1) {
+#if defined(__GLIBC__)
+        qsort_r(out->items, (size_t)out->count, sizeof(Value), sort_cmp, I);
+#else
+        qsort_r(out->items, (size_t)out->count, sizeof(Value), I, sort_cmp);
+#endif
+    }
     return obj_val((Obj *)out);
 }
 static Value nat_reverse(Interp *I, int argc, Value *argv) {
@@ -2865,12 +2941,19 @@ static Value nat_reverse(Interp *I, int argc, Value *argv) {
 static Value nat_sum(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0])) runtime_error(I, 0, "sum() richiede una list");
     ObjList *l = AS_LIST(argv[0]);
-    int64_t si = 0; double sf = 0; bool is_float = false;
+    int64_t si = 0; double sf = 0; bool is_float = false; bool int_overflow = false;
     for (int i = 0; i < l->count; i++) {
         if (!IS_NUM(l->items[i])) runtime_error(I, 0, "sum(): elemento non numerico (%s)", type_name(l->items[i]));
         if (IS_FLOAT(l->items[i])) is_float = true;
-        sf += as_double(l->items[i]); si += IS_INT(l->items[i]) ? AS_INT(l->items[i]) : 0;
+        sf += as_double(l->items[i]);
+        /* Accumulate the int sum overflow-safely (matching the VM '+' operator).
+           __builtin_add_overflow never invokes UB and still wraps si on overflow.
+           Defer reporting: the int sum is only the result when no float appears,
+           so a mixed int+float sum must not fail on an int-only overflow. */
+        if (IS_INT(l->items[i]) && __builtin_add_overflow(si, AS_INT(l->items[i]), &si))
+            int_overflow = true;
     }
+    if (!is_float && int_overflow) runtime_error(I, 0, "sum(): overflow intero");
     return is_float ? float_val(sf) : int_val(si);
 }
 static Value nat_min(Interp *I, int argc, Value *argv) {
@@ -2924,6 +3007,16 @@ static Value nat_slice(Interp *I, int argc, Value *argv) {
     runtime_error(I, 0, "slice() richiede list o str");
     return NIL_VAL;
 }
+/* Length-aware substring search: respects ObjString->length instead of stopping
+   at the first NUL (strings are length-prefixed and can hold embedded NULs).
+   Returns the byte offset of the first match, or -1. An empty needle matches at 0. */
+static int64_t str_find(const char *hay, int hlen, const char *needle, int nlen) {
+    if (nlen == 0) return 0;
+    if (nlen > hlen) return -1;
+    for (int i = 0; i <= hlen - nlen; i++)
+        if (memcmp(hay + i, needle, (size_t)nlen) == 0) return i;
+    return -1;
+}
 static Value nat_index_of(Interp *I, int argc, Value *argv) {
     if (IS_LIST(argv[0])) {
         ObjList *l = AS_LIST(argv[0]);
@@ -2931,16 +3024,17 @@ static Value nat_index_of(Interp *I, int argc, Value *argv) {
         return int_val(-1);
     }
     if (IS_STRING(argv[0]) && IS_STRING(argv[1])) {
-        const char *h = AS_STRING(argv[0])->chars, *n = AS_STRING(argv[1])->chars;
-        const char *hit = strstr(h, n);
-        return int_val(hit ? (int64_t)(hit - h) : -1);
+        ObjString *h = AS_STRING(argv[0]), *n = AS_STRING(argv[1]);
+        return int_val(str_find(h->chars, h->length, n->chars, n->length));
     }
     runtime_error(I, 0, "index_of() richiede (list, x) o (str, str)");
     return NIL_VAL;
 }
 static Value nat_contains(Interp *I, int argc, Value *argv) {
-    if (IS_STRING(argv[0]) && IS_STRING(argv[1]))
-        return bool_val(strstr(AS_STRING(argv[0])->chars, AS_STRING(argv[1])->chars) != NULL);
+    if (IS_STRING(argv[0]) && IS_STRING(argv[1])) {
+        ObjString *h = AS_STRING(argv[0]), *n = AS_STRING(argv[1]);
+        return bool_val(str_find(h->chars, h->length, n->chars, n->length) >= 0);
+    }
     if (IS_LIST(argv[0])) {
         ObjList *l = AS_LIST(argv[0]);
         for (int i = 0; i < l->count; i++) if (values_equal(l->items[i], argv[1])) return bool_val(true);
@@ -2969,8 +3063,9 @@ static Value nat_replace(Interp *I, int argc, Value *argv) {
     char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
     const char *p = s->chars, *end = s->chars + s->length;
     while (p < end) {
-        const char *hit = strstr(p, o->chars);
-        if (!hit) { append_str(&buf, &len, &cap, p, (size_t)(end - p)); break; }
+        int64_t off = str_find(p, (int)(end - p), o->chars, o->length); /* length-aware */
+        if (off < 0) { append_str(&buf, &len, &cap, p, (size_t)(end - p)); break; }
+        const char *hit = p + off;
         append_str(&buf, &len, &cap, p, (size_t)(hit - p));
         append_str(&buf, &len, &cap, n->chars, (size_t)n->length);
         p = hit + o->length;
@@ -2991,18 +3086,22 @@ static Value nat_repeat(Interp *I, int argc, Value *argv) {
     if (!IS_STRING(argv[0]) || !IS_INT(argv[1])) runtime_error(I, 0, "repeat() richiede (str, int)");
     ObjString *s = AS_STRING(argv[0]); int64_t n = AS_INT(argv[1]);
     if (n < 0) n = 0;
-    if (n > 0 && s->length > (int)(100 * 1024 * 1024) / (n ? (int)n : 1)) runtime_error(I, 0, "repeat(): risultato troppo grande");
-    char *buf = xmalloc((size_t)s->length * (size_t)n + 1);
+    /* All size math in 64-bit: a truncated (int)n could bypass the guard
+       (giant alloc / silently wrong length) or hit a divide-by-zero. */
+    int64_t limit = 100 * 1024 * 1024;
+    if (n > 0 && (uint64_t)s->length > (uint64_t)limit / (uint64_t)n) runtime_error(I, 0, "repeat(): risultato troppo grande");
+    int64_t total = (int64_t)s->length * n; /* <= limit, fits in int */
+    char *buf = xmalloc((size_t)total + 1);
     for (int64_t i = 0; i < n; i++) memcpy(buf + i * s->length, s->chars, (size_t)s->length);
-    Value out = string_val(I, buf, (int)(s->length * n)); free(buf); return out;
+    Value out = string_val(I, buf, (int)total); free(buf); return out;
 }
 static Value nat_round(Interp *I, int argc, Value *argv) {
     if (!IS_NUM(argv[0])) runtime_error(I, 0, "round() richiede un numero");
-    return int_val((int64_t)llround(as_double(argv[0])));
+    return int_from_double(I, round(as_double(argv[0])), "round(): valore fuori intervallo");
 }
 static Value nat_ceil(Interp *I, int argc, Value *argv) {
     if (!IS_NUM(argv[0])) runtime_error(I, 0, "ceil() richiede un numero");
-    return int_val((int64_t)ceil(as_double(argv[0])));
+    return int_from_double(I, ceil(as_double(argv[0])), "ceil(): valore fuori intervallo");
 }
 static Value nat_pow(Interp *I, int argc, Value *argv) {
     if (!IS_NUM(argv[0]) || !IS_NUM(argv[1])) runtime_error(I, 0, "pow() richiede due numeri");
@@ -3221,7 +3320,12 @@ static int run_source(Interp *I, const char *src, const char *path) {
 
     int rc = 0;
     if (setjmp(I->err_jmp)) {
-        fprintf(stderr, "%s\n", I->err_msg);
+        /* Only report at true top-level. For a nested import (prev_vm != NULL)
+           OP_IMPORT re-raises via vm_error in the outer VM, where an enclosing
+           try/catch may handle it; printing here would spam stderr for a fully
+           recovered import failure. The outer handler/top-level is the sole
+           reporter in that case. */
+        if (prev_vm == NULL) fprintf(stderr, "%s\n", I->err_msg);
         rc = 70;
     } else {
         ObjClosure *cl = new_closure(I, script);
