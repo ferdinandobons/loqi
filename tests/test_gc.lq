@@ -1,0 +1,42 @@
+# Garbage-collector stress + correctness.
+# Allocates lots of short-lived objects so the collector runs many times, while
+# checking that reachable data (kept values, closures/upvalues, results of
+# higher-order built-ins) survives every collection intact.
+
+# --- churn a lot of garbage, keep a sparse sample alive ---
+let keep = []
+let i = 0
+while i < 30000 {
+  let tmp = { id: i, tag: "item-{i}", data: [i, i + 1, i + 2] }   # garbage each iteration
+  if i % 200 == 0 { push(keep, tmp) }                             # keep 150 of them
+  i = i + 1
+}
+assert(len(keep) == 150, "kept count after GC churn")
+assert(keep[0].id == 0, "first kept survives")
+assert(keep[149].id == 29800, "last kept survives")
+assert(keep[50].data[2] == 10002, "nested list value intact across GC")
+assert(keep[50].tag == "item-10000", "interpolated string intact across GC")
+
+# --- closures + upvalues must survive collections ---
+fn make_counter() {
+  let n = 0
+  return fn() { n = n + 1; return n }
+}
+let c = make_counter()
+let j = 0
+while j < 20000 { let g = [j, j]; j = j + 1 }   # churn more garbage between calls
+assert(c() == 1, "closed-over upvalue survived GC")
+assert(c() == 2 and c() == 3, "upvalue keeps counting after GC")
+
+# --- higher-order built-ins root their accumulator during callbacks ---
+let big = []
+let k = 0
+while k < 4000 { push(big, k); k = k + 1 }
+let sq = map(big, fn(x) { return x * x })
+assert(len(sq) == 4000 and sq[7] == 49, "map result correct under GC")
+let ev = filter(big, fn(x) { return x % 2 == 0 })
+assert(len(ev) == 2000 and ev[3] == 6, "filter result correct under GC")
+let total = reduce(big, fn(a, b) { return a + b }, 0)
+assert(total == 7998000, "reduce result correct under GC")
+
+print("test_gc: all tests passed ✓")

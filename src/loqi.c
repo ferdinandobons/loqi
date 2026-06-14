@@ -7,9 +7,10 @@
  * compile time, globals to an open-addressing hash table, closures capture via
  * upvalues.
  *
- * Memory model (current): heap objects are tracked in a global arena and freed
- * at process exit. A real mark-sweep garbage collector is a planned iteration —
- * see docs/ROADMAP.md.
+ * Memory model: heap objects live on an intrusive arena list and are reclaimed
+ * by a precise mark & sweep garbage collector that runs at the VM dispatch
+ * safe-point (see "Garbage collector" below). Keeps memory bounded for
+ * long-running programs.
  */
 
 #include <stdio.h>
@@ -59,7 +60,8 @@ typedef enum { OBJ_STRING, OBJ_LIST, OBJ_MAP, OBJ_PROTO, OBJ_CLOSURE, OBJ_UPVALU
 
 struct Obj {
     ObjType type;
-    Obj *arena_next; /* intrusive list for cleanup at exit */
+    bool marked;     /* GC mark bit (set during marking, cleared on sweep) */
+    Obj *arena_next; /* intrusive list of every object — this is the GC sweep list */
 };
 
 typedef struct {
@@ -181,6 +183,13 @@ struct Interp {
     char err_msg[512];
     int import_depth;  /* number of files currently being loaded (import stack height) */
     const char *import_stack[64]; /* paths currently loading, for cycle detection */
+    /* mark-sweep garbage collector */
+    size_t obj_count;  /* live heap objects (the GC trigger metric) */
+    size_t next_gc;    /* collect once obj_count reaches this */
+    uint32_t gc_gen;   /* current GC generation (for per-cycle table dedup) */
+    Obj **gray;        /* worklist of marked-but-not-yet-scanned objects */
+    int gray_count, gray_cap;
+    bool gc_stress;    /* LOQI_GC_STRESS=1 -> collect at every safe-point (testing) */
 };
 
 /* An import that re-enters another file recurses through run_source on the C
@@ -226,8 +235,10 @@ static void *xrealloc(void *p, size_t n) {
 static Obj *alloc_obj(Interp *I, size_t size, ObjType type) {
     Obj *o = xmalloc(size);
     o->type = type;
+    o->marked = false;
     o->arena_next = I->arena;
     I->arena = o;
+    I->obj_count++;
     return o;
 }
 
@@ -1167,6 +1178,7 @@ struct Table {
     int count;
     int cap;
     TableEntry *entries;
+    uint32_t gc_gen; /* GC generation this table was last marked in (dedup) */
 };
 
 static uint32_t hash_string(const char *s, size_t n) {
@@ -1175,7 +1187,7 @@ static uint32_t hash_string(const char *s, size_t n) {
     return h;
 }
 
-static void table_init(Table *t) { t->count = 0; t->cap = 0; t->entries = NULL; }
+static void table_init(Table *t) { t->count = 0; t->cap = 0; t->entries = NULL; t->gc_gen = 0; }
 
 static TableEntry *table_find(TableEntry *entries, int cap, const char *key, uint32_t hash) {
     uint32_t idx = hash & (uint32_t)(cap - 1);
@@ -1893,6 +1905,7 @@ typedef struct { uint8_t *catch_ip; Value *stack_top; int frame_count; } TryHand
 
 struct VM {
     Interp *I;
+    VM *enclosing;     /* the VM that started this one (during imports) — a GC root chain */
     Value stack[STACK_MAX];
     Value *stack_top;
     CallFrame frames[FRAMES_MAX];
@@ -2101,6 +2114,129 @@ static Value iter_seq(VM *vm, Value it) {
 
 /* Run until the current frame count drops back to `stop_at` (0 for the top-level
  * script; a higher baseline for a re-entrant vm_invoke). */
+/* ===========================================================================
+ * Garbage collector — precise mark & sweep over the object arena.
+ *
+ * Collection runs only at the VM dispatch safe-point (top of run_vm's loop),
+ * where every live value is reachable from a root: the value stacks and call
+ * frames of the active VM chain, the current module globals, and the open
+ * upvalues. Because GC never fires in the middle of a native, a native's C-local
+ * temporaries can't be collected out from under it — the one exception is the
+ * higher-order natives (map/filter/reduce) that re-enter the VM via a callback,
+ * which root their accumulator on the value stack while the callback runs.
+ * ========================================================================= */
+static void gc_push_gray(Interp *I, Obj *o) {
+    if (I->gray_count + 1 > I->gray_cap) {
+        I->gray_cap = I->gray_cap < 64 ? 64 : I->gray_cap * 2;
+        I->gray = xrealloc(I->gray, sizeof(Obj *) * (size_t)I->gray_cap);
+    }
+    I->gray[I->gray_count++] = o;
+}
+static void gc_mark_obj(Interp *I, Obj *o) {
+    if (o == NULL || o->marked) return;
+    o->marked = true;
+    gc_push_gray(I, o);
+}
+static void gc_mark_value(Interp *I, Value v) {
+    if (IS_OBJ(v)) gc_mark_obj(I, AS_OBJ(v));
+}
+/* Mark a globals table's values, at most once per collection cycle. */
+static void gc_mark_table(Interp *I, Table *t) {
+    if (t == NULL || t->gc_gen == I->gc_gen) return;
+    t->gc_gen = I->gc_gen;
+    for (int i = 0; i < t->cap; i++)
+        if (t->entries[i].key) gc_mark_value(I, t->entries[i].value);
+}
+/* Visit everything an object references (gray -> black). */
+static void gc_blacken(Interp *I, Obj *o) {
+    switch (o->type) {
+        case OBJ_LIST: {
+            ObjList *l = (ObjList *)o;
+            for (int i = 0; i < l->count; i++) gc_mark_value(I, l->items[i]);
+            break;
+        }
+        case OBJ_MAP: {
+            ObjMap *m = (ObjMap *)o;
+            for (int i = 0; i < m->count; i++) gc_mark_value(I, m->entries[i].value);
+            break;
+        }
+        case OBJ_PROTO: {
+            ObjProto *p = (ObjProto *)o;
+            for (int i = 0; i < p->chunk.const_count; i++) gc_mark_value(I, p->chunk.constants[i]);
+            gc_mark_table(I, p->module_globals); /* keep module state alive for its closures */
+            break;
+        }
+        case OBJ_CLOSURE: {
+            ObjClosure *c = (ObjClosure *)o;
+            gc_mark_obj(I, (Obj *)c->proto);
+            for (int i = 0; i < c->upvalue_count; i++) gc_mark_obj(I, (Obj *)c->upvalues[i]);
+            break;
+        }
+        case OBJ_UPVALUE:
+            gc_mark_value(I, ((ObjUpvalue *)o)->closed); /* NIL while open, so always safe */
+            break;
+        case OBJ_STRING:
+        case OBJ_NATIVE:
+            break; /* leaf objects */
+    }
+}
+static void gc_mark_roots(Interp *I) {
+    gc_mark_table(I, I->globals);
+    for (VM *vm = I->vm; vm; vm = vm->enclosing) {
+        for (Value *s = vm->stack; s < vm->stack_top; s++) gc_mark_value(I, *s);
+        for (int i = 0; i < vm->frame_count; i++) gc_mark_obj(I, (Obj *)vm->frames[i].closure);
+        for (ObjUpvalue *u = vm->open_upvalues; u; u = u->next) gc_mark_obj(I, (Obj *)u);
+    }
+}
+static void gc_free_obj(Obj *o) {
+    switch (o->type) {
+        case OBJ_STRING: free(((ObjString *)o)->chars); break;
+        case OBJ_LIST:   free(((ObjList *)o)->items); break;
+        case OBJ_MAP: {
+            ObjMap *m = (ObjMap *)o;
+            for (int i = 0; i < m->count; i++) free(m->entries[i].key);
+            free(m->entries);
+            break;
+        }
+        case OBJ_PROTO: {
+            ObjProto *p = (ObjProto *)o;
+            free(p->chunk.code); free(p->chunk.lines); free(p->chunk.constants);
+            free(p->name); /* module_globals is borrowed, not owned */
+            break;
+        }
+        case OBJ_CLOSURE: free(((ObjClosure *)o)->upvalues); break; /* proto is a separate obj */
+        case OBJ_UPVALUE:
+        case OBJ_NATIVE:
+            break; /* native name is a static/borrowed string */
+    }
+    free(o);
+}
+static void gc_sweep(Interp *I) {
+    size_t live = 0;
+    Obj *prev = NULL, *o = I->arena;
+    while (o) {
+        if (o->marked) {
+            o->marked = false;          /* reset for the next cycle */
+            prev = o; o = o->arena_next; live++;
+        } else {
+            Obj *dead = o;
+            o = o->arena_next;
+            if (prev) prev->arena_next = o; else I->arena = o;
+            gc_free_obj(dead);
+        }
+    }
+    I->obj_count = live;
+}
+static void collect_garbage(Interp *I) {
+    I->gc_gen++;
+    I->gray_count = 0;
+    gc_mark_roots(I);
+    while (I->gray_count > 0) gc_blacken(I, I->gray[--I->gray_count]);
+    gc_sweep(I);
+    size_t floor = 1u << 14;
+    I->next_gc = (I->obj_count > floor / 2) ? I->obj_count * 2 : floor;
+}
+
 static void run_vm(VM *vm, int stop_at) {
     /* Save the enclosing try landing pad so nested vm_invoke runs nest safely. */
     jmp_buf prev_trap;
@@ -2122,6 +2258,7 @@ static void run_vm(VM *vm, int stop_at) {
 #define READ_U16() (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
 #define READ_CONST() (frame->closure->proto->chunk.constants[READ_U16()])
     for (;;) {
+        if (vm->I->gc_stress || vm->I->obj_count >= vm->I->next_gc) collect_garbage(vm->I);
         uint8_t inst = READ_BYTE();
         switch (inst) {
             case OP_CONSTANT: vm_push(vm, READ_CONST()); break;
@@ -3236,31 +3373,38 @@ static Value nat_map(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0])) runtime_error(I, 0, "map() requires (list, fn)");
     ObjList *src = AS_LIST(argv[0]);
     ObjList *out = new_list(I);
+    vm_push(I->vm, obj_val((Obj *)out)); /* root the result while callbacks run the GC */
     for (int i = 0; i < src->count; i++) {
         Value a = src->items[i];
         list_push(out, vm_invoke(I->vm, argv[1], 1, &a));
     }
+    vm_pop(I->vm);
     return obj_val((Obj *)out);
 }
 static Value nat_filter(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0])) runtime_error(I, 0, "filter() requires (list, fn)");
     ObjList *src = AS_LIST(argv[0]);
     ObjList *out = new_list(I);
+    vm_push(I->vm, obj_val((Obj *)out)); /* root the result while callbacks run the GC */
     for (int i = 0; i < src->count; i++) {
         Value a = src->items[i];
         if (is_truthy(vm_invoke(I->vm, argv[1], 1, &a))) list_push(out, a);
     }
+    vm_pop(I->vm);
     return obj_val((Obj *)out);
 }
 static Value nat_reduce(Interp *I, int argc, Value *argv) {
     if (argc < 3 || !IS_LIST(argv[0])) runtime_error(I, 0, "reduce() requires (list, fn, initial)");
     ObjList *src = AS_LIST(argv[0]);
-    Value acc = argv[2];
+    vm_push(I->vm, argv[2]);              /* accumulator, kept rooted on the value stack */
+    Value *acc = I->vm->stack_top - 1;
     for (int i = 0; i < src->count; i++) {
-        Value pair[2] = { acc, src->items[i] };
-        acc = vm_invoke(I->vm, argv[1], 2, pair);
+        Value pair[2] = { *acc, src->items[i] };
+        *acc = vm_invoke(I->vm, argv[1], 2, pair);
     }
-    return acc;
+    Value result = *acc;
+    vm_pop(I->vm);
+    return result;
 }
 static Value nat_each(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0])) runtime_error(I, 0, "each() requires (list, fn)");
@@ -3433,7 +3577,8 @@ static int run_source(Interp *I, const char *src, const char *path) {
     jmp_buf saved; memcpy(saved, I->err_jmp, sizeof(jmp_buf));
     VM *prev_vm = I->vm;
     VM *vm = xmalloc(sizeof(VM));
-    vm->I = I; vm->stack_top = vm->stack; vm->frame_count = 0; vm->open_upvalues = NULL;
+    vm->I = I; vm->enclosing = prev_vm;
+    vm->stack_top = vm->stack; vm->frame_count = 0; vm->open_upvalues = NULL;
     vm->handler_count = 0;
     memset(vm->trap, 0, sizeof(jmp_buf));
     I->vm = vm;
@@ -3503,6 +3648,11 @@ static void interp_init(Interp *I) {
     I->has_error = false;
     I->err_msg[0] = '\0';
     I->import_depth = 0;
+    I->obj_count = 0;
+    I->next_gc = 1u << 14;   /* ~16k objects before the first collection */
+    I->gc_gen = 0;
+    I->gray = NULL; I->gray_count = 0; I->gray_cap = 0;
+    I->gc_stress = getenv("LOQI_GC_STRESS") != NULL;
     I->globals = xmalloc(sizeof(Table));
     table_init(I->globals);
     install_stdlib(I);

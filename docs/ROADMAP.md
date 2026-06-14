@@ -31,7 +31,7 @@ imply for the next step.
 | AI | `embed` (embeddings API) | 🔜 next |
 | AI | schema-constrained generation | 🔜 next |
 | AI | concurrency for parallel `ai`/`http` calls | 🔜 next |
-| Core | garbage collector (mark-sweep) | 🔜 next |
+| Core | garbage collector (mark-sweep) | ✅ done |
 | Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
 | Core | module cache (single-evaluation) | 📋 planned |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |
