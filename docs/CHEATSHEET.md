@@ -7,8 +7,8 @@ newline ends a statement; `;` also separates). Blocks use `{ }`.
 ## Variables
 
 ```loqi
-let nome = "mondo"      # declare with let
-nome = "ciao"          # reassign with = (assigning an undeclared name is an error)
+let name = "world"      # declare with let
+name = "hi"            # reassign with = (assigning an undeclared name is an error)
 let a = 1; let b = 2   # ; separates statements on one line
 ```
 
@@ -19,7 +19,7 @@ nil                    # nil
 true                   # bool
 42                     # int (64-bit)
 3.14                   # float (64-bit)
-"testo"                # str
+"text"                 # str
 [1, 2, 3]              # list
 {"k": "v"}             # map
 fn() { return 1 }      # fn (first-class)
@@ -45,8 +45,8 @@ true and false   true or false   !true   # logical
 
 ```loqi
 let n = 3
-print("ho {n} mele")           # interpolation: {expr} (recursive)
-print("totale: {n * 2 + 1}")   # any expression inside {}
+print("I have {n} apples")     # interpolation: {expr} (recursive)
+print("total: {n * 2 + 1}")    # any expression inside {}
 let raw = `{"name": "Ada"}`    # raw string: backticks, verbatim, no escapes/interp
 ```
 
@@ -64,10 +64,10 @@ for x in xs { print(x) }
 ## Maps
 
 ```loqi
-let m = {"nome": "Ada", "anno": 1815}
-print(m["nome"])       # index by key
-print(m.nome)          # dot access
-print(has(m, "anno"))  # true
+let m = {"name": "Ada", "year": 1815}
+print(m["name"])       # index by key
+print(m.name)          # dot access
+print(has(m, "year"))  # true
 print(keys(m))         # list of keys
 print(values(m))       # list of values
 ```
@@ -101,19 +101,19 @@ print("fib(10) = {fib(10)}")
 
 let square = fn(x) { return x * x }   # anonymous fn, first-class
 
-fn contatore() {
+fn counter() {
   let n = 0
   return fn() { n = n + 1; return n }  # closure over n
 }
-let next = contatore()
+let next = counter()
 print(next(), next(), next())          # 1 2 3
 ```
 
 ## AI-first builtins (no installs, no SDK)
 
 ```loqi
-let poem = ai("Scrivi un haiku sul codice pulito")          # LLM call; reads ANTHROPIC_API_KEY
-let txt  = ai("Riassumi in una riga", "claude-sonnet-4-6")  # override model per-call
+let poem = ai("Write a haiku about clean code")             # LLM call; reads ANTHROPIC_API_KEY
+let txt  = ai("Summarize in one line", "claude-sonnet-4-6") # override model per-call
 
 let cfg = json.parse(`{"name": "Ada", "tags": ["x","y"]}`)  # JSON str -> value
 let s   = json.stringify({"ok": true})                      # value -> JSON str
@@ -125,21 +125,21 @@ let score = similarity([1.0, 0.0], [0.9, 0.1])   # cosine similarity over vector
 
 let key = env("ANTHROPIC_API_KEY")    # read env var
 let content = read("note.txt")        # read whole file -> str
-write("out.txt", "ciao")              # write whole file
+write("out.txt", "hi")                # write whole file
 ```
 
 ### Combined: extract structured data from text
 
 ```loqi
-let data = json.parse(ai("Estrai nome e anno come JSON da: " + testo))
-print(data.nome)
+let data = json.parse(ai("Extract name and year as JSON from: " + text))
+print(data.name)
 ```
 
 ### Combined: fetch + parse JSON from the web
 
 ```loqi
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
-print("{repo.full_name}: {repo.stargazers_count} stelle")
+print("{repo.full_name}: {repo.stargazers_count} stars")
 ```
 
 ## More builtins (25+)
@@ -148,7 +148,7 @@ print("{repo.full_name}: {repo.stargazers_count} stelle")
 `upper` `lower` `split` `join` `abs` `sqrt` `floor` `clock` `input` `assert`
 
 ```loqi
-print(upper("ciao"))                 # "CIAO"
+print(upper("hi"))                   # "HI"
 print(join(split("a,b,c", ","), "-")) # "a-b-c"
 print(sqrt(abs(-9)))                 # 3.0
 assert(1 + 1 == 2)                   # aborts if false

@@ -1,30 +1,30 @@
-# Robustezza: match per i casi, try/catch per gli errori che capitano davvero
-# (rete, parsing, input). Niente programma che muore al primo intoppo.
+# Robustness: match for the cases, try/catch for the errors that actually happen
+# (network, parsing, input). No program that dies at the first hiccup.
 
-fn categoria(voto) {
-  match voto {
-    "A", "B": { return "ottimo" }
-    "C": { return "sufficiente" }
-    _: { return "da rivedere" }
+fn category(grade) {
+  match grade {
+    "A", "B": { return "excellent" }
+    "C": { return "passing" }
+    _: { return "needs review" }
   }
 }
 for v in ["A", "C", "F"] {
-  print("{v} -> {categoria(v)}")
+  print("{v} -> {category(v)}")
 }
 
-# JSON potenzialmente malformato: il programma non crasha, gestisce.
-let sorgenti = [`{"ok": true}`, `{rotto`, `{"ok": false}`]
-for s in sorgenti {
+# Potentially malformed JSON: the program doesn't crash, it handles it.
+let sources = [`{"ok": true}`, `{broken`, `{"ok": false}`]
+for s in sources {
   try {
     let d = json.parse(s)
     print("ok = {d.ok}")
   } catch e {
-    print("JSON non valido, salto")
+    print("Invalid JSON, skipping")
   }
 }
 
-# Pipeline funzionale sulla stdlib
-let numeri = [5, 2, 8, 1, 9, 3]
-let pari_quadrati = map(filter(numeri, fn(x){ return x % 2 == 0 }), fn(x){ return x * x })
-print("pari al quadrato: {sort(pari_quadrati)}")
-print("somma: {sum(numeri)}, max: {max(numeri)}, min: {min(numeri)}")
+# Functional pipeline over the stdlib
+let numbers = [5, 2, 8, 1, 9, 3]
+let even_squares = map(filter(numbers, fn(x){ return x % 2 == 0 }), fn(x){ return x * x })
+print("even squared: {sort(even_squares)}")
+print("sum: {sum(numbers)}, max: {max(numbers)}, min: {min(numbers)}")

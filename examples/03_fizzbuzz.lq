@@ -1,4 +1,4 @@
-# FizzBuzz — il classico, in Loqi.
+# FizzBuzz — the classic, in Loqi.
 for n in range(1, 21) {
   if n % 15 == 0 {
     print("FizzBuzz")

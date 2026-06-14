@@ -1,63 +1,63 @@
-# Tour delle funzionalità di base di Loqi.
+# Tour of Loqi's basic features.
 
-# --- funzioni e ricorsione ---
+# --- functions and recursion ---
 fn fib(n) {
   if n < 2 { return n }
   return fib(n - 1) + fib(n - 2)
 }
 print("fib(10) = {fib(10)}")
 
-# --- chiusure (closure) ---
-fn contatore() {
+# --- closures ---
+fn counter() {
   let n = 0
   return fn() {
     n = n + 1
     return n
   }
 }
-let next = contatore()
-print("contatore: {next()} {next()} {next()}")
+let next = counter()
+print("counter: {next()} {next()} {next()}")
 
-# --- liste ---
-let numeri = [3, 1, 4, 1, 5, 9, 2, 6]
-let somma = 0
-for x in numeri {
-  somma = somma + x
+# --- lists ---
+let numbers = [3, 1, 4, 1, 5, 9, 2, 6]
+let total = 0
+for x in numbers {
+  total = total + x
 }
-print("somma = {somma}, lunghezza = {len(numeri)}")
+print("total = {total}, length = {len(numbers)}")
 
 # --- map ---
-let utente = { nome: "Ada", anni: 36, lingua: "Loqi" }
-print("{utente.nome} ha {utente.anni} anni")
-for k in utente {
-  print("  {k} -> {utente[k]}")
+let user = { name: "Ada", age: 36, language: "Loqi" }
+print("{user.name} is {user.age} years old")
+for k in user {
+  print("  {k} -> {user[k]}")
 }
 
-# --- controllo di flusso ---
+# --- control flow ---
 for i in range(1, 6) {
   if i % 2 == 0 {
-    print("{i} è pari")
+    print("{i} is even")
   } else {
-    print("{i} è dispari")
+    print("{i} is odd")
   }
 }
 
-# --- stringhe ---
-let frase = "loqi e veloce e semplice"
-let parole = split(frase, " ")
-print("parole: {len(parole)} -> {join(parole, "-")}")
-print(upper(frase))
+# --- strings ---
+let sentence = "loqi is fast and simple"
+let words = split(sentence, " ")
+print("words: {len(words)} -> {join(words, "-")}")
+print(upper(sentence))
 
-# --- funzioni di ordine superiore ---
-fn mappa(lista, f) {
+# --- higher-order functions ---
+fn map_list(list, f) {
   let out = []
-  for x in lista {
+  for x in list {
     push(out, f(x))
   }
   return out
 }
-let quadrati = mappa([1, 2, 3, 4], fn(x) { return x * x })
-print("quadrati = {quadrati}")
+let squares = map_list([1, 2, 3, 4], fn(x) { return x * x })
+print("squares = {squares}")
 
-assert(somma == 31, "la somma dovrebbe essere 31")
-print("Tutto ok ✓")
+assert(total == 31, "total should be 31")
+print("All ok ✓")

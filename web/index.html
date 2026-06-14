@@ -566,9 +566,9 @@
         </div>
         <pre><code id="hero-code"><span class="tc"># fetch, parse JSON, and summarize — all built in</span>
 <span class="tk">let</span> <span class="ti">repo</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="tb">http</span><span class="tp">.</span><span class="tf">get</span><span class="tp">(</span><span class="ts">"https://api.github.com/repos/python/cpython"</span><span class="tp">))</span>
-<span class="tf">print</span><span class="tp">(</span><span class="ts">"{repo.full_name}: {repo.stargazers_count} stelle"</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ts">"{repo.full_name}: {repo.stargazers_count} stars"</span><span class="tp">)</span>
 
-<span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Scrivi un haiku sul codice pulito"</span><span class="tp">)</span>
+<span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Write a haiku about clean code"</span><span class="tp">)</span>
 <span class="tf">print</span><span class="tp">(</span><span class="ti">poem</span><span class="tp">)</span></code></pre>
       </div>
     </div>
@@ -634,7 +634,7 @@
           <span class="bat-name">ai(prompt)</span>
         </div>
         <p class="bat-desc">A first-class LLM call to the Anthropic Messages API. Reads <code>ANTHROPIC_API_KEY</code>; pass a model as a second arg or via <code>LOQI_AI_MODEL</code>.</p>
-        <pre><code><span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Scrivi un haiku sul codice pulito"</span><span class="tp">)</span>
+        <pre><code><span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Write a haiku about clean code"</span><span class="tp">)</span>
 <span class="tf">print</span><span class="tp">(</span><span class="ti">poem</span><span class="tp">)</span></code></pre>
       </div>
 
@@ -674,7 +674,7 @@
           <span class="bat-name">read / write</span>
         </div>
         <p class="bat-desc"><code>read(path)</code> returns a whole file as a string; <code>write(path, content)</code> writes one back. Simple, whole-file I/O.</p>
-        <pre><code><span class="tf">write</span><span class="tp">(</span><span class="ts">"out.txt"</span><span class="tp">,</span> <span class="ts">"ciao"</span><span class="tp">)</span>
+        <pre><code><span class="tf">write</span><span class="tp">(</span><span class="ts">"out.txt"</span><span class="tp">,</span> <span class="ts">"hi"</span><span class="tp">)</span>
 <span class="tf">print</span><span class="tp">(</span><span class="tf">read</span><span class="tp">(</span><span class="ts">"out.txt"</span><span class="tp">))</span></code></pre>
       </div>
 
@@ -758,14 +758,14 @@
       <!-- SNIPPET-CLOSURE -->
       <div class="ex-card">
         <div class="ex-head">
-          <span class="ex-title">contatore.lq</span>
+          <span class="ex-title">counter.lq</span>
           <span class="ex-tag">closures</span>
         </div>
-        <pre><code><span class="tk">fn</span> <span class="tf">contatore</span><span class="tp">()</span> <span class="tp">{</span>
+        <pre><code><span class="tk">fn</span> <span class="tf">counter</span><span class="tp">()</span> <span class="tp">{</span>
   <span class="tk">let</span> <span class="ti">n</span> <span class="tp">=</span> <span class="tn">0</span>
   <span class="tk">return</span> <span class="tk">fn</span><span class="tp">()</span> <span class="tp">{</span> <span class="ti">n</span> <span class="tp">=</span> <span class="ti">n</span> <span class="tp">+</span> <span class="tn">1</span><span class="tp">;</span> <span class="tk">return</span> <span class="ti">n</span> <span class="tp">}</span>
 <span class="tp">}</span>
-<span class="tk">let</span> <span class="ti">next</span> <span class="tp">=</span> <span class="tf">contatore</span><span class="tp">()</span>
+<span class="tk">let</span> <span class="ti">next</span> <span class="tp">=</span> <span class="tf">counter</span><span class="tp">()</span>
 <span class="tf">print</span><span class="tp">(</span><span class="tf">next</span><span class="tp">(),</span> <span class="tf">next</span><span class="tp">(),</span> <span class="tf">next</span><span class="tp">())</span>   <span class="tc"># 1 2 3</span></code></pre>
       </div>
 
@@ -776,8 +776,8 @@
           <span class="ex-tag">ai + json</span>
         </div>
         <pre><code><span class="tc"># ask the model for JSON, then parse it natively</span>
-<span class="tk">let</span> <span class="ti">data</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="tf">ai</span><span class="tp">(</span><span class="ts">"Estrai nome e anno come JSON da: "</span> <span class="tp">+</span> <span class="ti">testo</span><span class="tp">))</span>
-<span class="tf">print</span><span class="tp">(</span><span class="ti">data</span><span class="tp">.</span><span class="ti">nome</span><span class="tp">)</span></code></pre>
+<span class="tk">let</span> <span class="ti">data</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="tf">ai</span><span class="tp">(</span><span class="ts">"Extract name and year as JSON from: "</span> <span class="tp">+</span> <span class="ti">text</span><span class="tp">))</span>
+<span class="tf">print</span><span class="tp">(</span><span class="ti">data</span><span class="tp">.</span><span class="ti">name</span><span class="tp">)</span></code></pre>
       </div>
 
       <!-- SNIPPET-JSON-RAW -->
@@ -848,7 +848,7 @@
 
 <span class="tc"># 3. run your first program</span>
 <span class="tp">$</span> ./build/loqi examples/01_hello.lq
-<span class="ts">Ciao, mondo!</span></code></pre>
+<span class="ts">Hello, world!</span></code></pre>
       </div>
     </div>
   </div>

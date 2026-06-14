@@ -197,7 +197,7 @@ static void runtime_error(Interp *I, int line, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     int n = snprintf(I->err_msg, sizeof(I->err_msg),
-                     "errore a runtime [%s:%d]: ", I->path ? I->path : "?", line);
+                     "runtime error [%s:%d]: ", I->path ? I->path : "?", line);
     n = clamp_written(n, sizeof(I->err_msg));
     vsnprintf(I->err_msg + n, sizeof(I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
@@ -414,10 +414,10 @@ static Token lex_number(Lexer *L) {
     errno = 0;
     if (is_float) {
         tok.float_val = strtod(buf, NULL);
-        if (errno == ERANGE) return error_token(L, "numero in virgola mobile fuori range");
+        if (errno == ERANGE) return error_token(L, "floating-point number out of range");
     } else {
         tok.int_val = strtoll(buf, NULL, 10);
-        if (errno == ERANGE) return error_token(L, "intero fuori dal range a 64 bit");
+        if (errno == ERANGE) return error_token(L, "integer out of 64-bit range");
     }
     return tok;
 }
@@ -436,7 +436,7 @@ static Token lex_string(Lexer *L) {
         if ((unsigned char)c == 0x01 || (unsigned char)c == 0x02) {
             /* these bytes are reserved as internal escaped-brace sentinels */
             free(buf);
-            return error_token(L, "byte di controllo non valido nella stringa");
+            return error_token(L, "invalid control byte in string");
         }
         if (interp == 0) {
             if (c == '\\') {
@@ -479,8 +479,8 @@ static Token lex_string(Lexer *L) {
     if (is_at_end(L)) {
         free(buf);
         return error_token(L, interp > 0
-            ? "interpolazione '{' non chiusa nella stringa (per una graffa letterale usa \\{ )"
-            : "stringa non terminata");
+            ? "unclosed interpolation '{' in string (for a literal brace use \\{ )"
+            : "unterminated string");
     }
     advance_ch(L); /* closing quote */
     PUSH('\0');
@@ -496,7 +496,7 @@ static Token lex_raw_string(Lexer *L) {
     char *buf = xmalloc(64); size_t cap = 64, len = 0;
 #define PUSHR(c) do { if (len + 1 >= cap) { cap *= 2; buf = xrealloc(buf, cap); } buf[len++] = (c); } while (0)
     for (;;) {
-        if (is_at_end(L)) { free(buf); return error_token(L, "raw string `...` non terminata"); }
+        if (is_at_end(L)) { free(buf); return error_token(L, "unterminated raw string `...`"); }
         char c = advance_ch(L);
         if (c == '`') {
             if (peek_ch(L) == '`') { advance_ch(L); PUSHR('`'); continue; } /* `` -> literal ` */
@@ -535,7 +535,7 @@ static Token lex_next(Lexer *L) {
         case ',': return make_token(L, T_COMMA);
         case '.': return make_token(L, T_DOT);
         case ':': return make_token(L, T_COLON);
-        case ';': return make_token(L, T_NEWLINE); /* ';' separa le istruzioni come un a capo */
+        case ';': return make_token(L, T_NEWLINE); /* ';' separates statements like a newline */
         case '+': return make_token(L, T_PLUS);
         case '-': return make_token(L, T_MINUS);
         case '*': return make_token(L, T_STAR);
@@ -543,13 +543,13 @@ static Token lex_next(Lexer *L) {
         case '%': return make_token(L, T_PERCENT);
         case '=': return make_token(L, match_ch(L, '=') ? T_EQEQ : T_EQ);
         case '!': return match_ch(L, '=') ? make_token(L, T_BANGEQ)
-                                          : error_token(L, "carattere inatteso '!' (usa 'not')");
+                                          : error_token(L, "unexpected character '!' (use 'not')");
         case '<': return make_token(L, match_ch(L, '=') ? T_LTEQ : T_LT);
         case '>': return make_token(L, match_ch(L, '=') ? T_GTEQ : T_GT);
         case '"': return lex_string(L);
         case '`': return lex_raw_string(L);
     }
-    return error_token(L, "carattere inatteso");
+    return error_token(L, "unexpected character");
 }
 
 /* ===========================================================================
@@ -604,11 +604,11 @@ static void parser_error_at(Parser *P, Token *t, const char *msg) {
     if (P->had_error) return; /* report first only */
     P->had_error = true;
     if (t->type == T_EOF)
-        fprintf(stderr, "errore di sintassi [%s:%d] a fine file: %s\n", P->I->path, t->line, msg);
+        fprintf(stderr, "syntax error [%s:%d] at end of file: %s\n", P->I->path, t->line, msg);
     else if (t->type == T_ERROR)
-        fprintf(stderr, "errore di sintassi [%s:%d]: %.*s\n", P->I->path, t->line, t->length, t->start);
+        fprintf(stderr, "syntax error [%s:%d]: %.*s\n", P->I->path, t->line, t->length, t->start);
     else
-        fprintf(stderr, "errore di sintassi [%s:%d] a '%.*s': %s\n", P->I->path, t->line, t->length, t->start, msg);
+        fprintf(stderr, "syntax error [%s:%d] at '%.*s': %s\n", P->I->path, t->line, t->length, t->start, msg);
 }
 
 static void p_advance(Parser *P) {
@@ -634,7 +634,7 @@ static void skip_newlines(Parser *P) { while (p_check(P, T_NEWLINE)) p_advance(P
 static void end_statement(Parser *P) {
     if (p_check(P, T_NEWLINE)) { p_advance(P); return; }
     if (p_check(P, T_RBRACE) || p_check(P, T_EOF)) return;
-    parser_error_at(P, &P->cur, "atteso a capo a fine istruzione");
+    parser_error_at(P, &P->cur, "expected newline at end of statement");
 }
 
 static Node *parse_expression(Parser *P);
@@ -670,7 +670,7 @@ static Node *parse_primary(Parser *P) {
     }
     if (p_match(P, T_LPAREN)) {
         Node *e = parse_expression(P);
-        p_consume(P, T_RPAREN, "attesa ')'");
+        p_consume(P, T_RPAREN, "expected ')'");
         return e;
     }
     if (p_match(P, T_LBRACKET)) { /* list literal */
@@ -684,7 +684,7 @@ static Node *parse_primary(Parser *P) {
             } while (p_match(P, T_COMMA));
         }
         skip_newlines(P);
-        p_consume(P, T_RBRACKET, "attesa ']'");
+        p_consume(P, T_RBRACKET, "expected ']'");
         return n;
     }
     if (p_match(P, T_LBRACE)) { /* map literal: { key: val, "str": val } */
@@ -702,7 +702,7 @@ static Node *parse_primary(Parser *P) {
                 } else {
                     key = parse_expression(P);
                 }
-                p_consume(P, T_COLON, "atteso ':' nella mappa");
+                p_consume(P, T_COLON, "expected ':' in map");
                 skip_newlines(P);
                 Node *val = parse_expression(P);
                 node_add(&n->items, &n->item_count, key);
@@ -711,26 +711,26 @@ static Node *parse_primary(Parser *P) {
             } while (p_match(P, T_COMMA));
         }
         skip_newlines(P);
-        p_consume(P, T_RBRACE, "attesa '}'");
+        p_consume(P, T_RBRACE, "expected '}'");
         return n;
     }
     if (p_match(P, T_FN)) { /* anonymous function expression */
         Node *n = new_node(N_FN, P->prev.line);
-        p_consume(P, T_LPAREN, "attesa '(' dopo 'fn'");
+        p_consume(P, T_LPAREN, "expected '(' after 'fn'");
         if (!p_check(P, T_RPAREN)) {
             do {
-                p_consume(P, T_IDENT, "atteso nome parametro");
+                p_consume(P, T_IDENT, "expected parameter name");
                 Node *param = new_node(N_IDENT, P->prev.line);
                 param->name = copy_lexeme(&P->prev);
                 node_add(&n->items, &n->item_count, param);
             } while (p_match(P, T_COMMA));
         }
-        p_consume(P, T_RPAREN, "attesa ')'");
+        p_consume(P, T_RPAREN, "expected ')'");
         skip_newlines(P);
         n->a = parse_block(P);
         return n;
     }
-    parser_error_at(P, &P->cur, "attesa un'espressione");
+    parser_error_at(P, &P->cur, "expected an expression");
     return new_node(N_NIL, P->cur.line);
 }
 
@@ -750,16 +750,16 @@ static Node *parse_postfix(Parser *P) {
                 } while (p_match(P, T_COMMA));
             }
             skip_newlines(P);
-            p_consume(P, T_RPAREN, "attesa ')' dopo gli argomenti");
+            p_consume(P, T_RPAREN, "expected ')' after arguments");
             expr = call;
         } else if (p_match(P, T_LBRACKET)) {
             Node *idx = new_node(N_INDEX, P->prev.line);
             idx->a = expr;
             idx->b = parse_expression(P);
-            p_consume(P, T_RBRACKET, "attesa ']'");
+            p_consume(P, T_RBRACKET, "expected ']'");
             expr = idx;
         } else if (p_match(P, T_DOT)) {
-            p_consume(P, T_IDENT, "atteso nome attributo dopo '.'");
+            p_consume(P, T_IDENT, "expected attribute name after '.'");
             Node *mem = new_node(N_MEMBER, P->prev.line);
             mem->a = expr;
             mem->name = copy_lexeme(&P->prev);
@@ -771,7 +771,7 @@ static Node *parse_postfix(Parser *P) {
 
 static Node *parse_unary(Parser *P) {
     if (++P->depth > MAX_PARSE_DEPTH) {
-        parser_error_at(P, &P->cur, "espressione troppo annidata");
+        parser_error_at(P, &P->cur, "expression nesting too deep");
         P->depth--;
         return new_node(N_NIL, P->cur.line);
     }
@@ -822,7 +822,7 @@ static Node *parse_expression(Parser *P) {
         /* assignment: target = value (right associative) */
         Node *value = parse_expression(P);
         if (expr->type != N_IDENT && expr->type != N_INDEX && expr->type != N_MEMBER) {
-            parser_error_at(P, &P->prev, "destinazione di assegnamento non valida");
+            parser_error_at(P, &P->prev, "invalid assignment target");
         }
         Node *n = new_node(N_ASSIGN, P->prev.line);
         n->a = expr; n->b = value;
@@ -832,20 +832,20 @@ static Node *parse_expression(Parser *P) {
 }
 
 static Node *parse_block(Parser *P) {
-    p_consume(P, T_LBRACE, "attesa '{'");
+    p_consume(P, T_LBRACE, "expected '{'");
     Node *block = new_node(N_BLOCK, P->prev.line);
     skip_newlines(P);
     while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
         node_add(&block->items, &block->item_count, parse_statement(P));
         skip_newlines(P);
     }
-    p_consume(P, T_RBRACE, "attesa '}'");
+    p_consume(P, T_RBRACE, "expected '}'");
     return block;
 }
 
 static Node *parse_let(Parser *P) {
     int line = P->prev.line;
-    p_consume(P, T_IDENT, "atteso nome di variabile dopo 'let'");
+    p_consume(P, T_IDENT, "expected variable name after 'let'");
     Node *n = new_node(N_LET, line);
     n->name = copy_lexeme(&P->prev);
     if (p_match(P, T_EQ)) n->a = parse_expression(P);
@@ -856,19 +856,19 @@ static Node *parse_let(Parser *P) {
 
 static Node *parse_fn_decl(Parser *P) {
     int line = P->prev.line;
-    p_consume(P, T_IDENT, "atteso nome funzione dopo 'fn'");
+    p_consume(P, T_IDENT, "expected function name after 'fn'");
     Node *n = new_node(N_FN, line);
     n->name = copy_lexeme(&P->prev);
-    p_consume(P, T_LPAREN, "attesa '(' dopo il nome");
+    p_consume(P, T_LPAREN, "expected '(' after the name");
     if (!p_check(P, T_RPAREN)) {
         do {
-            p_consume(P, T_IDENT, "atteso nome parametro");
+            p_consume(P, T_IDENT, "expected parameter name");
             Node *param = new_node(N_IDENT, P->prev.line);
             param->name = copy_lexeme(&P->prev);
             node_add(&n->items, &n->item_count, param);
         } while (p_match(P, T_COMMA));
     }
-    p_consume(P, T_RPAREN, "attesa ')'");
+    p_consume(P, T_RPAREN, "expected ')'");
     skip_newlines(P);
     n->a = parse_block(P);
     return n; /* declaration: has a name */
@@ -901,9 +901,9 @@ static Node *parse_while(Parser *P) {
 static Node *parse_for(Parser *P) {
     int line = P->prev.line;
     Node *n = new_node(N_FOR, line);
-    p_consume(P, T_IDENT, "atteso nome variabile in 'for'");
+    p_consume(P, T_IDENT, "expected variable name in 'for'");
     n->name = copy_lexeme(&P->prev);
-    p_consume(P, T_IN, "atteso 'in' nel ciclo for");
+    p_consume(P, T_IN, "expected 'in' in for loop");
     n->a = parse_expression(P);  /* iterable */
     skip_newlines(P);
     n->b = parse_block(P);
@@ -915,7 +915,7 @@ static Node *parse_match(Parser *P) {
     int line = P->prev.line;
     Node *subj = parse_expression(P);
     skip_newlines(P);
-    p_consume(P, T_LBRACE, "attesa '{' dopo l'espressione di match");
+    p_consume(P, T_LBRACE, "expected '{' after the match expression");
 
     Node *outer = new_node(N_BLOCK, line);
     Node *letm = new_node(N_LET, line); letm->name = "$m"; letm->a = subj;
@@ -928,7 +928,7 @@ static Node *parse_match(Parser *P) {
         Token arm_tok = P->cur;
         /* A default arm must be the last arm: reject any arm after '_'. */
         if (default_body) {
-            parser_error_at(P, &P->cur, "il ramo di default '_' deve essere l'ultimo di un match");
+            parser_error_at(P, &P->cur, "the default '_' arm must be last in a match");
             return outer;
         }
         bool is_default = false;
@@ -949,10 +949,10 @@ static Node *parse_match(Parser *P) {
         }
         /* '_' cannot be combined with other patterns: it would silently swallow them. */
         if (is_default && cond) {
-            parser_error_at(P, &arm_tok, "il pattern '_' non puo' essere combinato con altri pattern");
+            parser_error_at(P, &arm_tok, "the '_' pattern cannot be combined with other patterns");
             return outer;
         }
-        p_consume(P, T_COLON, "atteso ':' dopo il pattern di match");
+        p_consume(P, T_COLON, "expected ':' after the match pattern");
         skip_newlines(P);
         Node *body = parse_block(P);
         if (is_default) {
@@ -964,7 +964,7 @@ static Node *parse_match(Parser *P) {
         }
         skip_newlines(P);
     }
-    p_consume(P, T_RBRACE, "attesa '}' a fine match");
+    p_consume(P, T_RBRACE, "expected '}' at end of match");
     if (default_body) { if (last_if) last_if->c = default_body; else first_if = default_body; }
     if (first_if) node_add(&outer->items, &outer->item_count, first_if);
     return outer;
@@ -977,7 +977,7 @@ static Node *parse_try(Parser *P) {
     skip_newlines(P);
     n->a = parse_block(P);                    /* try body */
     skip_newlines(P);
-    p_consume(P, T_CATCH, "atteso 'catch' dopo il blocco try");
+    p_consume(P, T_CATCH, "expected 'catch' after the try block");
     if (p_check(P, T_IDENT)) { p_advance(P); n->name = copy_lexeme(&P->prev); } /* error variable */
     else n->name = NULL;
     skip_newlines(P);
@@ -1001,7 +1001,7 @@ static Node *parse_statement(Parser *P) {
             node_add(&block->items, &block->item_count, parse_statement(P));
             skip_newlines(P);
         }
-        p_consume(P, T_RBRACE, "attesa '}'");
+        p_consume(P, T_RBRACE, "expected '}'");
         return block;
     }
     if (p_match(P, T_RETURN)) {
@@ -1015,12 +1015,12 @@ static Node *parse_statement(Parser *P) {
     if (p_match(P, T_CONTINUE)) { Node *n = new_node(N_CONTINUE, P->prev.line); end_statement(P); return n; }
     if (p_match(P, T_IMPORT)) {
         Node *n = new_node(N_IMPORT, P->prev.line);
-        p_consume(P, T_STRING, "atteso percorso del modulo come stringa");
+        p_consume(P, T_STRING, "expected module path as a string");
         n->name = P->prev.str_val;
         /* optional: as <name>  (namespaced import) */
         if (p_check(P, T_IDENT) && P->cur.length == 2 && memcmp(P->cur.start, "as", 2) == 0) {
             p_advance(P);
-            p_consume(P, T_IDENT, "atteso un nome dopo 'as'");
+            p_consume(P, T_IDENT, "expected a name after 'as'");
             n->literal = string_val(P->I, P->prev.start, P->prev.length);
         }
         end_statement(P);
@@ -1111,7 +1111,7 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
             if (s[i] == '}') i++;
             Node *expr = parse_expr_from_source(P->I, ebuf);
             free(ebuf);
-            if (!expr) { parser_error_at(P, strtok, "espressione non valida in interpolazione"); expr = new_node(N_NIL, line); }
+            if (!expr) { parser_error_at(P, strtok, "invalid expression in interpolation"); expr = new_node(N_NIL, line); }
             /* concat is always string-typed here (starts as a string literal), so
              * '+' coerces the interpolated value via the VM's string concatenation.
              * No dependency on a (shadowable) global 'str'. */
@@ -1475,7 +1475,7 @@ static void emit_u16(Compiler *C, int v, int line) {
 }
 static int add_const(Compiler *C, Value v) {
     int idx = chunk_add_const(cur_chunk(C), v);
-    if (idx > 0xffff) { *C->had_error = true; fprintf(stderr, "troppe costanti in una funzione\n"); return 0; }
+    if (idx > 0xffff) { *C->had_error = true; fprintf(stderr, "too many constants in a function\n"); return 0; }
     return idx;
 }
 static void emit_const(Compiler *C, Value v, int line) {
@@ -1490,14 +1490,14 @@ static int emit_jump(Compiler *C, uint8_t op, int line) {
 }
 static void patch_jump(Compiler *C, int offset) {
     int jump = cur_chunk(C)->count - offset - 2;
-    if (jump > 0xffff) { *C->had_error = true; fprintf(stderr, "salto troppo lungo\n"); }
+    if (jump > 0xffff) { *C->had_error = true; fprintf(stderr, "jump too long\n"); }
     cur_chunk(C)->code[offset] = (uint8_t)((jump >> 8) & 0xff);
     cur_chunk(C)->code[offset + 1] = (uint8_t)(jump & 0xff);
 }
 static void emit_loop(Compiler *C, int loop_start, int line) {
     emit_byte(C, OP_LOOP, line);
     int offset = cur_chunk(C)->count - loop_start + 2;
-    if (offset > 0xffff) { *C->had_error = true; fprintf(stderr, "ciclo troppo lungo\n"); }
+    if (offset > 0xffff) { *C->had_error = true; fprintf(stderr, "loop too long\n"); }
     emit_byte(C, (uint8_t)((offset >> 8) & 0xff), line);
     emit_byte(C, (uint8_t)(offset & 0xff), line);
 }
@@ -1521,7 +1521,7 @@ static void end_scope(Compiler *C, int line) {
     }
 }
 static int add_local(Compiler *C, const char *name, int len) {
-    if (C->local_count >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "troppe variabili locali\n"); return -1; }
+    if (C->local_count >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "too many local variables\n"); return -1; }
     CompLocal *l = &C->locals[C->local_count++];
     l->name = name; l->name_len = len; l->depth = -1; l->is_captured = false;
     return C->local_count - 1;
@@ -1541,7 +1541,7 @@ static int add_upvalue(Compiler *C, uint8_t index, bool is_local) {
     int n = C->proto->upvalue_count;
     for (int i = 0; i < n; i++)
         if (C->upvalues[i].index == index && C->upvalues[i].is_local == is_local) return i;
-    if (n >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "troppi upvalue\n"); return 0; }
+    if (n >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "too many upvalues\n"); return 0; }
     C->upvalues[n].index = index; C->upvalues[n].is_local = is_local;
     return C->proto->upvalue_count++;
 }
@@ -1591,7 +1591,7 @@ static void compile_assign(Compiler *C, Node *n) {
         emit_u16(C, name_const(C, t->name), n->line);
     } else {
         *C->had_error = true;
-        fprintf(stderr, "destinazione di assegnamento non valida\n");
+        fprintf(stderr, "invalid assignment target\n");
     }
 }
 
@@ -1602,12 +1602,12 @@ static void compile_expr(Compiler *C, Node *n) {
         case N_INT: case N_FLOAT: case N_STR: emit_const(C, n->literal, n->line); break;
         case N_IDENT: named_get(C, n->name, n->line); break;
         case N_LIST:
-            if (n->item_count > 0xffff) { *C->had_error = true; fprintf(stderr, "troppi elementi nel literal di list (max 65535)\n"); break; }
+            if (n->item_count > 0xffff) { *C->had_error = true; fprintf(stderr, "too many elements in list literal (max 65535)\n"); break; }
             for (int i = 0; i < n->item_count; i++) compile_expr(C, n->items[i]);
             emit_byte(C, OP_BUILD_LIST, n->line); emit_u16(C, n->item_count, n->line);
             break;
         case N_MAP:
-            if (n->item_count > 0xffff) { *C->had_error = true; fprintf(stderr, "troppe coppie nel literal di map (max 65535)\n"); break; }
+            if (n->item_count > 0xffff) { *C->had_error = true; fprintf(stderr, "too many pairs in map literal (max 65535)\n"); break; }
             for (int i = 0; i < n->item_count; i++) {
                 compile_expr(C, n->items[i]);
                 compile_expr(C, n->items2[i]);
@@ -1658,7 +1658,7 @@ static void compile_expr(Compiler *C, Node *n) {
             break;
         }
         case N_CALL: {
-            if (n->item_count > 255) { *C->had_error = true; fprintf(stderr, "troppi argomenti in una chiamata (max 255)\n"); break; }
+            if (n->item_count > 255) { *C->had_error = true; fprintf(stderr, "too many arguments in a call (max 255)\n"); break; }
             compile_expr(C, n->a);
             for (int i = 0; i < n->item_count; i++) compile_expr(C, n->items[i]);
             emit_byte(C, OP_CALL, n->line); emit_byte(C, (uint8_t)n->item_count, n->line);
@@ -1674,14 +1674,14 @@ static void compile_expr(Compiler *C, Node *n) {
             break;
         case N_ASSIGN: compile_assign(C, n); break;
         case N_FN: compile_function(C, n, n->line); break;
-        default: *C->had_error = true; fprintf(stderr, "espressione non compilabile\n"); break;
+        default: *C->had_error = true; fprintf(stderr, "expression cannot be compiled\n"); break;
     }
 }
 
 static void compile_break(Compiler *C, int line) {
-    if (!C->loop) { *C->had_error = true; fprintf(stderr, "'break' fuori da un ciclo\n"); return; }
+    if (!C->loop) { *C->had_error = true; fprintf(stderr, "'break' outside a loop\n"); return; }
     if (C->loop->break_count >= MAX_BREAKS_PER_LOOP) {
-        *C->had_error = true; fprintf(stderr, "troppi 'break' in un singolo ciclo\n"); return;
+        *C->had_error = true; fprintf(stderr, "too many 'break' in a single loop\n"); return;
     }
     /* unwind any try handlers opened inside the loop body so the runtime
        handler stack is restored to the loop's baseline before leaving it */
@@ -1693,7 +1693,7 @@ static void compile_break(Compiler *C, int line) {
     C->loop->breaks[C->loop->break_count++] = j;
 }
 static void compile_continue(Compiler *C, int line) {
-    if (!C->loop) { *C->had_error = true; fprintf(stderr, "'continue' fuori da un ciclo\n"); return; }
+    if (!C->loop) { *C->had_error = true; fprintf(stderr, "'continue' outside a loop\n"); return; }
     /* unwind any try handlers opened inside the loop body (see compile_break) */
     for (int d = C->try_depth; d > C->loop->try_depth_base; d--)
         emit_byte(C, OP_TRY_END, line);
@@ -1772,7 +1772,7 @@ static void compile_for(Compiler *C, Node *n) {
 
 static void compile_function(Compiler *enc, Node *fn_node, int line) {
     if (fn_node->item_count > 255) {
-        *enc->had_error = true; fprintf(stderr, "troppi parametri in una funzione (max 255)\n");
+        *enc->had_error = true; fprintf(stderr, "too many parameters in a function (max 255)\n");
     }
     Compiler sub;
     init_compiler(&sub, enc->I, enc, fn_node->name, enc->had_error);
@@ -1896,12 +1896,33 @@ struct VM {
 };
 
 static int run_source(Interp *I, const char *src, const char *path);
-static Value run_module_ns(Interp *I, const char *path);
+static Value run_module_ns(Interp *I, char *path /* owned: freed by callee */);
 static void vm_error(VM *vm, const char *fmt, ...);
+
+/* Resolve a module path relative to the directory of the importing file, so a
+ * module's imports work no matter the current working directory (the pitfall
+ * CWD-relative resolution creates). Absolute paths (leading '/') pass through.
+ * `importer` is the path of the file doing the import (NULL at the REPL/top).
+ * Returns a freshly malloc'd string the caller owns. */
+static char *resolve_import_path(const char *importer, const char *module) {
+    const char *slash = importer ? strrchr(importer, '/') : NULL;
+    if (module[0] == '/' || !slash) {            /* absolute, or importer in CWD */
+        size_t n = strlen(module);
+        char *out = xmalloc(n + 1);
+        memcpy(out, module, n + 1);
+        return out;
+    }
+    size_t dirlen = (size_t)(slash - importer) + 1; /* keep the trailing '/' */
+    size_t mlen = strlen(module);
+    char *out = xmalloc(dirlen + mlen + 1);
+    memcpy(out, importer, dirlen);
+    memcpy(out + dirlen, module, mlen + 1);
+    return out;
+}
 
 static inline void vm_push(VM *vm, Value v) {
     if (vm->stack_top >= vm->stack + STACK_MAX)
-        vm_error(vm, "stack dei valori esaurito (espressione o struttura troppo grande)");
+        vm_error(vm, "value stack overflow (expression or structure too large)");
     *vm->stack_top++ = v;
 }
 static inline Value vm_pop(VM *vm) { return *(--vm->stack_top); }
@@ -1914,7 +1935,7 @@ static void vm_error(VM *vm, const char *fmt, ...) {
     int line = (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
     va_list ap; va_start(ap, fmt);
     int n = snprintf(vm->I->err_msg, sizeof(vm->I->err_msg),
-                     "errore a runtime [%s:%d]: ", vm->I->path ? vm->I->path : "?", line);
+                     "runtime error [%s:%d]: ", vm->I->path ? vm->I->path : "?", line);
     n = clamp_written(n, sizeof(vm->I->err_msg));
     vsnprintf(vm->I->err_msg + n, sizeof(vm->I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
@@ -1960,9 +1981,9 @@ static void close_upvalues(VM *vm, Value *last) {
 
 static void vm_call_closure(VM *vm, ObjClosure *cl, int argc) {
     if (argc != cl->proto->arity)
-        vm_error(vm, "%s() attende %d argomenti, ricevuti %d",
+        vm_error(vm, "%s() expects %d arguments, got %d",
                  cl->proto->name ? cl->proto->name : "fn", cl->proto->arity, argc);
-    if (vm->frame_count == FRAMES_MAX) vm_error(vm, "stack di chiamate esaurito (ricorsione troppo profonda)");
+    if (vm->frame_count == FRAMES_MAX) vm_error(vm, "call stack overflow (recursion too deep)");
     CallFrame *frame = &vm->frames[vm->frame_count++];
     frame->closure = cl;
     frame->ip = cl->proto->chunk.code;
@@ -1973,13 +1994,13 @@ static void vm_call_value(VM *vm, Value callee, int argc) {
     if (IS_NATIVE(callee)) {
         ObjNative *nat = AS_NATIVE(callee);
         if (nat->arity >= 0 && nat->arity != argc)
-            vm_error(vm, "%s() attende %d argomenti, ricevuti %d", nat->name, nat->arity, argc);
+            vm_error(vm, "%s() expects %d arguments, got %d", nat->name, nat->arity, argc);
         Value result = nat->fn(vm->I, argc, vm->stack_top - argc);
         vm->stack_top -= argc + 1;
         vm_push(vm, result);
         return;
     }
-    vm_error(vm, "valore di tipo %s non è chiamabile", type_name(callee));
+    vm_error(vm, "value of type %s is not callable", type_name(callee));
 }
 
 /* numeric / string / list binary operators (equality handled inline) */
@@ -2002,42 +2023,42 @@ static void vm_binary(VM *vm, OpCode op) {
         vm_push(vm, obj_val((Obj *)r)); return;
     }
     if (!IS_NUM(a) || !IS_NUM(b))
-        vm_error(vm, "operatore aritmetico non supportato tra %s e %s", type_name(a), type_name(b));
+        vm_error(vm, "unsupported arithmetic operator between %s and %s", type_name(a), type_name(b));
     bool both_int = IS_INT(a) && IS_INT(b);
     switch (op) {
         case OP_ADD:
-            if (both_int) { int64_t r; if (__builtin_add_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "overflow intero in '+'"); vm_push(vm, int_val(r)); }
+            if (both_int) { int64_t r; if (__builtin_add_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "integer overflow in '+'"); vm_push(vm, int_val(r)); }
             else vm_push(vm, float_val(as_double(a) + as_double(b)));
             break;
         case OP_SUB:
-            if (both_int) { int64_t r; if (__builtin_sub_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "overflow intero in '-'"); vm_push(vm, int_val(r)); }
+            if (both_int) { int64_t r; if (__builtin_sub_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "integer overflow in '-'"); vm_push(vm, int_val(r)); }
             else vm_push(vm, float_val(as_double(a) - as_double(b)));
             break;
         case OP_MUL:
-            if (both_int) { int64_t r; if (__builtin_mul_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "overflow intero in '*'"); vm_push(vm, int_val(r)); }
+            if (both_int) { int64_t r; if (__builtin_mul_overflow(AS_INT(a), AS_INT(b), &r)) vm_error(vm, "integer overflow in '*'"); vm_push(vm, int_val(r)); }
             else vm_push(vm, float_val(as_double(a) * as_double(b)));
             break;
         case OP_DIV: {
             double db = as_double(b);
-            if (db == 0.0) vm_error(vm, "divisione per zero");
+            if (db == 0.0) vm_error(vm, "division by zero");
             vm_push(vm, float_val(as_double(a) / db)); break;
         }
         case OP_FLOORDIV:
             if (both_int) {
-                if (AS_INT(b) == 0) vm_error(vm, "divisione per zero");
+                if (AS_INT(b) == 0) vm_error(vm, "division by zero");
                 if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) { vm_push(vm, int_val(INT64_MIN)); break; } /* avoid overflow UB */
                 int64_t q = AS_INT(a) / AS_INT(b);
                 if ((AS_INT(a) % AS_INT(b) != 0) && ((AS_INT(a) < 0) != (AS_INT(b) < 0))) q--;
                 vm_push(vm, int_val(q));
             } else {
                 double db = as_double(b);
-                if (db == 0.0) vm_error(vm, "divisione per zero");
+                if (db == 0.0) vm_error(vm, "division by zero");
                 vm_push(vm, float_val(floor(as_double(a) / db)));
             }
             break;
         case OP_MOD:
             if (both_int) {
-                if (AS_INT(b) == 0) vm_error(vm, "modulo per zero");
+                if (AS_INT(b) == 0) vm_error(vm, "modulo by zero");
                 if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) { vm_push(vm, int_val(0)); break; } /* avoid overflow UB */
                 vm_push(vm, int_val(AS_INT(a) % AS_INT(b)));
             } else vm_push(vm, float_val(fmod(as_double(a), as_double(b))));
@@ -2046,7 +2067,7 @@ static void vm_binary(VM *vm, OpCode op) {
         case OP_LESS_EQUAL:    vm_push(vm, bool_val(as_double(a) <= as_double(b))); break;
         case OP_GREATER:       vm_push(vm, bool_val(as_double(a) >  as_double(b))); break;
         case OP_GREATER_EQUAL: vm_push(vm, bool_val(as_double(a) >= as_double(b))); break;
-        default: vm_error(vm, "operatore binario sconosciuto");
+        default: vm_error(vm, "unknown binary operator");
     }
 }
 
@@ -2066,7 +2087,7 @@ static Value iter_seq(VM *vm, Value it) {
         for (int i = 0; i < s->length; i++) list_push(l, string_val(I, s->chars + i, 1));
         return obj_val((Obj *)l);
     }
-    vm_error(vm, "il tipo %s non è iterabile", type_name(it));
+    vm_error(vm, "type %s is not iterable", type_name(it));
     return NIL_VAL;
 }
 
@@ -2136,10 +2157,10 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_NEGATE: {
                 Value v = vm_pop(vm);
                 if (IS_INT(v)) {
-                    if (AS_INT(v) == INT64_MIN) vm_error(vm, "overflow intero in negazione");
+                    if (AS_INT(v) == INT64_MIN) vm_error(vm, "integer overflow in negation");
                     vm_push(vm, int_val(-AS_INT(v)));
                 } else if (IS_FLOAT(v)) vm_push(vm, float_val(-AS_FLOAT(v)));
-                else vm_error(vm, "'-' richiede un numero, trovato %s", type_name(v));
+                else vm_error(vm, "'-' requires a number, got %s", type_name(v));
                 break;
             }
             case OP_NOT: vm_push(vm, bool_val(!is_truthy(vm_pop(vm)))); break;
@@ -2181,7 +2202,7 @@ static void run_vm(VM *vm, int stop_at) {
             }
             case OP_TRY_BEGIN: {
                 uint16_t off = READ_U16();
-                if (vm->handler_count >= MAX_HANDLERS) vm_error(vm, "troppi 'try' annidati");
+                if (vm->handler_count >= MAX_HANDLERS) vm_error(vm, "too many nested 'try' blocks");
                 TryHandler *h = &vm->handlers[vm->handler_count++];
                 h->catch_ip = frame->ip + off;
                 h->stack_top = vm->stack_top;
@@ -2215,43 +2236,43 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_GET_INDEX: {
                 Value idx = vm_pop(vm), coll = vm_pop(vm);
                 if (IS_LIST(coll)) {
-                    if (!IS_INT(idx)) vm_error(vm, "indice di list deve essere int");
+                    if (!IS_INT(idx)) vm_error(vm, "list index must be an int");
                     ObjList *l = AS_LIST(coll);
                     int64_t i = AS_INT(idx); if (i < 0) i += l->count;
-                    if (i < 0 || i >= l->count) vm_error(vm, "indice %lld fuori dai limiti (len %d)", (long long)AS_INT(idx), l->count);
+                    if (i < 0 || i >= l->count) vm_error(vm, "index %lld out of bounds (len %d)", (long long)AS_INT(idx), l->count);
                     vm_push(vm, l->items[i]);
                 } else if (IS_MAP(coll)) {
                     char *key = value_to_cstr(vm->I, idx);
                     Value *slot = map_get(AS_MAP(coll), key); free(key);
                     vm_push(vm, slot ? *slot : NIL_VAL);
                 } else if (IS_STRING(coll)) {
-                    if (!IS_INT(idx)) vm_error(vm, "indice di str deve essere int");
+                    if (!IS_INT(idx)) vm_error(vm, "string index must be an int");
                     ObjString *s = AS_STRING(coll);
                     int64_t i = AS_INT(idx); if (i < 0) i += s->length;
-                    if (i < 0 || i >= s->length) vm_error(vm, "indice fuori dai limiti");
+                    if (i < 0 || i >= s->length) vm_error(vm, "index out of bounds");
                     vm_push(vm, string_val(vm->I, s->chars + i, 1));
-                } else vm_error(vm, "il tipo %s non è indicizzabile", type_name(coll));
+                } else vm_error(vm, "type %s is not indexable", type_name(coll));
                 break;
             }
             case OP_SET_INDEX: {
                 Value value = vm_pop(vm), idx = vm_pop(vm), coll = vm_pop(vm);
                 if (IS_LIST(coll)) {
-                    if (!IS_INT(idx)) vm_error(vm, "indice di list deve essere int");
+                    if (!IS_INT(idx)) vm_error(vm, "list index must be an int");
                     ObjList *l = AS_LIST(coll);
                     int64_t i = AS_INT(idx); if (i < 0) i += l->count;
-                    if (i < 0 || i >= l->count) vm_error(vm, "indice fuori dai limiti");
+                    if (i < 0 || i >= l->count) vm_error(vm, "index out of bounds");
                     l->items[i] = value;
                 } else if (IS_MAP(coll)) {
                     char *key = value_to_cstr(vm->I, idx);
                     map_set(AS_MAP(coll), key, value); free(key);
-                } else vm_error(vm, "il tipo %s non supporta assegnamento per indice", type_name(coll));
+                } else vm_error(vm, "type %s does not support index assignment", type_name(coll));
                 vm_push(vm, value);
                 break;
             }
             case OP_GET_PROPERTY: {
                 ObjString *name = AS_STRING(READ_CONST());
                 Value obj = vm_pop(vm);
-                if (!IS_MAP(obj)) vm_error(vm, "il tipo %s non ha attributi (.%s)", type_name(obj), name->chars);
+                if (!IS_MAP(obj)) vm_error(vm, "type %s has no attributes (.%s)", type_name(obj), name->chars);
                 Value *slot = map_get(AS_MAP(obj), name->chars);
                 vm_push(vm, slot ? *slot : NIL_VAL);
                 break;
@@ -2259,7 +2280,7 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_SET_PROPERTY: {
                 ObjString *name = AS_STRING(READ_CONST());
                 Value value = vm_pop(vm), obj = vm_pop(vm);
-                if (!IS_MAP(obj)) vm_error(vm, "assegnamento attributo su tipo %s", type_name(obj));
+                if (!IS_MAP(obj)) vm_error(vm, "attribute assignment on type %s", type_name(obj));
                 map_set(AS_MAP(obj), name->chars, value);
                 vm_push(vm, value);
                 break;
@@ -2277,7 +2298,9 @@ static void run_vm(VM *vm, int stop_at) {
             }
             case OP_IMPORT: {
                 ObjString *path = AS_STRING(READ_CONST());
-                int rc = run_source(vm->I, NULL, path->chars); /* NULL src => read file */
+                char *resolved = resolve_import_path(vm->I->path, path->chars);
+                int rc = run_source(vm->I, NULL, resolved); /* NULL src => read file */
+                free(resolved);
                 /* On a runtime failure inside the module (rc==70), run_source left
                    the underlying message in I->err_msg without printing it (nested);
                    re-raise it here so an enclosing try/catch can handle it and an
@@ -2287,20 +2310,21 @@ static void run_vm(VM *vm, int stop_at) {
                 if (rc == 70) {
                     char cause[512];
                     snprintf(cause, sizeof(cause), "%s", vm->I->err_msg);
-                    vm_error(vm, "import di '%s' fallito: %s", path->chars, cause);
+                    vm_error(vm, "import of '%s' failed: %s", path->chars, cause);
                 } else if (rc != 0) {
-                    vm_error(vm, "import di '%s' fallito (codice %d)", path->chars, rc);
+                    vm_error(vm, "import of '%s' failed (code %d)", path->chars, rc);
                 }
                 break;
             }
             case OP_IMPORT_AS: {
                 ObjString *path = AS_STRING(READ_CONST());
                 ObjString *alias = AS_STRING(READ_CONST());
-                Value ns = run_module_ns(vm->I, path->chars); /* raises on failure */
+                char *resolved = resolve_import_path(vm->I->path, path->chars);
+                Value ns = run_module_ns(vm->I, resolved); /* takes ownership; raises on failure */
                 table_set(vm->I->globals, alias->chars, hash_string(alias->chars, (size_t)alias->length), ns);
                 break;
             }
-            default: vm_error(vm, "istruzione sconosciuta %d", inst);
+            default: vm_error(vm, "unknown instruction %d", inst);
         }
     }
 #undef READ_BYTE
@@ -2316,7 +2340,7 @@ static Value vm_invoke(VM *vm, Value callee, int argc, Value *argv) {
     if (IS_NATIVE(callee)) {
         ObjNative *nat = AS_NATIVE(callee);
         if (nat->arity >= 0 && nat->arity != argc)
-            vm_error(vm, "%s() attende %d argomenti, ricevuti %d", nat->name, nat->arity, argc);
+            vm_error(vm, "%s() expects %d arguments, got %d", nat->name, nat->arity, argc);
         Value r = nat->fn(vm->I, argc, vm->stack_top - argc);
         vm->stack_top -= argc + 1;
         return r;
@@ -2327,14 +2351,14 @@ static Value vm_invoke(VM *vm, Value callee, int argc, Value *argv) {
            is invoked from a built-in, rather than vm_call_closure raising with
            the (still-current) caller frame's line and a bare "fn". */
         if (argc != cl->proto->arity)
-            vm_error(vm, "la callback %s attende %d argomenti, ma il built-in ne passa %d",
-                     cl->proto->name ? cl->proto->name : "(anonima)", cl->proto->arity, argc);
+            vm_error(vm, "callback %s expects %d arguments, but the built-in passes %d",
+                     cl->proto->name ? cl->proto->name : "(anonymous)", cl->proto->arity, argc);
         int base = vm->frame_count;
         vm_call_closure(vm, cl, argc);
         run_vm(vm, base);          /* runs until the invoked frame returns */
         return vm_pop(vm);         /* result left on top by OP_RETURN */
     }
-    vm_error(vm, "valore di tipo %s non è chiamabile", type_name(callee));
+    vm_error(vm, "value of type %s is not callable", type_name(callee));
     return NIL_VAL;
 }
 
@@ -2362,7 +2386,7 @@ static Value nat_len(Interp *I, int argc, Value *argv) {
     if (IS_STRING(v)) return int_val(AS_STRING(v)->length);
     if (IS_LIST(v)) return int_val(AS_LIST(v)->count);
     if (IS_MAP(v)) return int_val(AS_MAP(v)->count);
-    runtime_error(I, 0, "len() richiede str, list o map, trovato %s", type_name(v));
+    runtime_error(I, 0, "len() requires str, list or map, got %s", type_name(v));
     return NIL_VAL;
 }
 static Value nat_type(Interp *I, int argc, Value *argv) {
@@ -2374,7 +2398,7 @@ static Value nat_int(Interp *I, int argc, Value *argv) {
     if (IS_FLOAT(v)) return int_val((int64_t)AS_FLOAT(v));
     if (IS_BOOL(v)) return int_val(AS_BOOL(v) ? 1 : 0);
     if (IS_STRING(v)) return int_val(strtoll(AS_STRING(v)->chars, NULL, 10));
-    runtime_error(I, 0, "int() non può convertire %s", type_name(v));
+    runtime_error(I, 0, "int() cannot convert %s", type_name(v));
     return NIL_VAL;
 }
 static Value nat_float(Interp *I, int argc, Value *argv) {
@@ -2382,30 +2406,30 @@ static Value nat_float(Interp *I, int argc, Value *argv) {
     if (IS_FLOAT(v)) return v;
     if (IS_INT(v)) return float_val((double)AS_INT(v));
     if (IS_STRING(v)) return float_val(strtod(AS_STRING(v)->chars, NULL));
-    runtime_error(I, 0, "float() non può convertire %s", type_name(v));
+    runtime_error(I, 0, "float() cannot convert %s", type_name(v));
     return NIL_VAL;
 }
 static Value nat_push(Interp *I, int argc, Value *argv) {
-    if (argc < 1) runtime_error(I, 0, "push() richiede almeno una list");
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "push() richiede una list, trovato %s", type_name(argv[0]));
+    if (argc < 1) runtime_error(I, 0, "push() requires at least a list");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "push() requires a list, got %s", type_name(argv[0]));
     for (int i = 1; i < argc; i++) list_push(AS_LIST(argv[0]), argv[i]);
     return argv[0];
 }
 static Value nat_pop(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "pop() richiede una list");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "pop() requires a list");
     ObjList *l = AS_LIST(argv[0]);
-    if (l->count == 0) runtime_error(I, 0, "pop() da list vuota");
+    if (l->count == 0) runtime_error(I, 0, "pop() from empty list");
     return l->items[--l->count];
 }
 static Value nat_keys(Interp *I, int argc, Value *argv) {
-    if (!IS_MAP(argv[0])) runtime_error(I, 0, "keys() richiede una map");
+    if (!IS_MAP(argv[0])) runtime_error(I, 0, "keys() requires a map");
     ObjList *l = new_list(I);
     ObjMap *m = AS_MAP(argv[0]);
     for (int i = 0; i < m->count; i++) list_push(l, cstring_val(I, m->entries[i].key));
     return obj_val((Obj *)l);
 }
 static Value nat_values(Interp *I, int argc, Value *argv) {
-    if (!IS_MAP(argv[0])) runtime_error(I, 0, "values() richiede una map");
+    if (!IS_MAP(argv[0])) runtime_error(I, 0, "values() requires a map");
     ObjList *l = new_list(I);
     ObjMap *m = AS_MAP(argv[0]);
     for (int i = 0; i < m->count; i++) list_push(l, m->entries[i].value);
@@ -2423,18 +2447,18 @@ static Value nat_has(Interp *I, int argc, Value *argv) {
         for (int i = 0; i < l->count; i++) if (values_equal(l->items[i], argv[1])) return bool_val(true);
         return bool_val(false);
     }
-    runtime_error(I, 0, "has() richiede map o list");
+    runtime_error(I, 0, "has() requires map or list");
     return NIL_VAL;
 }
 static Value nat_range(Interp *I, int argc, Value *argv) {
-    if (argc < 1 || argc > 3) runtime_error(I, 0, "range() attende 1-3 argomenti, ricevuti %d", argc);
+    if (argc < 1 || argc > 3) runtime_error(I, 0, "range() expects 1-3 arguments, got %d", argc);
     for (int i = 0; i < argc; i++)
-        if (!IS_INT(argv[i])) runtime_error(I, 0, "range() richiede argomenti int, trovato %s", type_name(argv[i]));
+        if (!IS_INT(argv[i])) runtime_error(I, 0, "range() requires int arguments, got %s", type_name(argv[i]));
     int64_t start = 0, stop = 0, step = 1;
     if (argc == 1) { stop = AS_INT(argv[0]); }
     else if (argc == 2) { start = AS_INT(argv[0]); stop = AS_INT(argv[1]); }
     else { start = AS_INT(argv[0]); stop = AS_INT(argv[1]); step = AS_INT(argv[2]); }
-    if (step == 0) runtime_error(I, 0, "range() step non può essere 0");
+    if (step == 0) runtime_error(I, 0, "range() step cannot be 0");
     ObjList *l = new_list(I);
     int64_t i = start;
     while (step > 0 ? i < stop : i > stop) {
@@ -2444,21 +2468,21 @@ static Value nat_range(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)l);
 }
 static Value nat_upper(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "upper() richiede str");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "upper() requires str");
     ObjString *s = AS_STRING(argv[0]);
     ObjString *r = new_string_n(I, s->chars, s->length);
     for (int i = 0; i < r->length; i++) r->chars[i] = (char)toupper((unsigned char)r->chars[i]);
     return obj_val((Obj *)r);
 }
 static Value nat_lower(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "lower() richiede str");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "lower() requires str");
     ObjString *s = AS_STRING(argv[0]);
     ObjString *r = new_string_n(I, s->chars, s->length);
     for (int i = 0; i < r->length; i++) r->chars[i] = (char)tolower((unsigned char)r->chars[i]);
     return obj_val((Obj *)r);
 }
 static Value nat_split(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "split() richiede (str, str)");
+    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "split() requires (str, str)");
     ObjString *s = AS_STRING(argv[0]);
     ObjString *sep = AS_STRING(argv[1]);
     ObjList *l = new_list(I);
@@ -2477,7 +2501,7 @@ static Value nat_split(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)l);
 }
 static Value nat_join(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "join() richiede (list, str)");
+    if (!IS_LIST(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "join() requires (list, str)");
     ObjList *l = AS_LIST(argv[0]);
     ObjString *sep = AS_STRING(argv[1]);
     char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
@@ -2494,11 +2518,11 @@ static Value nat_join(Interp *I, int argc, Value *argv) {
 static Value nat_abs(Interp *I, int argc, Value *argv) {
     if (IS_INT(argv[0])) return int_val(llabs(AS_INT(argv[0])));
     if (IS_FLOAT(argv[0])) return float_val(fabs(AS_FLOAT(argv[0])));
-    runtime_error(I, 0, "abs() richiede un numero");
+    runtime_error(I, 0, "abs() requires a number");
     return NIL_VAL;
 }
 static Value nat_sqrt(Interp *I, int argc, Value *argv) {
-    if (!IS_NUM(argv[0])) runtime_error(I, 0, "sqrt() richiede un numero");
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "sqrt() requires a number");
     return float_val(sqrt(as_double(argv[0])));
 }
 /* Safely convert an already-rounded double to int64. Converting a non-finite
@@ -2511,8 +2535,8 @@ static Value int_from_double(Interp *I, double r, const char *who) {
     return int_val((int64_t)r);
 }
 static Value nat_floor(Interp *I, int argc, Value *argv) {
-    if (!IS_NUM(argv[0])) runtime_error(I, 0, "floor() richiede un numero");
-    return int_from_double(I, floor(as_double(argv[0])), "floor(): valore fuori intervallo");
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "floor() requires a number");
+    return int_from_double(I, floor(as_double(argv[0])), "floor(): value out of range");
 }
 static Value nat_clock(Interp *I, int argc, Value *argv) {
     return float_val((double)clock() / CLOCKS_PER_SEC);
@@ -2528,9 +2552,9 @@ static Value nat_input(Interp *I, int argc, Value *argv) {
     return v;
 }
 static Value nat_assert(Interp *I, int argc, Value *argv) {
-    if (argc < 1) runtime_error(I, 0, "assert() richiede una condizione");
+    if (argc < 1) runtime_error(I, 0, "assert() requires a condition");
     if (!is_truthy(argv[0])) {
-        const char *msg = (argc >= 2 && IS_STRING(argv[1])) ? AS_STRING(argv[1])->chars : "assert fallita";
+        const char *msg = (argc >= 2 && IS_STRING(argv[1])) ? AS_STRING(argv[1])->chars : "assertion failed";
         runtime_error(I, 0, "assert: %s", msg);
     }
     return NIL_VAL;
@@ -2564,7 +2588,7 @@ static void json_encode_utf8(char **buf, size_t *len, size_t *cap, unsigned cp) 
     append_str(buf, len, cap, tmp, (size_t)n);
 }
 static char *json_parse_string_raw(Interp *I, const char **p) {
-    if (**p != '"') runtime_error(I, 0, "json: attesa stringa");
+    if (**p != '"') runtime_error(I, 0, "json: expected string");
     (*p)++;
     char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
     while (**p && **p != '"') {
@@ -2590,12 +2614,12 @@ static char *json_parse_string_raw(Interp *I, const char **p) {
                         if (h >= '0' && h <= '9') cp |= (unsigned)(h - '0');
                         else if (h >= 'a' && h <= 'f') cp |= (unsigned)(h - 'a' + 10);
                         else if (h >= 'A' && h <= 'F') cp |= (unsigned)(h - 'A' + 10);
-                        else { free(buf); runtime_error(I, 0, "json: escape \\u non valido"); }
+                        else { free(buf); runtime_error(I, 0, "json: invalid \\u escape"); }
                     }
                     json_encode_utf8(&buf, &len, &cap, cp);
                     break;
                 }
-                default: free(buf); runtime_error(I, 0, "json: escape non valido");
+                default: free(buf); runtime_error(I, 0, "json: invalid escape");
             }
             (*p)++;
         } else {
@@ -2603,12 +2627,12 @@ static char *json_parse_string_raw(Interp *I, const char **p) {
             (*p)++;
         }
     }
-    if (**p != '"') { free(buf); runtime_error(I, 0, "json: stringa non terminata"); }
+    if (**p != '"') { free(buf); runtime_error(I, 0, "json: unterminated string"); }
     (*p)++;
     return buf;
 }
 static Value json_parse_value(Interp *I, const char **p, int depth) {
-    if (depth > JSON_MAX_DEPTH) runtime_error(I, 0, "json: nesting troppo profondo (max %d)", JSON_MAX_DEPTH);
+    if (depth > JSON_MAX_DEPTH) runtime_error(I, 0, "json: nesting too deep (max %d)", JSON_MAX_DEPTH);
     json_skip_ws(p);
     char c = **p;
     if (c == '"') { char *s = json_parse_string_raw(I, p); Value v = cstring_val(I, s); free(s); return v; }
@@ -2619,14 +2643,14 @@ static Value json_parse_value(Interp *I, const char **p, int depth) {
             json_skip_ws(p);
             char *key = json_parse_string_raw(I, p);
             json_skip_ws(p);
-            if (**p != ':') { free(key); runtime_error(I, 0, "json: atteso ':'"); }
+            if (**p != ':') { free(key); runtime_error(I, 0, "json: expected ':'"); }
             (*p)++;
             Value val = json_parse_value(I, p, depth + 1);
             map_set(m, key, val); free(key);
             json_skip_ws(p);
             if (**p == ',') { (*p)++; continue; }
             if (**p == '}') { (*p)++; break; }
-            runtime_error(I, 0, "json: atteso ',' o '}'");
+            runtime_error(I, 0, "json: expected ',' or '}'");
         }
         return obj_val((Obj *)m);
     }
@@ -2638,7 +2662,7 @@ static Value json_parse_value(Interp *I, const char **p, int depth) {
             json_skip_ws(p);
             if (**p == ',') { (*p)++; continue; }
             if (**p == ']') { (*p)++; break; }
-            runtime_error(I, 0, "json: atteso ',' o ']'");
+            runtime_error(I, 0, "json: expected ',' or ']'");
         }
         return obj_val((Obj *)l);
     }
@@ -2656,19 +2680,19 @@ static Value json_parse_value(Interp *I, const char **p, int depth) {
         memcpy(tmp, start, (size_t)n); tmp[n] = '\0';
         return is_float ? float_val(strtod(tmp, NULL)) : int_val(strtoll(tmp, NULL, 10));
     }
-    runtime_error(I, 0, "json: token non valido");
+    runtime_error(I, 0, "json: invalid token");
     return NIL_VAL;
 }
 static Value nat_json_parse(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "json.parse() richiede una str");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "json.parse() requires a str");
     const char *p = AS_STRING(argv[0])->chars;
     Value v = json_parse_value(I, &p, 0);
     json_skip_ws(&p);
-    if (*p != '\0') runtime_error(I, 0, "json.parse(): testo in eccesso dopo il valore");
+    if (*p != '\0') runtime_error(I, 0, "json.parse(): trailing text after value");
     return v;
 }
 static void json_stringify_value(Interp *I, char **buf, size_t *len, size_t *cap, Value v, int depth) {
-    if (depth > JSON_MAX_DEPTH) runtime_error(I, 0, "json.stringify: struttura troppo profonda o ciclica (max %d)", JSON_MAX_DEPTH);
+    if (depth > JSON_MAX_DEPTH) runtime_error(I, 0, "json.stringify: structure too deep or cyclic (max %d)", JSON_MAX_DEPTH);
     switch (v.type) {
         case VAL_NIL: append_str(buf, len, cap, "null", 4); return;
         case VAL_BOOL: append_str(buf, len, cap, v.as.b ? "true" : "false", v.as.b ? 4 : 5); return;
@@ -2760,7 +2784,7 @@ static char *run_capture(const char *cmd, size_t *out_len, int *out_status) {
 
 /* ---- HTTP ---- */
 static Value nat_http_get(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "http.get() richiede un url (str)");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "http.get() requires a url (str)");
     char *qurl = shell_quote(AS_STRING(argv[0])->chars);
     size_t clen = strlen(qurl) + 64;
     char *cmd = xmalloc(clen);
@@ -2768,15 +2792,15 @@ static Value nat_http_get(Interp *I, int argc, Value *argv) {
     size_t len; int status;
     char *resp = run_capture(cmd, &len, &status);
     free(qurl); free(cmd);
-    if (!resp) runtime_error(I, 0, "http.get(): impossibile eseguire curl");
-    if (status != 0) { free(resp); runtime_error(I, 0, "http.get(): curl ha restituito un errore (codice %d)", status); }
+    if (!resp) runtime_error(I, 0, "http.get(): could not run curl");
+    if (status != 0) { free(resp); runtime_error(I, 0, "http.get(): curl returned an error (code %d)", status); }
     Value v = string_val(I, resp, (int)len); /* binary-safe: no NUL truncation */
     free(resp);
     return v;
 }
 static Value nat_http_post(Interp *I, int argc, Value *argv) {
     if (argc < 2 || !IS_STRING(argv[0]) || !IS_STRING(argv[1]))
-        runtime_error(I, 0, "http.post() richiede (url: str, body: str)");
+        runtime_error(I, 0, "http.post() requires (url: str, body: str)");
     const char *ctype = (argc >= 3 && IS_STRING(argv[2])) ? AS_STRING(argv[2])->chars : "application/json";
     char hdr[256];
     snprintf(hdr, sizeof(hdr), "Content-Type: %.200s", ctype);
@@ -2789,8 +2813,8 @@ static Value nat_http_post(Interp *I, int argc, Value *argv) {
     size_t len; int status;
     char *resp = run_capture(cmd, &len, &status);
     free(qurl); free(qbody); free(qhdr); free(cmd);
-    if (!resp) runtime_error(I, 0, "http.post(): impossibile eseguire curl");
-    if (status != 0) { free(resp); runtime_error(I, 0, "http.post(): curl ha restituito un errore (codice %d)", status); }
+    if (!resp) runtime_error(I, 0, "http.post(): could not run curl");
+    if (status != 0) { free(resp); runtime_error(I, 0, "http.post(): curl returned an error (code %d)", status); }
     Value v = string_val(I, resp, (int)len);
     free(resp);
     return v;
@@ -2799,10 +2823,10 @@ static Value nat_http_post(Interp *I, int argc, Value *argv) {
 /* ---- ai: a first-class LLM call (Anthropic Messages API via curl) ---- */
 static Value nat_ai(Interp *I, int argc, Value *argv) {
     if (argc < 1 || !IS_STRING(argv[0]))
-        runtime_error(I, 0, "ai() richiede un prompt (str)");
+        runtime_error(I, 0, "ai() requires a prompt (str)");
     const char *key = getenv("ANTHROPIC_API_KEY");
     if (!key || !*key)
-        runtime_error(I, 0, "ai(): imposta la variabile d'ambiente ANTHROPIC_API_KEY");
+        runtime_error(I, 0, "ai(): set the ANTHROPIC_API_KEY environment variable");
     const char *model = (argc >= 2 && IS_STRING(argv[1])) ? AS_STRING(argv[1])->chars
                        : (getenv("LOQI_AI_MODEL") ? getenv("LOQI_AI_MODEL") : "claude-sonnet-4-6");
 
@@ -2823,17 +2847,17 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     /* request body -> temp file so the prompt never touches the shell */
     char tmpl[] = "/tmp/loqi_ai_XXXXXX";
     int fd = mkstemp(tmpl); /* mkstemp creates the file 0600 */
-    if (fd < 0) { free(jbuf); runtime_error(I, 0, "ai(): impossibile creare file temporaneo"); }
-    if (write(fd, jbuf, jl) < 0) { close(fd); unlink(tmpl); free(jbuf); runtime_error(I, 0, "ai(): scrittura temporanea fallita"); }
+    if (fd < 0) { free(jbuf); runtime_error(I, 0, "ai(): could not create temp file"); }
+    if (write(fd, jbuf, jl) < 0) { close(fd); unlink(tmpl); free(jbuf); runtime_error(I, 0, "ai(): temp write failed"); }
     close(fd);
     free(jbuf);
 
     /* curl config (0600) so the API key never appears in the process argv (ps) */
     char cfgtmpl[] = "/tmp/loqi_aicfg_XXXXXX";
     int cfd = mkstemp(cfgtmpl);
-    if (cfd < 0) { unlink(tmpl); runtime_error(I, 0, "ai(): impossibile creare file di config"); }
+    if (cfd < 0) { unlink(tmpl); runtime_error(I, 0, "ai(): could not create config file"); }
     FILE *cf = fdopen(cfd, "w");
-    if (!cf) { close(cfd); unlink(cfgtmpl); unlink(tmpl); runtime_error(I, 0, "ai(): config non scrivibile"); }
+    if (!cf) { close(cfd); unlink(cfgtmpl); unlink(tmpl); runtime_error(I, 0, "ai(): config not writable"); }
     fputs("url = \"https://api.anthropic.com/v1/messages\"\n", cf);
     fputs("header = \"content-type: application/json\"\n", cf);
     fputs("header = \"anthropic-version: 2023-06-01\"\n", cf);
@@ -2850,9 +2874,9 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     size_t rlen; int status;
     char *resp = run_capture(cmd, &rlen, &status);
     free(qcfg); free(cmd); unlink(tmpl); unlink(cfgtmpl);
-    if (!resp) runtime_error(I, 0, "ai(): impossibile eseguire curl");
-    if (status != 0 && (!resp || !*resp)) { free(resp); runtime_error(I, 0, "ai(): richiesta API fallita (curl %d) — controlla rete e chiave", status); }
-    if (!*resp) { free(resp); runtime_error(I, 0, "ai(): nessuna risposta dall'API"); }
+    if (!resp) runtime_error(I, 0, "ai(): could not run curl");
+    if (status != 0 && (!resp || !*resp)) { free(resp); runtime_error(I, 0, "ai(): API request failed (curl %d) — check network and key", status); }
+    if (!*resp) { free(resp); runtime_error(I, 0, "ai(): no response from the API"); }
 
     /* parse { "content": [ { "type":"text", "text":"..." }, ... ], ... } */
     const char *p = resp;
@@ -2875,30 +2899,30 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
             if (m && IS_STRING(*m)) runtime_error(I, 0, "ai(): %s", AS_STRING(*m)->chars);
         }
     }
-    runtime_error(I, 0, "ai(): risposta dell'API in formato inatteso");
+    runtime_error(I, 0, "ai(): API response in unexpected format");
     return NIL_VAL;
 }
 
 /* ---- environment, files, vectors ---- */
 static Value nat_env(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "env() richiede un nome (str)");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "env() requires a name (str)");
     const char *v = getenv(AS_STRING(argv[0])->chars);
     return v ? cstring_val(I, v) : NIL_VAL;
 }
 static char *read_file(const char *path); /* defined in the driver */
 static Value nat_read(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "read() richiede un percorso (str)");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "read() requires a path (str)");
     char *src = read_file(AS_STRING(argv[0])->chars);
-    if (!src) runtime_error(I, 0, "read(): impossibile leggere '%s'", AS_STRING(argv[0])->chars);
+    if (!src) runtime_error(I, 0, "read(): could not read '%s'", AS_STRING(argv[0])->chars);
     Value v = cstring_val(I, src);
     free(src);
     return v;
 }
 static Value nat_write(Interp *I, int argc, Value *argv) {
     if (argc < 2 || !IS_STRING(argv[0]) || !IS_STRING(argv[1]))
-        runtime_error(I, 0, "write() richiede (percorso: str, contenuto: str)");
+        runtime_error(I, 0, "write() requires (path: str, content: str)");
     FILE *f = fopen(AS_STRING(argv[0])->chars, "wb");
-    if (!f) runtime_error(I, 0, "write(): impossibile aprire '%s'", AS_STRING(argv[0])->chars);
+    if (!f) runtime_error(I, 0, "write(): could not open '%s'", AS_STRING(argv[0])->chars);
     ObjString *s = AS_STRING(argv[1]);
     fwrite(s->chars, 1, (size_t)s->length, f);
     fclose(f);
@@ -2906,12 +2930,12 @@ static Value nat_write(Interp *I, int argc, Value *argv) {
 }
 static Value nat_similarity(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
-        runtime_error(I, 0, "similarity() richiede due vettori (list di numeri)");
+        runtime_error(I, 0, "similarity() requires two vectors (list of numbers)");
     ObjList *a = AS_LIST(argv[0]), *b = AS_LIST(argv[1]);
-    if (a->count != b->count) runtime_error(I, 0, "similarity(): vettori di lunghezza diversa");
+    if (a->count != b->count) runtime_error(I, 0, "similarity(): vectors of different length");
     double dot = 0, na = 0, nb = 0;
     for (int i = 0; i < a->count; i++) {
-        if (!IS_NUM(a->items[i]) || !IS_NUM(b->items[i])) runtime_error(I, 0, "similarity(): i vettori devono contenere numeri");
+        if (!IS_NUM(a->items[i]) || !IS_NUM(b->items[i])) runtime_error(I, 0, "similarity(): vectors must contain numbers");
         double x = as_double(a->items[i]), y = as_double(b->items[i]);
         dot += x * y; na += x * x; nb += y * y;
     }
@@ -2923,7 +2947,7 @@ static Value nat_similarity(Interp *I, int argc, Value *argv) {
 static int value_compare(Interp *I, Value a, Value b) {
     if (IS_NUM(a) && IS_NUM(b)) { double x = as_double(a), y = as_double(b); return x < y ? -1 : (x > y ? 1 : 0); }
     if (IS_STRING(a) && IS_STRING(b)) { int c = strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars); return c < 0 ? -1 : (c > 0 ? 1 : 0); }
-    runtime_error(I, 0, "confronto non valido tra %s e %s", type_name(a), type_name(b));
+    runtime_error(I, 0, "invalid comparison between %s and %s", type_name(a), type_name(b));
     return 0;
 }
 /* qsort_r's argument order and comparator signature differ between the
@@ -2938,7 +2962,7 @@ static int sort_cmp(void *thunk, const void *pa, const void *pb) {
 }
 #endif
 static Value nat_sort(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "sort() richiede una list");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "sort() requires a list");
     ObjList *src = AS_LIST(argv[0]);
     ObjList *out = new_list(I);
     for (int i = 0; i < src->count; i++) list_push(out, src->items[i]);
@@ -2962,15 +2986,15 @@ static Value nat_reverse(Interp *I, int argc, Value *argv) {
         for (int i = 0; i < s->length; i++) r->chars[i] = s->chars[s->length - 1 - i];
         return obj_val((Obj *)r);
     }
-    runtime_error(I, 0, "reverse() richiede list o str");
+    runtime_error(I, 0, "reverse() requires list or str");
     return NIL_VAL;
 }
 static Value nat_sum(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "sum() richiede una list");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "sum() requires a list");
     ObjList *l = AS_LIST(argv[0]);
     int64_t si = 0; double sf = 0; bool is_float = false; bool int_overflow = false;
     for (int i = 0; i < l->count; i++) {
-        if (!IS_NUM(l->items[i])) runtime_error(I, 0, "sum(): elemento non numerico (%s)", type_name(l->items[i]));
+        if (!IS_NUM(l->items[i])) runtime_error(I, 0, "sum(): non-numeric element (%s)", type_name(l->items[i]));
         if (IS_FLOAT(l->items[i])) is_float = true;
         sf += as_double(l->items[i]);
         /* Accumulate the int sum overflow-safely (matching the VM '+' operator).
@@ -2980,14 +3004,14 @@ static Value nat_sum(Interp *I, int argc, Value *argv) {
         if (IS_INT(l->items[i]) && __builtin_add_overflow(si, AS_INT(l->items[i]), &si))
             int_overflow = true;
     }
-    if (!is_float && int_overflow) runtime_error(I, 0, "sum(): overflow intero");
+    if (!is_float && int_overflow) runtime_error(I, 0, "sum(): integer overflow");
     return is_float ? float_val(sf) : int_val(si);
 }
 static Value nat_min(Interp *I, int argc, Value *argv) {
-    if (argc == 0) runtime_error(I, 0, "min() richiede almeno un argomento");
+    if (argc == 0) runtime_error(I, 0, "min() requires at least one argument");
     if (argc == 1 && IS_LIST(argv[0])) {
         ObjList *l = AS_LIST(argv[0]);
-        if (l->count == 0) runtime_error(I, 0, "min() di list vuota");
+        if (l->count == 0) runtime_error(I, 0, "min() of empty list");
         Value best = l->items[0];
         for (int i = 1; i < l->count; i++) if (value_compare(I, l->items[i], best) < 0) best = l->items[i];
         return best;
@@ -2997,10 +3021,10 @@ static Value nat_min(Interp *I, int argc, Value *argv) {
     return best;
 }
 static Value nat_max(Interp *I, int argc, Value *argv) {
-    if (argc == 0) runtime_error(I, 0, "max() richiede almeno un argomento");
+    if (argc == 0) runtime_error(I, 0, "max() requires at least one argument");
     if (argc == 1 && IS_LIST(argv[0])) {
         ObjList *l = AS_LIST(argv[0]);
-        if (l->count == 0) runtime_error(I, 0, "max() di list vuota");
+        if (l->count == 0) runtime_error(I, 0, "max() of empty list");
         Value best = l->items[0];
         for (int i = 1; i < l->count; i++) if (value_compare(I, l->items[i], best) > 0) best = l->items[i];
         return best;
@@ -3016,7 +3040,7 @@ static void norm_range(int64_t *start, int64_t *end, int len) {
 }
 static Value nat_slice(Interp *I, int argc, Value *argv) {
     if (argc < 2 || !IS_INT(argv[1]) || (argc >= 3 && !IS_INT(argv[2])))
-        runtime_error(I, 0, "slice() richiede (coll, start:int [, end:int])");
+        runtime_error(I, 0, "slice() requires (coll, start:int [, end:int])");
     if (IS_LIST(argv[0])) {
         ObjList *l = AS_LIST(argv[0]);
         int64_t s = AS_INT(argv[1]), e = (argc >= 3) ? AS_INT(argv[2]) : l->count;
@@ -3031,7 +3055,7 @@ static Value nat_slice(Interp *I, int argc, Value *argv) {
         norm_range(&s, &e, str->length);
         return string_val(I, str->chars + s, (int)(e - s));
     }
-    runtime_error(I, 0, "slice() richiede list o str");
+    runtime_error(I, 0, "slice() requires list or str");
     return NIL_VAL;
 }
 /* Length-aware substring search: respects ObjString->length instead of stopping
@@ -3054,7 +3078,7 @@ static Value nat_index_of(Interp *I, int argc, Value *argv) {
         ObjString *h = AS_STRING(argv[0]), *n = AS_STRING(argv[1]);
         return int_val(str_find(h->chars, h->length, n->chars, n->length));
     }
-    runtime_error(I, 0, "index_of() richiede (list, x) o (str, str)");
+    runtime_error(I, 0, "index_of() requires (list, x) or (str, str)");
     return NIL_VAL;
 }
 static Value nat_contains(Interp *I, int argc, Value *argv) {
@@ -3071,11 +3095,11 @@ static Value nat_contains(Interp *I, int argc, Value *argv) {
         char *k = value_to_cstr(I, argv[1]); bool f = map_get(AS_MAP(argv[0]), k) != NULL; free(k);
         return bool_val(f);
     }
-    runtime_error(I, 0, "contains() richiede str, list o map");
+    runtime_error(I, 0, "contains() requires str, list or map");
     return NIL_VAL;
 }
 static Value nat_trim(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "trim() richiede str");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "trim() requires str");
     ObjString *s = AS_STRING(argv[0]);
     int a = 0, b = s->length;
     while (a < b && isspace((unsigned char)s->chars[a])) a++;
@@ -3084,7 +3108,7 @@ static Value nat_trim(Interp *I, int argc, Value *argv) {
 }
 static Value nat_replace(Interp *I, int argc, Value *argv) {
     if (!IS_STRING(argv[0]) || !IS_STRING(argv[1]) || !IS_STRING(argv[2]))
-        runtime_error(I, 0, "replace() richiede (str, str, str)");
+        runtime_error(I, 0, "replace() requires (str, str, str)");
     ObjString *s = AS_STRING(argv[0]), *o = AS_STRING(argv[1]), *n = AS_STRING(argv[2]);
     if (o->length == 0) return argv[0];
     char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
@@ -3100,42 +3124,42 @@ static Value nat_replace(Interp *I, int argc, Value *argv) {
     Value out = string_val(I, buf, (int)len); free(buf); return out;
 }
 static Value nat_starts_with(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "starts_with() richiede (str, str)");
+    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "starts_with() requires (str, str)");
     ObjString *s = AS_STRING(argv[0]), *p = AS_STRING(argv[1]);
     return bool_val(s->length >= p->length && memcmp(s->chars, p->chars, (size_t)p->length) == 0);
 }
 static Value nat_ends_with(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "ends_with() richiede (str, str)");
+    if (!IS_STRING(argv[0]) || !IS_STRING(argv[1])) runtime_error(I, 0, "ends_with() requires (str, str)");
     ObjString *s = AS_STRING(argv[0]), *p = AS_STRING(argv[1]);
     return bool_val(s->length >= p->length && memcmp(s->chars + s->length - p->length, p->chars, (size_t)p->length) == 0);
 }
 static Value nat_repeat(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0]) || !IS_INT(argv[1])) runtime_error(I, 0, "repeat() richiede (str, int)");
+    if (!IS_STRING(argv[0]) || !IS_INT(argv[1])) runtime_error(I, 0, "repeat() requires (str, int)");
     ObjString *s = AS_STRING(argv[0]); int64_t n = AS_INT(argv[1]);
     if (n < 0) n = 0;
     /* All size math in 64-bit: a truncated (int)n could bypass the guard
        (giant alloc / silently wrong length) or hit a divide-by-zero. */
     int64_t limit = 100 * 1024 * 1024;
-    if (n > 0 && (uint64_t)s->length > (uint64_t)limit / (uint64_t)n) runtime_error(I, 0, "repeat(): risultato troppo grande");
+    if (n > 0 && (uint64_t)s->length > (uint64_t)limit / (uint64_t)n) runtime_error(I, 0, "repeat(): result too large");
     int64_t total = (int64_t)s->length * n; /* <= limit, fits in int */
     char *buf = xmalloc((size_t)total + 1);
     for (int64_t i = 0; i < n; i++) memcpy(buf + i * s->length, s->chars, (size_t)s->length);
     Value out = string_val(I, buf, (int)total); free(buf); return out;
 }
 static Value nat_round(Interp *I, int argc, Value *argv) {
-    if (!IS_NUM(argv[0])) runtime_error(I, 0, "round() richiede un numero");
-    return int_from_double(I, round(as_double(argv[0])), "round(): valore fuori intervallo");
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "round() requires a number");
+    return int_from_double(I, round(as_double(argv[0])), "round(): value out of range");
 }
 static Value nat_ceil(Interp *I, int argc, Value *argv) {
-    if (!IS_NUM(argv[0])) runtime_error(I, 0, "ceil() richiede un numero");
-    return int_from_double(I, ceil(as_double(argv[0])), "ceil(): valore fuori intervallo");
+    if (!IS_NUM(argv[0])) runtime_error(I, 0, "ceil() requires a number");
+    return int_from_double(I, ceil(as_double(argv[0])), "ceil(): value out of range");
 }
 static Value nat_pow(Interp *I, int argc, Value *argv) {
-    if (!IS_NUM(argv[0]) || !IS_NUM(argv[1])) runtime_error(I, 0, "pow() richiede due numeri");
+    if (!IS_NUM(argv[0]) || !IS_NUM(argv[1])) runtime_error(I, 0, "pow() requires two numbers");
     return float_val(pow(as_double(argv[0]), as_double(argv[1])));
 }
 static Value nat_del(Interp *I, int argc, Value *argv) {
-    if (!IS_MAP(argv[0])) runtime_error(I, 0, "del() richiede una map");
+    if (!IS_MAP(argv[0])) runtime_error(I, 0, "del() requires a map");
     char *key = value_to_cstr(I, argv[1]);
     ObjMap *m = AS_MAP(argv[0]);
     for (int i = 0; i < m->count; i++) {
@@ -3150,7 +3174,7 @@ static Value nat_del(Interp *I, int argc, Value *argv) {
     return argv[0];
 }
 static Value nat_chars(Interp *I, int argc, Value *argv) {
-    if (!IS_STRING(argv[0])) runtime_error(I, 0, "chars() richiede str");
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "chars() requires str");
     ObjString *s = AS_STRING(argv[0]); ObjList *l = new_list(I);
     for (int i = 0; i < s->length; i++) list_push(l, string_val(I, s->chars + i, 1));
     return obj_val((Obj *)l);
@@ -3161,7 +3185,7 @@ static Value nat_now(Interp *I, int argc, Value *argv) {
 
 /* ---- higher-order: map / filter / reduce / each / find (need a VM callback) ---- */
 static Value nat_map(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "map() richiede (list, fn)");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "map() requires (list, fn)");
     ObjList *src = AS_LIST(argv[0]);
     ObjList *out = new_list(I);
     for (int i = 0; i < src->count; i++) {
@@ -3171,7 +3195,7 @@ static Value nat_map(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)out);
 }
 static Value nat_filter(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "filter() richiede (list, fn)");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "filter() requires (list, fn)");
     ObjList *src = AS_LIST(argv[0]);
     ObjList *out = new_list(I);
     for (int i = 0; i < src->count; i++) {
@@ -3181,7 +3205,7 @@ static Value nat_filter(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)out);
 }
 static Value nat_reduce(Interp *I, int argc, Value *argv) {
-    if (argc < 3 || !IS_LIST(argv[0])) runtime_error(I, 0, "reduce() richiede (list, fn, iniziale)");
+    if (argc < 3 || !IS_LIST(argv[0])) runtime_error(I, 0, "reduce() requires (list, fn, initial)");
     ObjList *src = AS_LIST(argv[0]);
     Value acc = argv[2];
     for (int i = 0; i < src->count; i++) {
@@ -3191,7 +3215,7 @@ static Value nat_reduce(Interp *I, int argc, Value *argv) {
     return acc;
 }
 static Value nat_each(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "each() richiede (list, fn)");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "each() requires (list, fn)");
     ObjList *src = AS_LIST(argv[0]);
     for (int i = 0; i < src->count; i++) {
         Value a = src->items[i];
@@ -3200,7 +3224,7 @@ static Value nat_each(Interp *I, int argc, Value *argv) {
     return NIL_VAL;
 }
 static Value nat_find(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0])) runtime_error(I, 0, "find() richiede (list, fn)");
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "find() requires (list, fn)");
     ObjList *src = AS_LIST(argv[0]);
     for (int i = 0; i < src->count; i++) {
         Value a = src->items[i];
@@ -3294,11 +3318,11 @@ static void install_stdlib(Interp *I) {
 static char *read_file(const char *path) {
     struct stat st;
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        fprintf(stderr, "'%s' è una directory, non un file\n", path);
+        fprintf(stderr, "'%s' is a directory, not a file\n", path);
         return NULL;
     }
     FILE *f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "impossibile aprire '%s'\n", path); return NULL; }
+    if (!f) { fprintf(stderr, "could not open '%s'\n", path); return NULL; }
     /* stream-read: works for regular files and unseekable pipes/stdin alike */
     size_t cap = 4096, len = 0;
     char *buf = xmalloc(cap);
@@ -3308,7 +3332,7 @@ static char *read_file(const char *path) {
         len += got;
         if (got == 0) break;
     }
-    if (ferror(f)) { fprintf(stderr, "errore di lettura su '%s'\n", path); free(buf); fclose(f); return NULL; }
+    if (ferror(f)) { fprintf(stderr, "read error on '%s'\n", path); free(buf); fclose(f); return NULL; }
     buf[len] = '\0';
     fclose(f);
     return buf;
@@ -3374,7 +3398,7 @@ static int interpret(Interp *I, const char *src, const char *path) {
 
 /* Run a module in a fresh global namespace (seeded with the stdlib) and return a
  * map of its own top-level definitions, for `import "path" as name`. */
-static Value run_module_ns(Interp *I, const char *path) {
+static Value run_module_ns(Interp *I, char *path /* owned */) {
     Table *saved = I->globals;
     Table *mod = xmalloc(sizeof(Table));
     table_init(mod);
@@ -3383,13 +3407,15 @@ static Value run_module_ns(Interp *I, const char *path) {
     int rc = run_source(I, NULL, path);
     I->globals = saved;                /* restore before raising / building the map */
     if (rc != 0) {
-        if (rc == 70) {
-            char cause[512];
-            snprintf(cause, sizeof(cause), "%s", I->err_msg);
-            runtime_error(I, 0, "import di '%s' fallito: %s", path, cause);
-        }
-        runtime_error(I, 0, "import di '%s' fallito (codice %d)", path, rc);
+        /* copy what the message needs, then free `path` before longjmp-ing out */
+        char name[512]; snprintf(name, sizeof(name), "%s", path);
+        char cause[512]; cause[0] = '\0';
+        if (rc == 70) snprintf(cause, sizeof(cause), "%s", I->err_msg);
+        free(path);
+        if (rc == 70) runtime_error(I, 0, "import of '%s' failed: %s", name, cause);
+        runtime_error(I, 0, "import of '%s' failed (code %d)", name, rc);
     }
+    free(path);
     /* namespace = module globals minus the stdlib names */
     ObjMap *ns = new_map(I);
     for (int i = 0; i < mod->cap; i++) {
@@ -3420,7 +3446,7 @@ static void interp_init(Interp *I) {
 #define LOQI_VERSION "0.2.0"
 
 static void repl(Interp *I) {
-    printf("Loqi %s — REPL. Ctrl-D per uscire.\n", LOQI_VERSION);
+    printf("Loqi %s — REPL. Ctrl-D to exit.\n", LOQI_VERSION);
     char *line = NULL; size_t cap = 0;
     for (;;) {
         fputs("loqi> ", stdout); fflush(stdout);

@@ -1,0 +1,7 @@
+# Import a module under a namespace, then call its functions with `name.fn(...)`.
+# Paths resolve relative to THIS file, so it runs from anywhere.
+import "geometry.lq" as geo
+
+print("area(3)          = {geo.area(3)}")
+print("circumference(3) = {geo.circumference(3)}")
+print("pi               = {geo.PI}")

@@ -1,8 +1,8 @@
-# Il primo programma in Loqi.
-let nome = "mondo"
-print("Ciao, {nome}!")
+# The first program in Loqi.
+let name = "world"
+print("Hello, {name}!")
 
-# interpolazione con espressioni
+# interpolation with expressions
 let a = 6
 let b = 7
-print("{a} per {b} fa {a * b}")
+print("{a} times {b} is {a * b}")

@@ -36,9 +36,9 @@ language and its runtime. One native binary, nothing to assemble.
 ```loqi
 # fetch live data, then let a model explain it — no libraries, no SDK
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
-print("{repo.full_name}: {repo.stargazers_count} stelle")
+print("{repo.full_name}: {repo.stargazers_count} stars")
 
-let poem = ai("Scrivi un haiku sul codice pulito")
+let poem = ai("Write a haiku about clean code")
 print(poem)
 ```
 
@@ -63,8 +63,8 @@ Because these compose with native values, the common AI shapes collapse to a lin
 or two — for example, "ask a model for structured data and use it directly":
 
 ```loqi
-let data = json.parse(ai("Estrai nome e anno come JSON da: " + testo))
-print(data.nome)
+let data = json.parse(ai("Extract name and year as JSON from: " + text))
+print(data.name)
 ```
 
 ### 2. Fast on Apple Silicon
@@ -106,11 +106,11 @@ print("fib(10) = {fib(10)}")
 Closures and first-class functions are core, not bolted on:
 
 ```loqi
-fn contatore() {
+fn counter() {
   let n = 0
   return fn() { n = n + 1; return n }
 }
-let next = contatore()
+let next = counter()
 print(next(), next(), next())   # 1 2 3
 ```
 

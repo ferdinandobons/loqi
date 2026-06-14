@@ -1,0 +1,10 @@
+# A small module: its own constants and functions, in their own namespace.
+let PI = 3.14159
+
+fn area(r) {
+  return PI * r * r
+}
+
+fn circumference(r) {
+  return 2 * PI * r
+}

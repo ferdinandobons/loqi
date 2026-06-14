@@ -1,0 +1,10 @@
+# Fixture module imported by tests/test_modules.lq (not run directly).
+let PI = 3.14159
+
+fn area(r) {
+  return PI * r * r
+}
+
+fn double(x) {
+  return x * 2
+}

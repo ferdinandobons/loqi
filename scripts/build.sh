@@ -17,10 +17,10 @@ case "$MODE" in
     FLAGS="-O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
     ;;
   *)
-    echo "uso: build.sh [release|debug]" >&2; exit 2;;
+    echo "usage: build.sh [release|debug]" >&2; exit 2;;
 esac
 
-echo "==> Compilo loqi ($MODE)"
+echo "==> Building loqi ($MODE)"
 clang $COMMON $FLAGS src/loqi.c -lm -o build/loqi
-echo "==> Fatto: build/loqi"
+echo "==> Done: build/loqi"
 build/loqi --version

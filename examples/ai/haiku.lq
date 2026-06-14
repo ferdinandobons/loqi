@@ -1,7 +1,7 @@
-# L'AI è di prima classe in Loqi: `ai(...)` chiama un LLM, niente SDK da installare.
-# Richiede la variabile d'ambiente ANTHROPIC_API_KEY.
+# AI is first-class in Loqi: `ai(...)` calls an LLM, no SDK to install.
+# Requires the ANTHROPIC_API_KEY environment variable.
 #   ANTHROPIC_API_KEY=... loqi examples/ai/haiku.lq
 
-let argomento = "il mare d'inverno"
-let poesia = ai("Scrivi un haiku in italiano su {argomento}. Solo la poesia.")
-print(poesia)
+let topic = "the sea in winter"
+let poem = ai("Write a haiku about {topic}. Output only the poem.")
+print(poem)

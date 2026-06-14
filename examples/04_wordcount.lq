@@ -1,16 +1,16 @@
-# Conteggio parole: mostra map, liste, e funzioni di alto livello.
-let testo = "loqi e semplice loqi e veloce loqi e ai first"
+# Word count: shows maps, lists, and higher-level functions.
+let text = "loqi is simple loqi is fast loqi is ai first"
 
-let conteggi = {}
-for parola in split(testo, " ") {
-  if has(conteggi, parola) {
-    conteggi[parola] = conteggi[parola] + 1
+let counts = {}
+for word in split(text, " ") {
+  if has(counts, word) {
+    counts[word] = counts[word] + 1
   } else {
-    conteggi[parola] = 1
+    counts[word] = 1
   }
 }
 
-print("Parole uniche: {len(conteggi)}")
-for parola in conteggi {
-  print("  {parola}: {conteggi[parola]}")
+print("Unique words: {len(counts)}")
+for word in counts {
+  print("  {word}: {counts[word]}")
 }

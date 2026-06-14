@@ -42,7 +42,7 @@ Loqi has a small, predictable set of types:
 | `bool`  | `true`, `false`                 |                                        |
 | `int`   | `42`, `-7`, `1_000_000`         | 64-bit signed; `_` allowed as separator|
 | `float` | `3.14`, `1e9`, `2.0`            | 64-bit IEEE-754                         |
-| `str`   | `"ciao"`, `"riga\n"`            | UTF-8 bytes; interpolation with `{}`   |
+| `str`   | `"hi"`, `"line\n"`              | UTF-8 bytes; interpolation with `{}`   |
 | `list`  | `[1, 2, 3]`                     | growable, heterogeneous                 |
 | `map`   | `{ a: 1, b: 2 }`                | string keys, insertion-ordered          |
 | `fn`    | `fn(x) { return x + 1 }`        | first-class, closes over its scope      |
@@ -57,7 +57,7 @@ undeclared name is an error (this catches typos).
 ```loqi
 let n = 10
 n = n + 1          # ok
-m = 5              # errore: 'm' non dichiarata (usa 'let')
+m = 5              # error: 'm' not declared (use 'let')
 ```
 
 Variables are block-scoped. An inner scope can shadow an outer one.
@@ -95,7 +95,7 @@ Interpolation is fully recursive — expressions may contain their own strings a
 nested interpolation:
 
 ```loqi
-print("nomi: {join(["Ada", "Lin"], ", ")}")
+print("names: {join(["Ada", "Lin"], ", ")}")
 ```
 
 Escapes: `\n  \t  \r  \\  \"  \0  \{  \}`.
@@ -109,8 +109,8 @@ literal backtick as `` `` `` (two backticks). Raw strings may span multiple line
 ```loqi
 let payload = `{"name": "Ada", "tags": ["x", "y"]}`   # no escaping needed
 let pattern = `\d+\.\d+`
-let doc = `riga uno
-riga due`
+let doc = `line one
+line two`
 ```
 
 This is why JSON is pleasant in Loqi: `json.parse(`{"k": 1}`)` just works.
@@ -143,14 +143,14 @@ print(has(xs, 2))     # true
 ### Maps
 
 ```loqi
-let m = { nome: "Ada", anni: 36 }
-print(m.nome)         # dot access for identifier keys
-print(m["nome"])      # bracket access for any key
-m.citta = "Londra"    # add / update
-m["paese"] = "UK"
-print(keys(m))        # ["nome", "anni", "citta", "paese"]
+let m = { name: "Ada", age: 36 }
+print(m.name)         # dot access for identifier keys
+print(m["name"])      # bracket access for any key
+m.city = "London"     # add / update
+m["country"] = "UK"
+print(keys(m))        # ["name", "age", "city", "country"]
 print(values(m))
-print(has(m, "nome")) # true
+print(has(m, "name")) # true
 ```
 
 Iterating a map yields its keys.
@@ -161,11 +161,11 @@ No parentheses around conditions; blocks are always braced.
 
 ```loqi
 if x > 0 {
-  print("positivo")
+  print("positive")
 } else if x == 0 {
   print("zero")
 } else {
-  print("negativo")
+  print("negative")
 }
 
 while x > 0 {
@@ -189,11 +189,11 @@ Patterns are values; `_` is the default. Comma-separate patterns to match any of
 them. (Each arm is a block.)
 
 ```loqi
-fn categoria(voto) {
-  match voto {
-    "A", "B": { return "ottimo" }
-    "C":      { return "sufficiente" }
-    _:        { return "da rivedere" }
+fn category(grade) {
+  match grade {
+    "A", "B": { return "excellent" }
+    "C":      { return "sufficient" }
+    _:        { return "needs review" }
   }
 }
 ```
@@ -210,11 +210,11 @@ try {
   let data = json.parse(http.get(url))
   print(data.title)
 } catch err {
-  print("richiesta fallita: {err}")
+  print("request failed: {err}")
 }
 
 # the catch variable is optional
-try { rischioso() } catch { print("gestito") }
+try { risky() } catch { print("handled") }
 ```
 
 `return` works from inside a `try`. (Avoid `break`/`continue` that jump out of a
@@ -227,14 +227,14 @@ be anonymous (`fn(x) { ... }`). They close over the scope in which they are
 defined.
 
 ```loqi
-fn applica(f, x) { return f(x) }
-print(applica(fn(n) { return n * 2 }, 21))   # 42
+fn apply(f, x) { return f(x) }
+print(apply(fn(n) { return n * 2 }, 21))     # 42
 
-fn contatore() {
+fn counter() {
   let n = 0
   return fn() { n = n + 1; return n }        # captures n
 }
-let c = contatore()
+let c = counter()
 print(c(), c(), c())                          # 1 2 3
 ```
 
@@ -242,11 +242,33 @@ A function with no `return` returns `nil`. Recursion is supported directly.
 
 ## Modules
 
-`import "path.lq"` executes another file in the current global scope (a simple
-v0.1 module model; namespaced modules are on the roadmap).
+Loqi has two ways to bring in another file. **Import paths resolve relative to the
+file doing the import**, so a module works no matter which directory you run it from.
+
+**Namespaced import** — the recommended form. The module runs in its own global
+scope and is exposed under a name; its functions keep resolving *their own* globals,
+so a module's internal constants never leak into — or clash with — yours:
 
 ```loqi
-import "std/math.lq"
+# geometry.lq
+let PI = 3.14159
+fn area(r) { return PI * r * r }
+```
+
+```loqi
+# main.lq
+import "geometry.lq" as geo
+
+print(geo.area(2))      # 12.56636 — uses the module's own PI
+print(geo.PI)           # 3.14159  — constants are accessible too
+```
+
+**Flat import** — runs the file in the *current* global scope, binding its
+top-level names directly (handy for a shared prelude):
+
+```loqi
+import "geometry.lq"
+print(area(2))          # area and PI are now in scope here
 ```
 
 ## Grammar

@@ -1,15 +1,15 @@
-# Estrazione strutturata: l'AI produce JSON, `json.parse` lo rende dati nativi.
-# Tutto built-in: niente librerie HTTP, niente parser JSON, niente SDK.
+# Structured extraction: the AI produces JSON, `json.parse` turns it into native data.
+# All built-in: no HTTP libraries, no JSON parser, no SDK.
 #   ANTHROPIC_API_KEY=... loqi examples/ai/extract.lq
 
-let testo = "Ada Lovelace, nata nel 1815, è considerata la prima programmatrice."
+let text = "Ada Lovelace, born in 1815, is considered the first programmer."
 
-let prompt = "Estrai nome, anno_nascita (int) e ruolo dal testo. " +
-             "Rispondi SOLO con JSON valido, nessun altro testo.\n\n" + testo
+let prompt = "Extract name, birth_year (int) and role from the text. " +
+             "Respond ONLY with valid JSON, no other text.\n\n" + text
 
 let json_str = ai(prompt)
-let dati = json.parse(json_str)
+let data = json.parse(json_str)
 
-print("Nome:  {dati.nome}")
-print("Anno:  {dati.anno_nascita}")
-print("Ruolo: {dati.ruolo}")
+print("Name: {data.name}")
+print("Year: {data.birth_year}")
+print("Role: {data.role}")

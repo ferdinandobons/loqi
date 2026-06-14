@@ -5,17 +5,18 @@
 **The AI-first programming language — the language you speak to machines.**
 
 *Loqi* (from Latin *loqui*, "to speak") is a small, modern language with batteries
-included: an LLM call, an HTTP client, JSON and vectors are part of the language,
-not packages you hunt down and install. Simple to read, fast on Apple Silicon,
-one binary, no toolchain to assemble.
+included: an LLM call, an HTTP client, a JSON parser and vector math are part of the
+language, not packages you hunt down and install. Simple to read, fast on Apple
+Silicon, one binary, no toolchain to assemble.
 
 ```loqi
-# fetch live data, then let a model explain it — no libraries, no SDK
+# Fetch live data, then let a model reason about it.
+# No pip install, no SDK, no API client — http, json and ai ARE the language.
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
-print("{repo.full_name}: {repo.stargazers_count} ⭐")
+print("{repo.full_name} — {repo.stargazers_count} ⭐")
 
-let poem = ai("Scrivi un haiku sul codice pulito")
-print(poem)
+let summary = ai("In one tweet, what is {repo.name} and why does it matter?")
+print(summary)
 ```
 
 </div>
@@ -24,31 +25,31 @@ print(poem)
 
 > **🌐 Live site: [ferdinandobons.github.io/loqi](https://ferdinandobons.github.io/loqi/)**
 
-> **Status: v0.2 — early but real, and it does what it says.** The core language,
-> a **bytecode VM** (on par with CPython, ~5× faster than the first cut), the
-> **AI-native layer** (`ai`, `json`, `http`, `read`/`write`, `similarity`), plus
-> **`match`** and **`try`/`catch`** all work today — implemented in dependency-free
-> C, built with nothing but `clang`. Every claim here is backed by code, tests, and
-> an honest [ROADMAP](docs/ROADMAP.md).
+> **Status: v0.2 — early but real, and it does what it says.** The core language, a
+> **bytecode VM** (on par with CPython, ~5× faster than the first cut), the
+> **AI-native layer** (`ai`, `json`, `http`, `read`/`write`, `similarity`), **modules**,
+> plus **`match`** and **`try`/`catch`** all work today — implemented in dependency-free
+> C11, built with nothing but `clang`. Every claim here is backed by code, tests, and an
+> honest [ROADMAP](docs/ROADMAP.md).
 
 ## Why Loqi
 
 Three ideas drive every decision:
 
-1. **AI-first, batteries included.** The things you install separately today —
-   an HTTP client, a JSON parser, an LLM SDK, a vector-similarity helper — are
-   built into the language and its runtime. `ai("...")` calls a model.
-   `json.parse`, `json.stringify`, `http.get`, `http.post`, `similarity`,
-   `read`, `write`, `env` are always there. No `pip install`, no `npm i`, no SDK.
-2. **Fast on Apple Silicon.** The implementation is C, compiled with
-   `-O3 -mcpu=apple-m1 -flto`. The execution engine is moving from a reference
-   tree-walker to a bytecode VM tuned for arm64.
+1. **AI-first, batteries included.** The things you install separately today — an HTTP
+   client, a JSON parser, an LLM SDK, a vector-similarity helper — are part of the
+   language and its runtime. `ai("...")` calls a model. `json.parse`, `json.stringify`,
+   `http.get`, `http.post`, `similarity`, `read`, `write`, `env` are always there.
+   No `pip install`, no `npm i`, no SDK, no glue code.
+2. **Fast on Apple Silicon.** A single-pass compiler lowers your code to bytecode that
+   runs on a stack VM tuned for arm64, compiled with `-O3 -mcpu=apple-m1 -flto`. One
+   binary, instant startup, no warm-up.
 3. **Simple to read and write.** No semicolons, no ceremony. Curly-brace blocks,
-   `let`/`fn`, string interpolation with `{}`. If you've read code before, you
-   can read Loqi.
+   `let`/`fn`, string interpolation with `{}`. If you've read code before, you can
+   read Loqi.
 
-Loqi is **not** built on top of another language. It is its own grammar,
-parser, and runtime.
+Loqi is **not** built on top of another language. It is its own grammar, parser,
+bytecode compiler, and virtual machine.
 
 ## Quickstart
 
@@ -64,39 +65,78 @@ git clone https://github.com/ferdinandobons/loqi && cd loqi
 A first program (`hello.lq`):
 
 ```loqi
-fn saluta(nome) {
-  return "Ciao, {nome}!"
+fn greet(name) {
+  return "Hello, {name}!"
 }
 
-print(saluta("mondo"))
-```
-
-```sh
-./build/loqi hello.lq
-# Ciao, mondo!
+print(greet("world"))         # Hello, world!
 ```
 
 ## A taste
 
+**Functions, closures, and collections — no imports.**
+
 ```loqi
-# funzioni di ordine superiore + closure
-fn mappa(xs, f) {
-  let out = []
-  for x in xs { push(out, f(x)) }
-  return out
+let nums = [1, 2, 3, 4, 5]
+
+let squares = map(nums, fn(x) { return x * x })
+print(squares)                                            # [1, 4, 9, 16, 25]
+print("sum of evens: {sum(filter(nums, fn(x){ return x % 2 == 0 }))}")  # 6
+
+# maps iterate cleanly; interpolation accepts any expression
+let user = { name: "Ada", role: "engineer" }
+for key in user {
+  print("{key} -> {user[key]}")
+}
+```
+
+**Pattern matching and error handling that doesn't bite.**
+
+```loqi
+fn classify(n) {
+  match n {
+    0:       { return "zero" }
+    1, 2, 3: { return "small" }
+    _:       { return "large" }
+  }
 }
 
-let quadrati = mappa([1, 2, 3, 4], fn(x) { return x * x })
-print(quadrati)            # [1, 4, 9, 16]
-
-# mappe e iterazione
-let utente = { nome: "Ada", anni: 36 }
-for chiave in utente {
-  print("{chiave}: {utente[chiave]}")
+# errors are values you handle, not crashes you fear
+let config = { theme: "dark" }
+try {
+  config = json.parse(read("config.json"))
+} catch e {
+  print("config.json missing, using defaults ({e})")
 }
+print(classify(len(keys(config))))
+```
 
-# interpolazione con espressioni annidate
-print("totale: {join(mappa([1,2,3], fn(x){ return str(x) }), ", ")}")
+**AI-native: turn messy text into structured data in one call.**
+
+```loqi
+let text = "Ada Lovelace, born 1815, is regarded as the first programmer."
+
+# Ask a model for JSON, then parse it with the built-in parser — no SDK in between.
+let raw = ai("Extract name and birth_year as JSON from: {text}. Output only JSON.")
+let person = json.parse(raw)
+
+print("{person.name} was born in {person.birth_year}")   # Ada Lovelace was born in 1815
+```
+
+**Split your program into modules.**
+
+```loqi
+# geometry.lq
+let PI = 3.14159
+fn area(r) { return PI * r * r }
+```
+
+```loqi
+# main.lq — import paths resolve relative to this file, so it runs from anywhere
+import "geometry.lq" as geo
+
+print("circle area: {geo.area(2)}")                      # circle area: 12.56636
+print("module's pi: {geo.PI}")                           # module's pi: 3.14159
 ```
 
 ## Documentation
@@ -106,19 +146,20 @@ print("totale: {join(mappa([1,2,3], fn(x){ return str(x) }), ", ")}")
 - **[Cheatsheet](docs/CHEATSHEET.md)** — the whole language on one page.
 - **[Why Loqi](docs/WHY-LOQI.md)** — the positioning and the bet.
 - **[Comparison](docs/COMPARISON.md)** — Loqi vs Python, JS/Node, Go, Rust, Mojo (honest).
-- **[Roadmap & engineering log](docs/ROADMAP.md)** — what's done, what's next, and
-  honest benchmarks.
-- **[Landing page](web/index.html)** — open `web/index.html` in a browser.
+- **[Roadmap & engineering log](docs/ROADMAP.md)** — what's done, what's next, honest benchmarks.
 - **[Examples](examples/)** — runnable `.lq` programs (`examples/ai/` for AI demos).
 
 ## Project layout
 
 ```
-src/loqi.c        the reference interpreter (lexer, parser, evaluator)
-scripts/build.sh  build script (release / debug)
-examples/         runnable example programs
-tests/            test suite + runner
-docs/             language guide, stdlib reference, roadmap
+src/loqi.c        the language implementation (lexer, parser, bytecode compiler, VM)
+scripts/build.sh  build script (release / debug with ASan + UBSan)
+scripts/test.sh   test runner
+examples/         runnable example programs (examples/ai/ for AI demos)
+tests/            test suite (incl. error-handling tests)
+docs/             language guide, stdlib reference, roadmap, comparison
+web/              landing page + SEO assets (deployed to GitHub Pages)
+editors/          editor syntax highlighting (TextMate grammar)
 std/              Loqi-side standard library modules (planned)
 ```
 

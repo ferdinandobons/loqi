@@ -1,10 +1,10 @@
-# HTTP e JSON sono nel linguaggio: fetch + parse in due righe, zero dipendenze.
-# (Richiede solo una connessione di rete.)
+# HTTP and JSON are in the language: fetch + parse in two lines, zero dependencies.
+# (Only requires a network connection.)
 #   loqi examples/ai/web.lq
 
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
-print("{repo.full_name}: {repo.stargazers_count} stelle ⭐")
+print("{repo.full_name}: {repo.stargazers_count} stars ⭐")
 
-# E con l'AI puoi spiegare i dati al volo (richiede ANTHROPIC_API_KEY):
-# let riassunto = ai("Riassumi in una frase: {repo.description}")
-# print(riassunto)
+# And with AI you can explain the data on the fly (requires ANTHROPIC_API_KEY):
+# let summary = ai("Summarize in one sentence: {repo.description}")
+# print(summary)

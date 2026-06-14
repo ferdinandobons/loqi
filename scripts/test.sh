@@ -4,7 +4,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 LOQI="${LOQI:-build/loqi}"
-[ -x "$LOQI" ] || { echo "Costruisci prima: ./scripts/build.sh"; exit 1; }
+[ -x "$LOQI" ] || { echo "Build first: ./scripts/build.sh"; exit 1; }
 
 pass=0; fail=0
 for t in tests/*.lq; do
@@ -35,11 +35,11 @@ for t in tests/errors/*.lq; do
     echo "  ✓ (error) $t  (exit $rc)"
     pass=$((pass+1))
   else
-    echo "  ✗ (error) $t  — atteso errore pulito, exit=$rc"
+    echo "  ✗ (error) $t  — expected clean error exit, exit=$rc"
     fail=$((fail+1))
   fi
 done
 
 echo "-----------------------------------------"
-echo "  passati: $pass   falliti: $fail"
+echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

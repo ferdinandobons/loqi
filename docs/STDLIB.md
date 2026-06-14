@@ -22,7 +22,7 @@ print("x =", 42)        # x = 42
 Reads one line from stdin (without the trailing newline). Optional prompt is
 printed first. Returns `nil` at end of input.
 ```loqi
-let nome = input("Come ti chiami? ")
+let name = input("What's your name? ")
 ```
 
 ## Conversion & reflection
@@ -100,7 +100,7 @@ CPU time in seconds since process start — handy for micro-benchmarks.
 ```loqi
 let t = clock()
 # ... work ...
-print("durata: {clock() - t}s")
+print("elapsed: {clock() - t}s")
 ```
 
 ## Testing
@@ -108,7 +108,7 @@ print("durata: {clock() - t}s")
 ### `assert(cond, message?) → nil`
 Aborts with a runtime error if `cond` is falsey. Used by the test suite.
 ```loqi
-assert(2 + 2 == 4, "la matematica è rotta")
+assert(2 + 2 == 4, "math is broken")
 ```
 
 ## More collections
@@ -168,15 +168,15 @@ Calls a large language model and returns its text answer. Reads
 `ANTHROPIC_API_KEY` from the environment; the model defaults to
 `claude-sonnet-4-6` (override with the 2nd argument or the `LOQI_AI_MODEL` env var).
 ```loqi
-let risposta = ai("Spiega la ricorsione a un bambino di 10 anni")
-print(risposta)
+let answer = ai("Explain recursion to a 10-year-old")
+print(answer)
 
-let veloce = ai("Riassumi: {testo}", "claude-haiku-4-5")
+let fast = ai("Summarize: {text}", "claude-haiku-4-5")
 ```
 Combine with `json` for structured output:
 ```loqi
-let dati = json.parse(ai("Estrai nome e anno come JSON da: {testo}"))
-print(dati.nome)
+let data = json.parse(ai("Extract name and year as JSON from: {text}"))
+print(data.name)
 ```
 
 ## `json.parse(str) → value` / `json.stringify(value) → str`
@@ -217,6 +217,6 @@ let key = env("ANTHROPIC_API_KEY")
 ## `read(path) → str` / `write(path, content) → nil`
 Read and write whole files.
 ```loqi
-write("note.txt", "ciao da Loqi\n")
+write("note.txt", "hi from Loqi\n")
 print(read("note.txt"))
 ```
