@@ -34,8 +34,20 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
 - CRLF line-continuation; control-byte rejection in strings; dead code removed;
   `value_to_cstr` repr de-duplicated.
 
+### Added — AI-first batteries
+- **`ai(prompt[, model])`** — a first-class LLM call (Anthropic Messages API via
+  `curl`), reading `ANTHROPIC_API_KEY`; model defaults to `claude-sonnet-4-6`.
+- **`json.parse` / `json.stringify`** — a built-in JSON codec (full string
+  escapes incl. `\uXXXX`) to/from native values.
+- **`http.get` / `http.post`** — a built-in HTTP client.
+- **`similarity(a, b)`** — cosine similarity over numeric vectors.
+- **`env`, `read`, `write`** — environment variables and whole-file I/O.
+- **Raw strings** with backticks (`` `...` ``): verbatim, no escapes/interpolation
+  — JSON and regex literals need no escaping.
+- Example gallery `examples/ai/` (haiku, structured extraction, web+JSON).
+
 ### In progress
-- AI-native built-ins (`ai`, `embed`, `http`, `json`).
+- `embed()` (embeddings API), structured generation with schema.
 - Presentation & positioning materials.
 
 ### Known limitations

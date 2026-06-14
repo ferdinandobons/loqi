@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /* ===========================================================================
  * Forward declarations
@@ -270,7 +271,7 @@ static void map_set(ObjMap *m, const char *key, Value v) {
  * ========================================================================= */
 typedef enum {
     /* literals */
-    T_INT, T_FLOAT, T_STRING, T_IDENT,
+    T_INT, T_FLOAT, T_STRING, T_RAWSTRING, T_IDENT,
     /* keywords */
     T_LET, T_FN, T_RETURN, T_IF, T_ELSE, T_WHILE, T_FOR, T_IN,
     T_TRUE, T_FALSE, T_NIL, T_AND, T_OR, T_NOT, T_BREAK, T_CONTINUE, T_IMPORT,
@@ -478,6 +479,28 @@ static Token lex_string(Lexer *L) {
     return tok;
 }
 
+/* Raw (verbatim) string: `...` — no escapes, no interpolation. Ideal for JSON,
+ * regexes and paths. A literal backtick is written as `` (two backticks). */
+static Token lex_raw_string(Lexer *L) {
+    char *buf = xmalloc(64); size_t cap = 64, len = 0;
+#define PUSHR(c) do { if (len + 1 >= cap) { cap *= 2; buf = xrealloc(buf, cap); } buf[len++] = (c); } while (0)
+    for (;;) {
+        if (is_at_end(L)) { free(buf); return error_token(L, "raw string `...` non terminata"); }
+        char c = advance_ch(L);
+        if (c == '`') {
+            if (peek_ch(L) == '`') { advance_ch(L); PUSHR('`'); continue; } /* `` -> literal ` */
+            break;
+        }
+        if (c == '\n') L->line++;
+        PUSHR(c);
+    }
+    PUSHR('\0');
+#undef PUSHR
+    Token tok = make_token(L, T_RAWSTRING);
+    tok.str_val = buf;
+    return tok;
+}
+
 static Token lex_next(Lexer *L) {
     skip_trivia(L);
     L->start = L->cur;
@@ -513,6 +536,7 @@ static Token lex_next(Lexer *L) {
         case '<': return make_token(L, match_ch(L, '=') ? T_LTEQ : T_LT);
         case '>': return make_token(L, match_ch(L, '=') ? T_GTEQ : T_GT);
         case '"': return lex_string(L);
+        case '`': return lex_raw_string(L);
     }
     return error_token(L, "carattere inatteso");
 }
@@ -623,6 +647,11 @@ static Node *parse_primary(Parser *P) {
     if (p_match(P, T_INT))   { Node *n = new_node(N_INT, P->prev.line); n->literal = int_val(P->prev.int_val); return n; }
     if (p_match(P, T_FLOAT)) { Node *n = new_node(N_FLOAT, P->prev.line); n->literal = float_val(P->prev.float_val); return n; }
     if (p_match(P, T_STRING)) { return parse_string_literal(P, &P->prev); }
+    if (p_match(P, T_RAWSTRING)) {
+        Node *n = new_node(N_STR, P->prev.line);
+        n->literal = cstring_val(P->I, P->prev.str_val ? P->prev.str_val : "");
+        return n;
+    }
     if (p_match(P, T_IDENT)) {
         Node *n = new_node(N_IDENT, P->prev.line);
         n->name = copy_lexeme(&P->prev);
@@ -2259,6 +2288,354 @@ static void define_native(Interp *I, const char *name, NativeFn fn, int arity) {
     table_set(I->globals, name, hash_string(name, strlen(name)), obj_val((Obj *)nat));
 }
 
+/* ===========================================================================
+ * AI-first batteries — the pieces you'd install separately in other languages,
+ * here built into the runtime: JSON, HTTP, environment, files, vectors, and a
+ * first-class call to an LLM (`ai`). HTTP/LLM shell out to the always-present
+ * `curl`; a native client is a later iteration.
+ * ========================================================================= */
+
+/* ---- JSON ---- */
+static Value json_parse_value(Interp *I, const char **p);
+
+static void json_skip_ws(const char **p) {
+    while (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r') (*p)++;
+}
+static void json_encode_utf8(char **buf, size_t *len, size_t *cap, unsigned cp) {
+    char tmp[4]; int n = 0;
+    if (cp < 0x80) tmp[n++] = (char)cp;
+    else if (cp < 0x800) { tmp[n++] = (char)(0xC0 | (cp >> 6)); tmp[n++] = (char)(0x80 | (cp & 0x3F)); }
+    else { tmp[n++] = (char)(0xE0 | (cp >> 12)); tmp[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); tmp[n++] = (char)(0x80 | (cp & 0x3F)); }
+    append_str(buf, len, cap, tmp, (size_t)n);
+}
+static char *json_parse_string_raw(Interp *I, const char **p) {
+    if (**p != '"') runtime_error(I, 0, "json: attesa stringa");
+    (*p)++;
+    char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
+    while (**p && **p != '"') {
+        char c = **p;
+        if (c == '\\') {
+            (*p)++;
+            char e = **p;
+            switch (e) {
+                case '"': append_str(&buf, &len, &cap, "\"", 1); break;
+                case '\\': append_str(&buf, &len, &cap, "\\", 1); break;
+                case '/': append_str(&buf, &len, &cap, "/", 1); break;
+                case 'n': append_str(&buf, &len, &cap, "\n", 1); break;
+                case 't': append_str(&buf, &len, &cap, "\t", 1); break;
+                case 'r': append_str(&buf, &len, &cap, "\r", 1); break;
+                case 'b': append_str(&buf, &len, &cap, "\b", 1); break;
+                case 'f': append_str(&buf, &len, &cap, "\f", 1); break;
+                case 'u': {
+                    unsigned cp = 0;
+                    for (int k = 0; k < 4; k++) {
+                        (*p)++;
+                        char h = **p;
+                        cp <<= 4;
+                        if (h >= '0' && h <= '9') cp |= (unsigned)(h - '0');
+                        else if (h >= 'a' && h <= 'f') cp |= (unsigned)(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') cp |= (unsigned)(h - 'A' + 10);
+                        else runtime_error(I, 0, "json: escape \\u non valido");
+                    }
+                    json_encode_utf8(&buf, &len, &cap, cp);
+                    break;
+                }
+                default: runtime_error(I, 0, "json: escape non valido");
+            }
+            (*p)++;
+        } else {
+            append_str(&buf, &len, &cap, p[0], 1);
+            (*p)++;
+        }
+    }
+    if (**p != '"') { free(buf); runtime_error(I, 0, "json: stringa non terminata"); }
+    (*p)++;
+    return buf;
+}
+static Value json_parse_value(Interp *I, const char **p) {
+    json_skip_ws(p);
+    char c = **p;
+    if (c == '"') { char *s = json_parse_string_raw(I, p); Value v = cstring_val(I, s); free(s); return v; }
+    if (c == '{') {
+        (*p)++; ObjMap *m = new_map(I); json_skip_ws(p);
+        if (**p == '}') { (*p)++; return obj_val((Obj *)m); }
+        for (;;) {
+            json_skip_ws(p);
+            char *key = json_parse_string_raw(I, p);
+            json_skip_ws(p);
+            if (**p != ':') { free(key); runtime_error(I, 0, "json: atteso ':'"); }
+            (*p)++;
+            Value val = json_parse_value(I, p);
+            map_set(m, key, val); free(key);
+            json_skip_ws(p);
+            if (**p == ',') { (*p)++; continue; }
+            if (**p == '}') { (*p)++; break; }
+            runtime_error(I, 0, "json: atteso ',' o '}'");
+        }
+        return obj_val((Obj *)m);
+    }
+    if (c == '[') {
+        (*p)++; ObjList *l = new_list(I); json_skip_ws(p);
+        if (**p == ']') { (*p)++; return obj_val((Obj *)l); }
+        for (;;) {
+            list_push(l, json_parse_value(I, p));
+            json_skip_ws(p);
+            if (**p == ',') { (*p)++; continue; }
+            if (**p == ']') { (*p)++; break; }
+            runtime_error(I, 0, "json: atteso ',' o ']'");
+        }
+        return obj_val((Obj *)l);
+    }
+    if (!strncmp(*p, "true", 4)) { *p += 4; return bool_val(true); }
+    if (!strncmp(*p, "false", 5)) { *p += 5; return bool_val(false); }
+    if (!strncmp(*p, "null", 4)) { *p += 4; return NIL_VAL; }
+    if (c == '-' || (c >= '0' && c <= '9')) {
+        const char *start = *p;
+        bool is_float = false;
+        if (**p == '-') (*p)++;
+        while ((**p >= '0' && **p <= '9')) (*p)++;
+        if (**p == '.') { is_float = true; (*p)++; while (**p >= '0' && **p <= '9') (*p)++; }
+        if (**p == 'e' || **p == 'E') { is_float = true; (*p)++; if (**p == '+' || **p == '-') (*p)++; while (**p >= '0' && **p <= '9') (*p)++; }
+        char tmp[64]; int n = (int)(*p - start); if (n > 63) n = 63;
+        memcpy(tmp, start, (size_t)n); tmp[n] = '\0';
+        return is_float ? float_val(strtod(tmp, NULL)) : int_val(strtoll(tmp, NULL, 10));
+    }
+    runtime_error(I, 0, "json: token non valido");
+    return NIL_VAL;
+}
+static Value nat_json_parse(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "json.parse() richiede una str");
+    const char *p = AS_STRING(argv[0])->chars;
+    Value v = json_parse_value(I, &p);
+    json_skip_ws(&p);
+    if (*p != '\0') runtime_error(I, 0, "json.parse(): testo in eccesso dopo il valore");
+    return v;
+}
+static void json_stringify_value(Interp *I, char **buf, size_t *len, size_t *cap, Value v) {
+    switch (v.type) {
+        case VAL_NIL: append_str(buf, len, cap, "null", 4); return;
+        case VAL_BOOL: append_str(buf, len, cap, v.as.b ? "true" : "false", v.as.b ? 4 : 5); return;
+        case VAL_INT: case VAL_FLOAT: { char *s = value_to_cstr(I, v); append_str(buf, len, cap, s, strlen(s)); free(s); return; }
+        case VAL_OBJ: break;
+    }
+    if (IS_STRING(v)) {
+        ObjString *s = AS_STRING(v);
+        append_str(buf, len, cap, "\"", 1);
+        for (int i = 0; i < s->length; i++) {
+            char c = s->chars[i];
+            switch (c) {
+                case '"': append_str(buf, len, cap, "\\\"", 2); break;
+                case '\\': append_str(buf, len, cap, "\\\\", 2); break;
+                case '\n': append_str(buf, len, cap, "\\n", 2); break;
+                case '\t': append_str(buf, len, cap, "\\t", 2); break;
+                case '\r': append_str(buf, len, cap, "\\r", 2); break;
+                default: append_str(buf, len, cap, &c, 1);
+            }
+        }
+        append_str(buf, len, cap, "\"", 1);
+    } else if (IS_LIST(v)) {
+        ObjList *l = AS_LIST(v);
+        append_str(buf, len, cap, "[", 1);
+        for (int i = 0; i < l->count; i++) { if (i) append_str(buf, len, cap, ",", 1); json_stringify_value(I, buf, len, cap, l->items[i]); }
+        append_str(buf, len, cap, "]", 1);
+    } else if (IS_MAP(v)) {
+        ObjMap *m = AS_MAP(v);
+        append_str(buf, len, cap, "{", 1);
+        for (int i = 0; i < m->count; i++) {
+            if (i) append_str(buf, len, cap, ",", 1);
+            json_stringify_value(I, buf, len, cap, cstring_val(I, m->entries[i].key));
+            append_str(buf, len, cap, ":", 1);
+            json_stringify_value(I, buf, len, cap, m->entries[i].value);
+        }
+        append_str(buf, len, cap, "}", 1);
+    } else {
+        append_str(buf, len, cap, "null", 4);
+    }
+}
+static Value nat_json_stringify(Interp *I, int argc, Value *argv) {
+    char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
+    json_stringify_value(I, &buf, &len, &cap, argv[0]);
+    Value out = string_val(I, buf, (int)len);
+    free(buf);
+    return out;
+}
+
+/* ---- shell / curl plumbing ---- */
+static char *shell_quote(const char *s) {
+    size_t n = strlen(s);
+    char *out = xmalloc(n * 4 + 3);
+    size_t j = 0;
+    out[j++] = '\'';
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '\'') { out[j++] = '\''; out[j++] = '\\'; out[j++] = '\''; out[j++] = '\''; }
+        else out[j++] = s[i];
+    }
+    out[j++] = '\'';
+    out[j] = '\0';
+    return out;
+}
+static char *run_capture(const char *cmd) {
+    FILE *pp = popen(cmd, "r");
+    if (!pp) return NULL;
+    size_t cap = 4096, len = 0; char *buf = xmalloc(cap);
+    for (;;) {
+        if (cap - len < 4096) { cap *= 2; buf = xrealloc(buf, cap); }
+        size_t got = fread(buf + len, 1, cap - len, pp);
+        len += got;
+        if (got == 0) break;
+    }
+    buf[len] = '\0';
+    pclose(pp);
+    return buf;
+}
+
+/* ---- HTTP ---- */
+static Value nat_http_get(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "http.get() richiede un url (str)");
+    char *qurl = shell_quote(AS_STRING(argv[0])->chars);
+    size_t clen = strlen(qurl) + 64;
+    char *cmd = xmalloc(clen);
+    snprintf(cmd, clen, "curl -fsSL --max-time 60 %s", qurl);
+    char *resp = run_capture(cmd);
+    free(qurl); free(cmd);
+    if (!resp) runtime_error(I, 0, "http.get(): impossibile eseguire curl");
+    Value v = cstring_val(I, resp);
+    free(resp);
+    return v;
+}
+static Value nat_http_post(Interp *I, int argc, Value *argv) {
+    if (argc < 2 || !IS_STRING(argv[0]) || !IS_STRING(argv[1]))
+        runtime_error(I, 0, "http.post() richiede (url: str, body: str)");
+    const char *ctype = (argc >= 3 && IS_STRING(argv[2])) ? AS_STRING(argv[2])->chars : "application/json";
+    char hdr[256];
+    snprintf(hdr, sizeof(hdr), "Content-Type: %.200s", ctype);
+    char *qurl = shell_quote(AS_STRING(argv[0])->chars);
+    char *qbody = shell_quote(AS_STRING(argv[1])->chars);
+    char *qhdr = shell_quote(hdr);
+    size_t clen = strlen(qurl) + strlen(qbody) + strlen(qhdr) + 64;
+    char *cmd = xmalloc(clen);
+    snprintf(cmd, clen, "curl -fsSL --max-time 60 -X POST -H %s --data %s %s", qhdr, qbody, qurl);
+    char *resp = run_capture(cmd);
+    free(qurl); free(qbody); free(qhdr); free(cmd);
+    if (!resp) runtime_error(I, 0, "http.post(): impossibile eseguire curl");
+    Value v = cstring_val(I, resp);
+    free(resp);
+    return v;
+}
+
+/* ---- ai: a first-class LLM call (Anthropic Messages API via curl) ---- */
+static Value nat_ai(Interp *I, int argc, Value *argv) {
+    if (argc < 1 || !IS_STRING(argv[0]))
+        runtime_error(I, 0, "ai() richiede un prompt (str)");
+    const char *key = getenv("ANTHROPIC_API_KEY");
+    if (!key || !*key)
+        runtime_error(I, 0, "ai(): imposta la variabile d'ambiente ANTHROPIC_API_KEY");
+    const char *model = (argc >= 2 && IS_STRING(argv[1])) ? AS_STRING(argv[1])->chars
+                       : (getenv("LUME_AI_MODEL") ? getenv("LUME_AI_MODEL") : "claude-sonnet-4-6");
+
+    /* build the request JSON safely via the value stringifier */
+    ObjMap *body = new_map(I);
+    map_set(body, "model", cstring_val(I, model));
+    map_set(body, "max_tokens", int_val(1024));
+    ObjList *msgs = new_list(I);
+    ObjMap *msg = new_map(I);
+    map_set(msg, "role", cstring_val(I, "user"));
+    map_set(msg, "content", argv[0]);
+    list_push(msgs, obj_val((Obj *)msg));
+    map_set(body, "messages", obj_val((Obj *)msgs));
+
+    char *jbuf = xmalloc(16); size_t jl = 0, jc = 16; jbuf[0] = '\0';
+    json_stringify_value(I, &jbuf, &jl, &jc, obj_val((Obj *)body));
+
+    /* write body to a temp file so the prompt never touches the shell */
+    char tmpl[] = "/tmp/lume_ai_XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) { free(jbuf); runtime_error(I, 0, "ai(): impossibile creare file temporaneo"); }
+    if (write(fd, jbuf, jl) < 0) { close(fd); free(jbuf); runtime_error(I, 0, "ai(): scrittura temporanea fallita"); }
+    close(fd);
+    free(jbuf);
+
+    char *qkey = shell_quote(key);
+    size_t clen = strlen(qkey) + strlen(tmpl) + 256;
+    char *cmd = xmalloc(clen);
+    snprintf(cmd, clen,
+             "curl -fsS --max-time 120 https://api.anthropic.com/v1/messages "
+             "-H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' "
+             "-H x-api-key:%s --data @%s", qkey, tmpl);
+    char *resp = run_capture(cmd);
+    free(qkey); free(cmd); unlink(tmpl);
+    if (!resp || !*resp) { free(resp); runtime_error(I, 0, "ai(): nessuna risposta dall'API"); }
+
+    /* parse { "content": [ { "type":"text", "text":"..." } ], ... } */
+    const char *p = resp;
+    Value parsed = json_parse_value(I, &p);
+    free(resp);
+    if (IS_MAP(parsed)) {
+        Value *content = map_get(AS_MAP(parsed), "content");
+        if (content && IS_LIST(*content) && AS_LIST(*content)->count > 0) {
+            Value first = AS_LIST(*content)->items[0];
+            if (IS_MAP(first)) {
+                Value *text = map_get(AS_MAP(first), "text");
+                if (text && IS_STRING(*text)) return *text;
+            }
+        }
+        Value *err = map_get(AS_MAP(parsed), "error");
+        if (err && IS_MAP(*err)) {
+            Value *m = map_get(AS_MAP(*err), "message");
+            if (m && IS_STRING(*m)) runtime_error(I, 0, "ai(): %s", AS_STRING(*m)->chars);
+        }
+    }
+    runtime_error(I, 0, "ai(): risposta dell'API in formato inatteso");
+    return NIL_VAL;
+}
+
+/* ---- environment, files, vectors ---- */
+static Value nat_env(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "env() richiede un nome (str)");
+    const char *v = getenv(AS_STRING(argv[0])->chars);
+    return v ? cstring_val(I, v) : NIL_VAL;
+}
+static char *read_file(const char *path); /* defined in the driver */
+static Value nat_read(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "read() richiede un percorso (str)");
+    char *src = read_file(AS_STRING(argv[0])->chars);
+    if (!src) runtime_error(I, 0, "read(): impossibile leggere '%s'", AS_STRING(argv[0])->chars);
+    Value v = cstring_val(I, src);
+    free(src);
+    return v;
+}
+static Value nat_write(Interp *I, int argc, Value *argv) {
+    if (argc < 2 || !IS_STRING(argv[0]) || !IS_STRING(argv[1]))
+        runtime_error(I, 0, "write() richiede (percorso: str, contenuto: str)");
+    FILE *f = fopen(AS_STRING(argv[0])->chars, "wb");
+    if (!f) runtime_error(I, 0, "write(): impossibile aprire '%s'", AS_STRING(argv[0])->chars);
+    ObjString *s = AS_STRING(argv[1]);
+    fwrite(s->chars, 1, (size_t)s->length, f);
+    fclose(f);
+    return NIL_VAL;
+}
+static Value nat_similarity(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
+        runtime_error(I, 0, "similarity() richiede due vettori (list di numeri)");
+    ObjList *a = AS_LIST(argv[0]), *b = AS_LIST(argv[1]);
+    if (a->count != b->count) runtime_error(I, 0, "similarity(): vettori di lunghezza diversa");
+    double dot = 0, na = 0, nb = 0;
+    for (int i = 0; i < a->count; i++) {
+        if (!IS_NUM(a->items[i]) || !IS_NUM(b->items[i])) runtime_error(I, 0, "similarity(): i vettori devono contenere numeri");
+        double x = as_double(a->items[i]), y = as_double(b->items[i]);
+        dot += x * y; na += x * x; nb += y * y;
+    }
+    if (na == 0 || nb == 0) return float_val(0.0);
+    return float_val(dot / (sqrt(na) * sqrt(nb)));
+}
+
+/* register a native inside a namespace map (e.g. json.parse) */
+static void define_native_in(Interp *I, ObjMap *ns, const char *name, NativeFn fn, int arity) {
+    ObjNative *nat = (ObjNative *)alloc_obj(I, sizeof(ObjNative), OBJ_NATIVE);
+    nat->fn = fn; nat->name = name; nat->arity = arity;
+    map_set(ns, name, obj_val((Obj *)nat));
+}
+
 static void install_stdlib(Interp *I) {
     define_native(I, "print", nat_print, -1);
     define_native(I, "str", nat_str, 1);
@@ -2282,6 +2659,23 @@ static void install_stdlib(Interp *I) {
     define_native(I, "clock", nat_clock, 0);
     define_native(I, "input", nat_input, -1);
     define_native(I, "assert", nat_assert, -1);
+
+    /* --- AI-first batteries --- */
+    define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model) */
+    define_native(I, "env", nat_env, 1);
+    define_native(I, "read", nat_read, 1);
+    define_native(I, "write", nat_write, 2);
+    define_native(I, "similarity", nat_similarity, 2);
+
+    ObjMap *json = new_map(I);
+    define_native_in(I, json, "parse", nat_json_parse, 1);
+    define_native_in(I, json, "stringify", nat_json_stringify, 1);
+    table_set(I->globals, "json", hash_string("json", 4), obj_val((Obj *)json));
+
+    ObjMap *http = new_map(I);
+    define_native_in(I, http, "get", nat_http_get, 1);
+    define_native_in(I, http, "post", nat_http_post, -1);
+    table_set(I->globals, "http", hash_string("http", 4), obj_val((Obj *)http));
 }
 
 /* ===========================================================================

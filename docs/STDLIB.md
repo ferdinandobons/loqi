@@ -1,9 +1,8 @@
-# Lume Standard Library (v0.1)
+# Lume Standard Library
 
-Everything here is **built in** — always available, no import. This is the
-"batteries included" core. The AI-native built-ins (`ai`, `embed`, `http`,
-`json`, ...) are tracked in the [roadmap](ROADMAP.md) and land in the next
-iterations.
+Everything here is **built in** — always available, no import, no packages. This
+is the "batteries included" core, including the **AI-native layer** (`ai`, `json`,
+`http`, ...) that you would otherwise assemble from separate libraries.
 
 ## Conventions
 
@@ -110,4 +109,68 @@ print("durata: {clock() - t}s")
 Aborts with a runtime error if `cond` is falsey. Used by the test suite.
 ```lume
 assert(2 + 2 == 4, "la matematica è rotta")
+```
+
+---
+
+# AI-first batteries
+
+The reason Lume exists. These are **part of the language**, not packages.
+
+## `ai(prompt) → str` / `ai(prompt, model) → str`
+Calls a large language model and returns its text answer. Reads
+`ANTHROPIC_API_KEY` from the environment; the model defaults to
+`claude-sonnet-4-6` (override with the 2nd argument or the `LUME_AI_MODEL` env var).
+```lume
+let risposta = ai("Spiega la ricorsione a un bambino di 10 anni")
+print(risposta)
+
+let veloce = ai("Riassumi: {testo}", "claude-haiku-4-5")
+```
+Combine with `json` for structured output:
+```lume
+let dati = json.parse(ai("Estrai nome e anno come JSON da: {testo}"))
+print(dati.nome)
+```
+
+## `json.parse(str) → value` / `json.stringify(value) → str`
+A real JSON codec, built in. `parse` returns native Lume values
+(`map`/`list`/`str`/`int`/`float`/`bool`/`nil`); `stringify` is the inverse.
+```lume
+let m = json.parse(`{"ok": true, "n": [1, 2, 3]}`)   # raw string avoids escaping
+print(m.n[0])                                          # 1
+print(json.stringify({ a: 1, b: [true, nil] }))       # {"a":1,"b":[true,null]}
+```
+> Tip: write JSON literals with **raw strings** (backticks) so `{`, `}` and `"`
+> need no escaping — see the [language guide](LANGUAGE.md#strings).
+
+## `http.get(url) → str` / `http.post(url, body, content_type?) → str`
+An HTTP client, built in. Returns the response body.
+```lume
+let zen = http.get("https://api.github.com/zen")
+let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
+print("{repo.full_name}: {repo.stargazers_count} ⭐")
+
+let reply = http.post("https://httpbin.org/post", json.stringify({ hi: "lume" }))
+```
+
+## `similarity(a, b) → float`
+Cosine similarity between two numeric vectors (`list` of numbers) — the core of
+semantic search, no library required.
+```lume
+print(similarity([1, 0, 1], [1, 0, 1]))   # 1.0
+print(similarity([1, 0], [0, 1]))          # 0.0
+```
+
+## `env(name) → str | nil`
+Reads an environment variable.
+```lume
+let key = env("ANTHROPIC_API_KEY")
+```
+
+## `read(path) → str` / `write(path, content) → nil`
+Read and write whole files.
+```lume
+write("note.txt", "ciao da Lume\n")
+print(read("note.txt"))
 ```

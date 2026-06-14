@@ -100,6 +100,23 @@ print("nomi: {join(["Ada", "Lin"], ", ")}")
 
 Escapes: `\n  \t  \r  \\  \"  \0  \{  \}`.
 
+### Raw strings
+
+A string in **backticks** is verbatim: no escapes, no interpolation. Ideal for
+JSON, regexes, Windows paths, or anything full of `{`, `}`, `"` and `\`. Write a
+literal backtick as `` `` `` (two backticks). Raw strings may span multiple lines.
+
+```lume
+let payload = `{"name": "Ada", "tags": ["x", "y"]}`   # no escaping needed
+let pattern = `\d+\.\d+`
+let doc = `riga uno
+riga due`
+```
+
+This is why JSON is pleasant in Lume: `json.parse(`{"k": 1}`)` just works.
+
+### Indexing and iteration
+
 Strings are indexable and iterable by byte/char:
 
 ```lume
@@ -226,7 +243,7 @@ postfix     = primary { call | index | member } ;
 call        = "(" [ args ] ")" ;
 index       = "[" expression "]" ;
 member      = "." IDENT ;
-primary     = INT | FLOAT | STRING | "true" | "false" | "nil"
+primary     = INT | FLOAT | STRING | RAWSTRING | "true" | "false" | "nil"
             | IDENT | listLit | mapLit | fnExpr | "(" expression ")" ;
 listLit     = "[" [ expression { "," expression } ] "]" ;
 mapLit      = "{" [ entry { "," entry } ] "}" ;

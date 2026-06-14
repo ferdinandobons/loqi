@@ -1,0 +1,15 @@
+# Estrazione strutturata: l'AI produce JSON, `json.parse` lo rende dati nativi.
+# Tutto built-in: niente librerie HTTP, niente parser JSON, niente SDK.
+#   ANTHROPIC_API_KEY=... lume examples/ai/extract.lm
+
+let testo = "Ada Lovelace, nata nel 1815, è considerata la prima programmatrice."
+
+let prompt = "Estrai nome, anno_nascita (int) e ruolo dal testo. " +
+             "Rispondi SOLO con JSON valido, nessun altro testo.\n\n" + testo
+
+let json_str = ai(prompt)
+let dati = json.parse(json_str)
+
+print("Nome:  {dati.nome}")
+print("Anno:  {dati.anno_nascita}")
+print("Ruolo: {dati.ruolo}")

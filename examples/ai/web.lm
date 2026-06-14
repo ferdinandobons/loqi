@@ -1,0 +1,10 @@
+# HTTP e JSON sono nel linguaggio: fetch + parse in due righe, zero dipendenze.
+# (Richiede solo una connessione di rete.)
+#   lume examples/ai/web.lm
+
+let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
+print("{repo.full_name}: {repo.stargazers_count} stelle ⭐")
+
+# E con l'AI puoi spiegare i dati al volo (richiede ANTHROPIC_API_KEY):
+# let riassunto = ai("Riassumi in una frase: {repo.description}")
+# print(riassunto)

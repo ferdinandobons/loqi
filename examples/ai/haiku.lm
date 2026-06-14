@@ -1,0 +1,7 @@
+# L'AI è di prima classe in Lume: `ai(...)` chiama un LLM, niente SDK da installare.
+# Richiede la variabile d'ambiente ANTHROPIC_API_KEY.
+#   ANTHROPIC_API_KEY=... lume examples/ai/haiku.lm
+
+let argomento = "il mare d'inverno"
+let poesia = ai("Scrivi un haiku in italiano su {argomento}. Solo la poesia.")
+print(poesia)

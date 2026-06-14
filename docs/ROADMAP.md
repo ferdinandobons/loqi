@@ -20,10 +20,14 @@ imply for the next step.
 | Speed | **bytecode VM (stack, slot locals, upvalues)** | ✅ done |
 | Speed | global hash table (O(1) lookup) | ✅ done |
 | Speed | computed-goto dispatch / inline caches | 🔜 next |
-| AI | `ai "..."` LLM expression | 🔜 next |
+| AI | `ai(...)` LLM call (Anthropic API) | ✅ done |
+| AI | `json.parse` / `json.stringify` | ✅ done |
+| AI | `http.get` / `http.post` | ✅ done |
+| AI | `similarity` (cosine on vectors) | ✅ done |
+| AI | `env`, `read`, `write` | ✅ done |
+| Lang | raw strings (backticks) | ✅ done |
+| AI | `embed` (embeddings API) | 🔜 next |
 | AI | structured generation with schema | 🔜 next |
-| AI | `embed` / `similarity` (vectors) | 🔜 next |
-| Batteries | `http`, `json`, `env`, `fs` | 🔜 next |
 | Core | garbage collector (mark-sweep) | 📋 planned |
 | Core | namespaced modules / packages | 📋 planned |
 | Tooling | `lume fmt`, `lume test`, LSP | 📋 planned |
@@ -91,20 +95,28 @@ AI-native surface — and the loop now also runs a continuous code-review pass.
 
 ---
 
-## Iteration 3 — the AI-first surface (🔜 next)
+## Iteration 3 — the AI-first surface (✅)
 
-The differentiator. Make the things you install separately today part of the
-language:
+The differentiator, now real. The things you install separately in other
+languages are part of Lume's runtime:
 
-- `ai "prompt"` — an expression that calls an LLM and returns text. Uses
-  `ANTHROPIC_API_KEY` from the environment; model selectable.
-- `ai.json("prompt", schema)` — structured generation validated against a schema.
-- `embed(text) → vector`, `similarity(a, b) → float` — semantic search built in.
-- `http.get/post`, `json.parse/stringify`, `env.get`, `fs.read/write` — the
-  plumbing every AI program needs, with zero installs.
+- `ai(prompt)` / `ai(prompt, model)` — a first-class LLM call (Anthropic Messages
+  API). Reads `ANTHROPIC_API_KEY`; model defaults to `claude-sonnet-4-6` (override
+  per-call or via `LUME_AI_MODEL`).
+- `json.parse` / `json.stringify` — a real JSON codec to/from native values.
+- `http.get` / `http.post` — an HTTP client.
+- `similarity(a, b)` — cosine similarity for semantic search.
+- `env`, `read`, `write` — environment and files.
+- **raw strings** (backticks) so JSON/regex literals need no escaping.
 
-These need network I/O. v0.1 of the AI layer shells out to the always-present
-`curl`; a later iteration links a native HTTP client.
+**Verified end-to-end:** `http.get` → `json.parse` fetches and reads live GitHub
+data; `ai()` returns model text with a key and fails cleanly without one; all of
+it is memory-clean under ASan/UBSan, including malformed-JSON and network paths.
+
+**Implementation note (honest).** HTTP and the LLM call shell out to the
+always-present `curl` (arguments are shell-quoted; the LLM request body goes
+through a temp file, never the shell). A native HTTP client and an `embed()`
+backed by an embeddings API are the next AI iteration.
 
 ---
 
