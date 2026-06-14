@@ -1,0 +1,80 @@
+# Regression suite for the Lume core language.
+# Each section asserts behaviour; a failed assert aborts with non-zero exit.
+
+# --- arithmetic ---
+assert(1 + 2 * 3 == 7, "precedenza")
+assert((1 + 2) * 3 == 9, "parentesi")
+assert(7 / 2 == 3.5, "divisione float")
+assert(7 // 2 == 3, "divisione intera")
+assert(-7 // 2 == -4, "floor division negativa")
+assert(7 % 3 == 1, "modulo")
+assert(2 + 3.0 == 5.0, "promozione a float")
+
+# --- comparison & logic ---
+assert(1 < 2 and 2 <= 2, "and")
+assert(1 > 2 or 3 == 3, "or")
+assert(not false, "not")
+assert((false or "x") == "x", "or restituisce operando")
+
+# --- strings ---
+assert("a" + "b" == "ab", "concatenazione")
+assert(len("lume") == 4, "len str")
+assert(upper("ab") == "AB", "upper")
+assert("lume"[0] == "l", "indicizzazione str")
+let nome = "Lume"
+assert("ciao {nome}!" == "ciao Lume!", "interpolazione")
+assert(join(split("a,b,c", ","), "-") == "a-b-c", "split/join")
+
+# --- lists ---
+let xs = [1, 2, 3]
+push(xs, 4)
+assert(len(xs) == 4, "push")
+assert(xs[-1] == 4, "indice negativo")
+assert(pop(xs) == 4, "pop")
+assert(has([1, 2, 3], 2), "has list")
+assert([1] + [2, 3] == [1] + [2, 3], "concat list")
+xs[0] = 99
+assert(xs[0] == 99, "assegnamento per indice")
+
+# --- maps ---
+let m = { a: 1, b: 2 }
+m.c = 3
+m["d"] = 4
+assert(m.a == 1 and m["d"] == 4, "accesso map")
+assert(len(keys(m)) == 4, "keys")
+assert(has(m, "b"), "has map")
+
+# --- control flow ---
+let s = 0
+for i in range(1, 5) { s = s + i }
+assert(s == 10, "for range")
+let n = 0
+while n < 10 { n = n + 1 }
+assert(n == 10, "while")
+let found = 0
+for i in range(100) {
+  if i == 5 { break }
+  if i % 2 == 0 { continue }
+  found = found + 1
+}
+assert(found == 2, "break/continue")   # solo 1 e 3
+
+# --- functions & closures ---
+fn fib(k) { if k < 2 { return k } return fib(k-1) + fib(k-2) }
+assert(fib(10) == 55, "ricorsione")
+
+fn make_adder(x) { return fn(y) { return x + y } }
+let add5 = make_adder(5)
+assert(add5(10) == 15, "closure")
+
+fn count() { let c = 0; return fn() { c = c + 1; return c } }
+let next = count()
+assert(next() == 1 and next() == 2 and next() == 3, "closure mutabile")
+
+# --- conversions ---
+assert(int("42") == 42, "int da str")
+assert(float("3.5") == 3.5, "float da str")
+assert(str(42) == "42", "str da int")
+assert(type([]) == "list", "type")
+
+print("test_core: tutti i test superati ✓")

@@ -1,0 +1,8 @@
+# Il primo programma in Lume.
+let nome = "mondo"
+print("Ciao, {nome}!")
+
+# interpolazione con espressioni
+let a = 6
+let b = 7
+print("{a} per {b} fa {a * b}")

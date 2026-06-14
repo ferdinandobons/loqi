@@ -1,0 +1,10 @@
+# build
+/build/
+*.o
+lume
+lumec
+*.dSYM/
+.DS_Store
+# editor
+.vscode/
+.idea/

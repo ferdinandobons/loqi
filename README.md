@@ -1,0 +1,116 @@
+<div align="center">
+
+# Lume
+
+**The AI-first programming language — simple to read, fast on Apple Silicon.**
+
+*Lume* (light) is a small, modern language with batteries included: an LLM call,
+an HTTP client, JSON and vectors are part of the language, not packages you hunt
+down and install. One binary, no toolchain to assemble.
+
+```lume
+let topic = "il mare d'inverno"
+let poem = ai "Scrivi un haiku su {topic}"
+print(poem)
+```
+
+</div>
+
+---
+
+> **Status: v0.1 — early but real.** The core language works end-to-end
+> (functions, closures, lists, maps, control flow, string interpolation) via a
+> dependency-free reference interpreter in C. The bytecode VM (for speed) and the
+> AI-native built-ins are the active iterations. See **[ROADMAP](docs/ROADMAP.md)**
+> for the honest state of every feature and the engineering log.
+
+## Why Lume
+
+Three ideas drive every decision:
+
+1. **AI-first, batteries included.** The things you install separately today —
+   an HTTP client, a JSON parser, an LLM SDK, an embeddings library, a vector
+   similarity helper — are built into the language and its runtime. `ai "..."`
+   is an expression. `json.parse`, `http.get`, `embed`, `similarity` are always
+   there.
+2. **Fast on Apple Silicon.** The implementation is C, compiled with
+   `-O3 -mcpu=apple-m1 -flto`. The execution engine is moving from a reference
+   tree-walker to a bytecode VM tuned for arm64.
+3. **Simple to read and write.** No semicolons, no ceremony. Curly-brace blocks,
+   `let`/`fn`, string interpolation with `{}`. If you've read code before, you
+   can read Lume.
+
+Lume is **not** built on top of another language. It is its own grammar,
+parser, and runtime.
+
+## Quickstart
+
+Requirements: macOS with the Xcode Command Line Tools (`clang`). Nothing else.
+
+```sh
+git clone <repo-url> lume && cd lume
+./scripts/build.sh            # produces ./build/lume
+./build/lume examples/01_hello.lm
+./build/lume                  # starts the REPL
+```
+
+A first program (`hello.lm`):
+
+```lume
+fn saluta(nome) {
+  return "Ciao, {nome}!"
+}
+
+print(saluta("mondo"))
+```
+
+```sh
+./build/lume hello.lm
+# Ciao, mondo!
+```
+
+## A taste
+
+```lume
+# funzioni di ordine superiore + closure
+fn mappa(xs, f) {
+  let out = []
+  for x in xs { push(out, f(x)) }
+  return out
+}
+
+let quadrati = mappa([1, 2, 3, 4], fn(x) { return x * x })
+print(quadrati)            # [1, 4, 9, 16]
+
+# mappe e iterazione
+let utente = { nome: "Ada", anni: 36 }
+for chiave in utente {
+  print("{chiave}: {utente[chiave]}")
+}
+
+# interpolazione con espressioni annidate
+print("totale: {join(mappa([1,2,3], fn(x){ return str(x) }), ", ")}")
+```
+
+## Documentation
+
+- **[Language guide](docs/LANGUAGE.md)** — the full v0.1 reference.
+- **[Standard library](docs/STDLIB.md)** — every built-in, with examples.
+- **[Roadmap & engineering log](docs/ROADMAP.md)** — what's done, what's next, and
+  honest benchmarks.
+- **[Examples](examples/)** — runnable `.lm` programs.
+
+## Project layout
+
+```
+src/lume.c        the reference interpreter (lexer, parser, evaluator)
+scripts/build.sh  build script (release / debug)
+examples/         runnable example programs
+tests/            test suite + runner
+docs/             language guide, stdlib reference, roadmap
+std/              Lume-side standard library modules (planned)
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

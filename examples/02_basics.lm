@@ -1,0 +1,63 @@
+# Tour delle funzionalità di base di Lume.
+
+# --- funzioni e ricorsione ---
+fn fib(n) {
+  if n < 2 { return n }
+  return fib(n - 1) + fib(n - 2)
+}
+print("fib(10) = {fib(10)}")
+
+# --- chiusure (closure) ---
+fn contatore() {
+  let n = 0
+  return fn() {
+    n = n + 1
+    return n
+  }
+}
+let next = contatore()
+print("contatore: {next()} {next()} {next()}")
+
+# --- liste ---
+let numeri = [3, 1, 4, 1, 5, 9, 2, 6]
+let somma = 0
+for x in numeri {
+  somma = somma + x
+}
+print("somma = {somma}, lunghezza = {len(numeri)}")
+
+# --- map ---
+let utente = { nome: "Ada", anni: 36, lingua: "Lume" }
+print("{utente.nome} ha {utente.anni} anni")
+for k in utente {
+  print("  {k} -> {utente[k]}")
+}
+
+# --- controllo di flusso ---
+for i in range(1, 6) {
+  if i % 2 == 0 {
+    print("{i} è pari")
+  } else {
+    print("{i} è dispari")
+  }
+}
+
+# --- stringhe ---
+let frase = "lume e veloce e semplice"
+let parole = split(frase, " ")
+print("parole: {len(parole)} -> {join(parole, "-")}")
+print(upper(frase))
+
+# --- funzioni di ordine superiore ---
+fn mappa(lista, f) {
+  let out = []
+  for x in lista {
+    push(out, f(x))
+  }
+  return out
+}
+let quadrati = mappa([1, 2, 3, 4], fn(x) { return x * x })
+print("quadrati = {quadrati}")
+
+assert(somma == 31, "la somma dovrebbe essere 31")
+print("Tutto ok ✓")
