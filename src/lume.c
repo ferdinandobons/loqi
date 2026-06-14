@@ -2296,7 +2296,8 @@ static void define_native(Interp *I, const char *name, NativeFn fn, int arity) {
  * ========================================================================= */
 
 /* ---- JSON ---- */
-static Value json_parse_value(Interp *I, const char **p);
+#define JSON_MAX_DEPTH 200
+static Value json_parse_value(Interp *I, const char **p, int depth);
 
 static void json_skip_ws(const char **p) {
     while (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r') (*p)++;
@@ -2335,12 +2336,12 @@ static char *json_parse_string_raw(Interp *I, const char **p) {
                         if (h >= '0' && h <= '9') cp |= (unsigned)(h - '0');
                         else if (h >= 'a' && h <= 'f') cp |= (unsigned)(h - 'a' + 10);
                         else if (h >= 'A' && h <= 'F') cp |= (unsigned)(h - 'A' + 10);
-                        else runtime_error(I, 0, "json: escape \\u non valido");
+                        else { free(buf); runtime_error(I, 0, "json: escape \\u non valido"); }
                     }
                     json_encode_utf8(&buf, &len, &cap, cp);
                     break;
                 }
-                default: runtime_error(I, 0, "json: escape non valido");
+                default: free(buf); runtime_error(I, 0, "json: escape non valido");
             }
             (*p)++;
         } else {
@@ -2352,7 +2353,8 @@ static char *json_parse_string_raw(Interp *I, const char **p) {
     (*p)++;
     return buf;
 }
-static Value json_parse_value(Interp *I, const char **p) {
+static Value json_parse_value(Interp *I, const char **p, int depth) {
+    if (depth > JSON_MAX_DEPTH) runtime_error(I, 0, "json: nesting troppo profondo (max %d)", JSON_MAX_DEPTH);
     json_skip_ws(p);
     char c = **p;
     if (c == '"') { char *s = json_parse_string_raw(I, p); Value v = cstring_val(I, s); free(s); return v; }
@@ -2365,7 +2367,7 @@ static Value json_parse_value(Interp *I, const char **p) {
             json_skip_ws(p);
             if (**p != ':') { free(key); runtime_error(I, 0, "json: atteso ':'"); }
             (*p)++;
-            Value val = json_parse_value(I, p);
+            Value val = json_parse_value(I, p, depth + 1);
             map_set(m, key, val); free(key);
             json_skip_ws(p);
             if (**p == ',') { (*p)++; continue; }
@@ -2378,7 +2380,7 @@ static Value json_parse_value(Interp *I, const char **p) {
         (*p)++; ObjList *l = new_list(I); json_skip_ws(p);
         if (**p == ']') { (*p)++; return obj_val((Obj *)l); }
         for (;;) {
-            list_push(l, json_parse_value(I, p));
+            list_push(l, json_parse_value(I, p, depth + 1));
             json_skip_ws(p);
             if (**p == ',') { (*p)++; continue; }
             if (**p == ']') { (*p)++; break; }
@@ -2406,12 +2408,13 @@ static Value json_parse_value(Interp *I, const char **p) {
 static Value nat_json_parse(Interp *I, int argc, Value *argv) {
     if (!IS_STRING(argv[0])) runtime_error(I, 0, "json.parse() richiede una str");
     const char *p = AS_STRING(argv[0])->chars;
-    Value v = json_parse_value(I, &p);
+    Value v = json_parse_value(I, &p, 0);
     json_skip_ws(&p);
     if (*p != '\0') runtime_error(I, 0, "json.parse(): testo in eccesso dopo il valore");
     return v;
 }
-static void json_stringify_value(Interp *I, char **buf, size_t *len, size_t *cap, Value v) {
+static void json_stringify_value(Interp *I, char **buf, size_t *len, size_t *cap, Value v, int depth) {
+    if (depth > JSON_MAX_DEPTH) runtime_error(I, 0, "json.stringify: struttura troppo profonda o ciclica (max %d)", JSON_MAX_DEPTH);
     switch (v.type) {
         case VAL_NIL: append_str(buf, len, cap, "null", 4); return;
         case VAL_BOOL: append_str(buf, len, cap, v.as.b ? "true" : "false", v.as.b ? 4 : 5); return;
@@ -2422,30 +2425,37 @@ static void json_stringify_value(Interp *I, char **buf, size_t *len, size_t *cap
         ObjString *s = AS_STRING(v);
         append_str(buf, len, cap, "\"", 1);
         for (int i = 0; i < s->length; i++) {
-            char c = s->chars[i];
+            unsigned char c = (unsigned char)s->chars[i];
             switch (c) {
                 case '"': append_str(buf, len, cap, "\\\"", 2); break;
                 case '\\': append_str(buf, len, cap, "\\\\", 2); break;
                 case '\n': append_str(buf, len, cap, "\\n", 2); break;
                 case '\t': append_str(buf, len, cap, "\\t", 2); break;
                 case '\r': append_str(buf, len, cap, "\\r", 2); break;
-                default: append_str(buf, len, cap, &c, 1);
+                default:
+                    if (c < 0x20) { /* JSON requires control chars to be \u-escaped */
+                        char esc[8]; snprintf(esc, sizeof(esc), "\\u%04x", c);
+                        append_str(buf, len, cap, esc, 6);
+                    } else {
+                        char ch = (char)c;
+                        append_str(buf, len, cap, &ch, 1);
+                    }
             }
         }
         append_str(buf, len, cap, "\"", 1);
     } else if (IS_LIST(v)) {
         ObjList *l = AS_LIST(v);
         append_str(buf, len, cap, "[", 1);
-        for (int i = 0; i < l->count; i++) { if (i) append_str(buf, len, cap, ",", 1); json_stringify_value(I, buf, len, cap, l->items[i]); }
+        for (int i = 0; i < l->count; i++) { if (i) append_str(buf, len, cap, ",", 1); json_stringify_value(I, buf, len, cap, l->items[i], depth + 1); }
         append_str(buf, len, cap, "]", 1);
     } else if (IS_MAP(v)) {
         ObjMap *m = AS_MAP(v);
         append_str(buf, len, cap, "{", 1);
         for (int i = 0; i < m->count; i++) {
             if (i) append_str(buf, len, cap, ",", 1);
-            json_stringify_value(I, buf, len, cap, cstring_val(I, m->entries[i].key));
+            json_stringify_value(I, buf, len, cap, cstring_val(I, m->entries[i].key), depth + 1);
             append_str(buf, len, cap, ":", 1);
-            json_stringify_value(I, buf, len, cap, m->entries[i].value);
+            json_stringify_value(I, buf, len, cap, m->entries[i].value, depth + 1);
         }
         append_str(buf, len, cap, "}", 1);
     } else {
@@ -2454,7 +2464,7 @@ static void json_stringify_value(Interp *I, char **buf, size_t *len, size_t *cap
 }
 static Value nat_json_stringify(Interp *I, int argc, Value *argv) {
     char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
-    json_stringify_value(I, &buf, &len, &cap, argv[0]);
+    json_stringify_value(I, &buf, &len, &cap, argv[0], 0);
     Value out = string_val(I, buf, (int)len);
     free(buf);
     return out;
@@ -2474,7 +2484,10 @@ static char *shell_quote(const char *s) {
     out[j] = '\0';
     return out;
 }
-static char *run_capture(const char *cmd) {
+/* Run a command, capturing stdout (binary-safe via *out_len) and curl's exit
+ * status (*out_status = curl's exit code, or -1 if it couldn't be launched). */
+static char *run_capture(const char *cmd, size_t *out_len, int *out_status) {
+    *out_len = 0; *out_status = -1;
     FILE *pp = popen(cmd, "r");
     if (!pp) return NULL;
     size_t cap = 4096, len = 0; char *buf = xmalloc(cap);
@@ -2485,7 +2498,9 @@ static char *run_capture(const char *cmd) {
         if (got == 0) break;
     }
     buf[len] = '\0';
-    pclose(pp);
+    int rc = pclose(pp);
+    *out_len = len;
+    *out_status = (rc >= 0 && WIFEXITED(rc)) ? WEXITSTATUS(rc) : -1;
     return buf;
 }
 
@@ -2496,10 +2511,12 @@ static Value nat_http_get(Interp *I, int argc, Value *argv) {
     size_t clen = strlen(qurl) + 64;
     char *cmd = xmalloc(clen);
     snprintf(cmd, clen, "curl -fsSL --max-time 60 %s", qurl);
-    char *resp = run_capture(cmd);
+    size_t len; int status;
+    char *resp = run_capture(cmd, &len, &status);
     free(qurl); free(cmd);
     if (!resp) runtime_error(I, 0, "http.get(): impossibile eseguire curl");
-    Value v = cstring_val(I, resp);
+    if (status != 0) { free(resp); runtime_error(I, 0, "http.get(): curl ha restituito un errore (codice %d)", status); }
+    Value v = string_val(I, resp, (int)len); /* binary-safe: no NUL truncation */
     free(resp);
     return v;
 }
@@ -2515,10 +2532,12 @@ static Value nat_http_post(Interp *I, int argc, Value *argv) {
     size_t clen = strlen(qurl) + strlen(qbody) + strlen(qhdr) + 64;
     char *cmd = xmalloc(clen);
     snprintf(cmd, clen, "curl -fsSL --max-time 60 -X POST -H %s --data %s %s", qhdr, qbody, qurl);
-    char *resp = run_capture(cmd);
+    size_t len; int status;
+    char *resp = run_capture(cmd, &len, &status);
     free(qurl); free(qbody); free(qhdr); free(cmd);
     if (!resp) runtime_error(I, 0, "http.post(): impossibile eseguire curl");
-    Value v = cstring_val(I, resp);
+    if (status != 0) { free(resp); runtime_error(I, 0, "http.post(): curl ha restituito un errore (codice %d)", status); }
+    Value v = string_val(I, resp, (int)len);
     free(resp);
     return v;
 }
@@ -2545,38 +2564,55 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     map_set(body, "messages", obj_val((Obj *)msgs));
 
     char *jbuf = xmalloc(16); size_t jl = 0, jc = 16; jbuf[0] = '\0';
-    json_stringify_value(I, &jbuf, &jl, &jc, obj_val((Obj *)body));
+    json_stringify_value(I, &jbuf, &jl, &jc, obj_val((Obj *)body), 0);
 
-    /* write body to a temp file so the prompt never touches the shell */
+    /* request body -> temp file so the prompt never touches the shell */
     char tmpl[] = "/tmp/lume_ai_XXXXXX";
-    int fd = mkstemp(tmpl);
+    int fd = mkstemp(tmpl); /* mkstemp creates the file 0600 */
     if (fd < 0) { free(jbuf); runtime_error(I, 0, "ai(): impossibile creare file temporaneo"); }
-    if (write(fd, jbuf, jl) < 0) { close(fd); free(jbuf); runtime_error(I, 0, "ai(): scrittura temporanea fallita"); }
+    if (write(fd, jbuf, jl) < 0) { close(fd); unlink(tmpl); free(jbuf); runtime_error(I, 0, "ai(): scrittura temporanea fallita"); }
     close(fd);
     free(jbuf);
 
-    char *qkey = shell_quote(key);
-    size_t clen = strlen(qkey) + strlen(tmpl) + 256;
-    char *cmd = xmalloc(clen);
-    snprintf(cmd, clen,
-             "curl -fsS --max-time 120 https://api.anthropic.com/v1/messages "
-             "-H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' "
-             "-H x-api-key:%s --data @%s", qkey, tmpl);
-    char *resp = run_capture(cmd);
-    free(qkey); free(cmd); unlink(tmpl);
-    if (!resp || !*resp) { free(resp); runtime_error(I, 0, "ai(): nessuna risposta dall'API"); }
+    /* curl config (0600) so the API key never appears in the process argv (ps) */
+    char cfgtmpl[] = "/tmp/lume_aicfg_XXXXXX";
+    int cfd = mkstemp(cfgtmpl);
+    if (cfd < 0) { unlink(tmpl); runtime_error(I, 0, "ai(): impossibile creare file di config"); }
+    FILE *cf = fdopen(cfd, "w");
+    if (!cf) { close(cfd); unlink(cfgtmpl); unlink(tmpl); runtime_error(I, 0, "ai(): config non scrivibile"); }
+    fputs("url = \"https://api.anthropic.com/v1/messages\"\n", cf);
+    fputs("header = \"content-type: application/json\"\n", cf);
+    fputs("header = \"anthropic-version: 2023-06-01\"\n", cf);
+    fputs("header = \"x-api-key: ", cf);
+    for (const char *k = key; *k; k++) { if (*k == '"' || *k == '\\') fputc('\\', cf); fputc(*k, cf); }
+    fputs("\"\n", cf);
+    fprintf(cf, "data = \"@%s\"\n", tmpl);
+    fclose(cf);
 
-    /* parse { "content": [ { "type":"text", "text":"..." } ], ... } */
+    char *qcfg = shell_quote(cfgtmpl);
+    size_t clen = strlen(qcfg) + 48;
+    char *cmd = xmalloc(clen);
+    snprintf(cmd, clen, "curl -fsS --max-time 120 -K %s", qcfg);
+    size_t rlen; int status;
+    char *resp = run_capture(cmd, &rlen, &status);
+    free(qcfg); free(cmd); unlink(tmpl); unlink(cfgtmpl);
+    if (!resp) runtime_error(I, 0, "ai(): impossibile eseguire curl");
+    if (status != 0 && (!resp || !*resp)) { free(resp); runtime_error(I, 0, "ai(): richiesta API fallita (curl %d) — controlla rete e chiave", status); }
+    if (!*resp) { free(resp); runtime_error(I, 0, "ai(): nessuna risposta dall'API"); }
+
+    /* parse { "content": [ { "type":"text", "text":"..." }, ... ], ... } */
     const char *p = resp;
-    Value parsed = json_parse_value(I, &p);
+    Value parsed = json_parse_value(I, &p, 0);
     free(resp);
     if (IS_MAP(parsed)) {
         Value *content = map_get(AS_MAP(parsed), "content");
-        if (content && IS_LIST(*content) && AS_LIST(*content)->count > 0) {
-            Value first = AS_LIST(*content)->items[0];
-            if (IS_MAP(first)) {
-                Value *text = map_get(AS_MAP(first), "text");
-                if (text && IS_STRING(*text)) return *text;
+        if (content && IS_LIST(*content)) {
+            ObjList *blocks = AS_LIST(*content);
+            for (int i = 0; i < blocks->count; i++) { /* first text block */
+                if (IS_MAP(blocks->items[i])) {
+                    Value *text = map_get(AS_MAP(blocks->items[i]), "text");
+                    if (text && IS_STRING(*text)) return *text;
+                }
             }
         }
         Value *err = map_get(AS_MAP(parsed), "error");
@@ -2762,7 +2798,7 @@ static void interp_init(Interp *I) {
     install_stdlib(I);
 }
 
-#define LUME_VERSION "0.1.0"
+#define LUME_VERSION "0.2.0"
 
 static void repl(Interp *I) {
     printf("Lume %s — REPL. Ctrl-D per uscire.\n", LUME_VERSION);
