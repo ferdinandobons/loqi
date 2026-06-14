@@ -52,7 +52,7 @@ parser, and runtime.
 Requirements: macOS with the Xcode Command Line Tools (`clang`). Nothing else.
 
 ```sh
-git clone <repo-url> loqi && cd loqi
+git clone https://github.com/ferdinandobons/loqi && cd loqi
 ./scripts/build.sh            # produces ./build/loqi
 ./build/loqi examples/01_hello.lq
 ./build/loqi                  # starts the REPL
