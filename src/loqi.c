@@ -179,7 +179,15 @@ struct Interp {
     jmp_buf err_jmp;   /* runtime error landing pad */
     bool has_error;
     char err_msg[512];
+    int import_depth;  /* number of files currently being loaded (import stack height) */
+    const char *import_stack[64]; /* paths currently loading, for cycle detection */
 };
+
+/* An import that re-enters another file recurses through run_source on the C
+ * stack; cap the nesting so a deep chain raises a catchable Loqi error instead
+ * of overflowing the C stack and crashing with SIGSEGV. A path already on the
+ * import stack is a cycle and is reported directly. */
+#define MAX_IMPORT_DEPTH 64
 
 /* snprintf returns the would-be length; clamp it so reusing it as an offset
  * into a fixed buffer can never run past the end (long paths/names). */
@@ -3341,10 +3349,31 @@ static char *read_file(const char *path) {
 /* Compile and run a source string (or a file when src == NULL). The error
  * landing pad (I->err_jmp) is saved/restored so nested imports nest safely. */
 static int run_source(Interp *I, const char *src, const char *path) {
+    /* Bound import recursion: a nested import re-enters run_source on the C
+       stack, so an unguarded cycle would overflow it. Both guards return error
+       code 70 with a message OP_IMPORT/run_module_ns re-raise as a catchable
+       Loqi error. They return BEFORE pushing onto the import stack, so the
+       matching decrement below stays balanced even when the run unwinds via
+       setjmp. */
+    if (path) {
+        for (int i = 0; i < I->import_depth; i++) {
+            if (I->import_stack[i] && strcmp(I->import_stack[i], path) == 0) {
+                snprintf(I->err_msg, sizeof(I->err_msg), "cyclic import of '%s'", path);
+                return 70;
+            }
+        }
+    }
+    if (I->import_depth >= MAX_IMPORT_DEPTH) {
+        snprintf(I->err_msg, sizeof(I->err_msg),
+                 "import nesting too deep (possible import cycle) while loading '%s'",
+                 path ? path : "?");
+        return 70;
+    }
+    I->import_stack[I->import_depth++] = path; /* pop = import_depth-- on every exit */
     char *owned = NULL;
     if (src == NULL) {
         owned = read_file(path);
-        if (!owned) return 74;
+        if (!owned) { I->import_depth--; return 74; }
         src = owned;
     }
     const char *prev_path = I->path;
@@ -3355,10 +3384,10 @@ static int run_source(Interp *I, const char *src, const char *path) {
     lex_init(&P.lex, I, src);
     p_advance(&P);
     Node *prog = parse_program(&P);
-    if (P.had_error) { free(owned); I->path = prev_path; return 65; }
+    if (P.had_error) { free(owned); I->path = prev_path; I->import_depth--; return 65; }
 
     ObjProto *script = compile_script(I, prog);
-    if (!script) { free(owned); I->path = prev_path; return 65; }
+    if (!script) { free(owned); I->path = prev_path; I->import_depth--; return 65; }
 
     /* save the enclosing error landing pad + VM for safe nesting (imports) */
     jmp_buf saved; memcpy(saved, I->err_jmp, sizeof(jmp_buf));
@@ -3389,6 +3418,7 @@ static int run_source(Interp *I, const char *src, const char *path) {
     I->vm = prev_vm;
     memcpy(I->err_jmp, saved, sizeof(jmp_buf)); /* restore enclosing landing pad */
     I->path = prev_path;
+    I->import_depth--;
     return rc;
 }
 
@@ -3432,6 +3462,7 @@ static void interp_init(Interp *I) {
     I->vm = NULL;
     I->has_error = false;
     I->err_msg[0] = '\0';
+    I->import_depth = 0;
     I->globals = xmalloc(sizeof(Table));
     table_init(I->globals);
     install_stdlib(I);

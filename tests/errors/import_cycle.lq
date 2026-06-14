@@ -1,0 +1,2 @@
+# A cyclic import must raise a clean, bounded error instead of crashing.
+import "../fixtures/cycle_a.lq"

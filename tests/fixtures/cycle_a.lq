@@ -1,0 +1,3 @@
+# Part of a deliberate import cycle (a -> b -> a) for regression testing.
+import "cycle_b.lq"
+let A = 1
