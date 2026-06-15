@@ -1,0 +1,7 @@
+# Driven by scripts/test.sh: a multi-line index expression. The caret must land on
+# the line that holds the `[` (line 6 here), under the index op, NOT borrow the index
+# expression's column from the next line (which once misplaced or hid the caret).
+let arr = [1, 2]
+let v = arr[
+  99]
+print(v)

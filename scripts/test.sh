@@ -204,6 +204,22 @@ else
   fail=$((fail+1))
 fi
 
+# Multi-line runtime caret: the caret must render on the line holding the '[' (line 5),
+# under it, not borrow the index column from line 6 (which once misplaced/hid it).
+mlcaret_out="$("$LOQI" tests/fixtures/runtime_caret_multiline.lq 2>&1)"
+rc=$?
+if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ] \
+   && printf '%s' "$mlcaret_out" | grep -q ":5\]: index 99 out of bounds" \
+   && printf '%s' "$mlcaret_out" | grep -q "5 | let v = arr\[" \
+   && printf '%s' "$mlcaret_out" | grep -q "\^"; then
+  echo "  ✓ (runtime-caret-ml) a multi-line expression's caret stays on the right line"
+  pass=$((pass+1))
+else
+  echo "  ✗ (runtime-caret-ml) expected the caret on line 5 under '[', exit=$rc:"
+  printf '%s\n' "$mlcaret_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

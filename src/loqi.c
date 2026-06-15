@@ -2047,7 +2047,13 @@ static void compile_expr(Compiler *C, Node *n) {
         C->expr_depth--;
         return;
     }
-    C->emit_col = n->col; /* ops emitted for this node carry its column (runtime carets) */
+    /* Attribute ops emitted for THIS node to its column. Save/restore around the
+       body so that after a child sub-expression is compiled (which re-points
+       emit_col to its own column), this node's trailing opcode still carries this
+       node's column, keeping the recorded line and column on the same source line
+       (otherwise a multi-line `a[\n i]` or `f(\n x)` mis-places or hides the caret). */
+    int saved_col = C->emit_col;
+    C->emit_col = n->col;
     switch (n->type) {
         case N_NIL: emit_byte(C, OP_NIL, n->line); break;
         case N_IF: compile_if_expr(C, n); break;       /* if as an expression -> branch value */
@@ -2142,6 +2148,7 @@ static void compile_expr(Compiler *C, Node *n) {
         case N_FN: compile_function(C, n, n->line); break;
         default: *C->had_error = true; fprintf(stderr, "expression cannot be compiled\n"); break;
     }
+    C->emit_col = saved_col; /* a child restores the parent's column for its trailing op */
     C->expr_depth--;
 }
 
