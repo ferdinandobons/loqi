@@ -1,4 +1,4 @@
-# base64 — RFC 4648 test vectors
+# base64, RFC 4648 test vectors
 assert(base64.encode("") == "", "b64 empty")
 assert(base64.encode("f") == "Zg==", "b64 f")
 assert(base64.encode("fo") == "Zm8=", "b64 fo")

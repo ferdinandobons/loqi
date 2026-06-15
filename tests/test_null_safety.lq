@@ -1,6 +1,6 @@
 # Null-safety: optional chaining ?. and null-coalescing ??
 
-# ?? — replaces nil, but NOT other falsy values (unlike `or`)
+# ??, replaces nil, but NOT other falsy values (unlike `or`)
 assert((nil ?? 5) == 5, "?? replaces nil")
 assert((3 ?? 5) == 3, "?? keeps a non-nil value")
 assert((false ?? 9) == false, "?? does NOT replace false")
@@ -8,7 +8,7 @@ assert((0 ?? 9) == 0, "?? does NOT replace 0")
 assert(("" ?? "x") == "", "?? does NOT replace empty string")
 assert((nil ?? nil ?? 7) == 7, "?? chains")
 
-# ?. — optional chaining: nil if the left side is nil
+# ?., optional chaining: nil if the left side is nil
 assert(nil?.x == nil, "nil?.x is nil")
 let m = { a: 1, inner: { v: 5 } }
 assert(m?.a == 1, "?. reads a present field")

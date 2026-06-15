@@ -24,6 +24,10 @@ assert("loqi"[0] == "l", "str indexing")
 let name = "Loqi"
 assert("hello {name}!" == "hello Loqi!", "interpolation")
 assert(join(split("a,b,c", ","), "-") == "a-b-c", "split/join")
+let who = "Ada"
+assert("outer {"inner {who}"}" == "outer inner Ada", "nested interpolation is recursive")
+let z = nil
+assert("v={z}" == "v=nil" and "b={false}" == "b=false", "interpolation stringifies nil/false")
 
 # --- lists ---
 let xs = [1, 2, 3]
@@ -43,6 +47,17 @@ m["d"] = 4
 assert(m.a == 1 and m["d"] == 4, "map access")
 assert(len(keys(m)) == 4, "keys")
 assert(has(m, "b"), "has map")
+# computed (non-literal) keys on assignment and read
+let dk = "e"
+m[dk] = 5
+assert(m["e"] == 5 and m[dk] == 5, "computed-key assignment and read")
+m["x" + "y"] = 6
+assert(m["xy"] == 6, "concatenated computed key")
+let counts = {}
+let w = "hi"
+counts[w] = (counts[w] ?? 0) + 1
+counts[w] = (counts[w] ?? 0) + 1
+assert(counts["hi"] == 2, "compound computed-key update")
 
 # --- control flow ---
 let s = 0

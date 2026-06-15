@@ -75,4 +75,27 @@ let oflo = false
 try { sum([9223372036854775807, 1]) } catch e { oflo = true }
 assert(oflo, "sum overflow is catchable")
 
+# --- return through nested try, and return from inside a catch ---
+fn nested(items) {
+  try {
+    for x in items { try { if x == 3 { return "three" } } catch e { return "inner" } }
+    return "none"
+  } catch e { return "outer" }
+}
+assert(nested([1, 2, 3, 4]) == "three", "return from a try nested in a for nested in a try")
+assert(nested([1, 2, 4]) == "none", "fall through nested try")
+fn from_catch(a, b) {
+  try { return "ok" + str(a // b) }
+  catch e { try { return "recovered" } catch e2 { return "fail" } }
+}
+assert(from_catch(10, 0) == "recovered", "return from a try inside a catch")
+let clean = false
+try { let bad = [][0] } catch e { clean = true }
+assert(clean, "handler stack stays clean after a nested-try return")
+
+# --- assigning past the end of a list is a catchable out-of-bounds error ---
+let oob = false
+try { let ys = [1, 2, 3]; ys[10] = 5 } catch e { oob = true }
+assert(oob, "out-of-bounds index assignment errors")
+
 print("test_lang2: all tests passed ✓")

@@ -1,7 +1,7 @@
 # Regression tests for expression-form `if` and `match`: used in expression position
 # they yield the value of the taken branch / matched arm. The statement forms are
 # unchanged. (match is compiled with the subject as a stack temporary + OP_DUP, so it
-# works even with other temporaries beneath it — e.g. as a call argument.)
+# works even with other temporaries beneath it, e.g. as a call argument.)
 
 # --- if as an expression ---
 let g = 85

@@ -1,5 +1,5 @@
 /*
- * Loqi — the AI-first language.
+ * Loqi, the AI-first language.
  * Reference implementation in C11, dependency-free (builds with nothing but clang).
  *
  * Pipeline: source -> lexer -> Pratt parser -> AST -> single-pass bytecode
@@ -64,7 +64,7 @@ typedef enum { OBJ_STRING, OBJ_LIST, OBJ_MAP, OBJ_PROTO, OBJ_CLOSURE, OBJ_UPVALU
 struct Obj {
     ObjType type;
     bool marked;     /* GC mark bit (set during marking, cleared on sweep) */
-    Obj *arena_next; /* intrusive list of every object — this is the GC sweep list */
+    Obj *arena_next; /* intrusive list of every object, this is the GC sweep list */
 };
 
 typedef struct {
@@ -180,7 +180,7 @@ static inline Value float_val(double d){Value v; v.type = VAL_FLOAT; v.as.d = d;
 static inline Value obj_val(Obj *o)   { Value v; v.type = VAL_OBJ;   v.as.obj = o; return v; }
 
 /* ===========================================================================
- * Interpreter context (no globals — keeps the parser re-entrant for
+ * Interpreter context (no globals, keeps the parser re-entrant for
  * string interpolation, which re-parses sub-expressions).
  * ========================================================================= */
 struct Interp {
@@ -213,7 +213,7 @@ struct Interp {
     int script_argc;   /* CLI arguments passed to the script (for args()) */
     char **script_argv;
     /* every per-module globals table (the `mod` from run_module_ns), owned here so
-       interp_free can reclaim them — they are raw Tables, not GC objects, so the
+       interp_free can reclaim them, they are raw Tables, not GC objects, so the
        sweep never touches them and a data-only module would otherwise orphan one. */
     Table **module_tables;
     int module_table_count, module_table_cap;
@@ -260,6 +260,13 @@ static void *xrealloc(void *p, size_t n) {
     void *q = realloc(p, n);
     if (!q) { fprintf(stderr, "out of memory\n"); exit(70); }
     return q;
+}
+/* strdup that aborts on OOM, like xmalloc/xrealloc, so a failed allocation can never
+   leave a NULL key/name to be dereferenced later. */
+static char *xstrdup(const char *s) {
+    char *p = strdup(s);
+    if (!p) { fprintf(stderr, "out of memory\n"); exit(70); }
+    return p;
 }
 
 static Obj *alloc_obj(Interp *I, size_t size, ObjType type) {
@@ -317,7 +324,7 @@ static void map_set(ObjMap *m, const char *key, Value v) {
         m->cap = m->cap < 8 ? 8 : m->cap * 2;
         m->entries = xrealloc(m->entries, sizeof(MapEntry) * (size_t)m->cap);
     }
-    m->entries[m->count].key = strdup(key);
+    m->entries[m->count].key = xstrdup(key);
     m->entries[m->count].value = v;
     m->count++;
 }
@@ -542,7 +549,7 @@ static Token lex_string(Lexer *L) {
     return tok;
 }
 
-/* Raw (verbatim) string: `...` — no escapes, no interpolation. Ideal for JSON,
+/* Raw (verbatim) string: `...`, no escapes, no interpolation. Ideal for JSON,
  * regexes and paths. A literal backtick is written as `` (two backticks). */
 static Token lex_raw_string(Lexer *L) {
     char *buf = xmalloc(64); size_t cap = 64, len = 0;
@@ -661,7 +668,7 @@ static void node_add(Node ***arr, int *count, Node *child) {
 
 /* Free an AST once it has been compiled to bytecode. Iterative (explicit worklist,
  * not C recursion) because the parser builds left-associative chains far deeper than
- * the compiler will accept — a recursive free would overflow the stack on the very
+ * the compiler will accept, a recursive free would overflow the stack on the very
  * inputs the compile-depth guard rejects. Frees only AST-owned memory: every `name`
  * is heap-owned (copy_lexeme / strdup / the import path), and `items`/`items2` are
  * malloc'd; `literal` is an arena ObjString owned by the GC, so it is left alone. */
@@ -708,7 +715,7 @@ static void parser_error_at(Parser *P, Token *t, const char *msg) {
         fprintf(stderr, "syntax error [%s:%d] at '%.*s': %s\n", P->I->path, t->line, t->length, t->start, msg);
 }
 
-/* Report at a specific source line (no token lexeme) — for errors whose offending
+/* Report at a specific source line (no token lexeme), for errors whose offending
  * node isn't the current token, e.g. an invalid arrow parameter. */
 static void parser_error_line(Parser *P, int line, const char *msg) {
     if (P->had_error) return;
@@ -783,11 +790,11 @@ static Node *parse_primary(Parser *P) {
     }
     if (p_match(P, T_LPAREN)) {
         int line = P->prev.line;
-        /* `()` — only meaningful as an empty arrow-function parameter list */
+        /* `()`, only meaningful as an empty arrow-function parameter list */
         if (p_check(P, T_RPAREN)) { p_advance(P); return new_node(N_PARAMS, line); }
         Node *first = parse_expression(P);
         if (p_check(P, T_COMMA)) {
-            /* `(a, b, ...)` — a parameter group; only valid immediately before `=>` */
+            /* `(a, b, ...)`, a parameter group; only valid immediately before `=>` */
             Node *g = new_node(N_PARAMS, line);
             node_add(&g->items, &g->item_count, first);
             while (p_match(P, T_COMMA)) {
@@ -988,7 +995,7 @@ static Node *finish_arrow(Parser *P, Node *params) {
        curried chain `a => b => ... => z` recurses finish_arrow once per level. The
        parse_unary depth guard resets between levels (it returns before the body is
        parsed), so cap here. P->depth accumulates because this frame stays live while
-       the body — the next arrow — is parsed. */
+       the body, the next arrow, is parsed. */
     if (++P->depth > MAX_PARSE_DEPTH) {
         parser_error_at(P, &P->prev, "arrow functions nested too deeply");
         P->depth--;
@@ -1007,7 +1014,7 @@ static Node *finish_arrow(Parser *P, Node *params) {
         node_add(&fn->items, &fn->item_count, params);
     } else {
         /* `params` (e.g. a grouped `(1 + 2)`) is not linked into the tree, so free it
-           explicitly — free_node(prog) would never reach it otherwise. */
+           explicitly, free_node(prog) would never reach it otherwise. */
         parser_error_line(P, params->line, "invalid arrow-function parameters (expected a name or '(name, ...)')");
         free_node(params);
         fn = new_node(N_FN, line);
@@ -1026,7 +1033,7 @@ static Node *parse_expression(Parser *P) {
     Node *expr = parse_binary(P, 1);
     if (p_check(P, T_ARROW)) return finish_arrow(P, expr);
     if (expr->type == N_PARAMS) {
-        parser_error_at(P, &P->cur, "unexpected ',' — a parenthesized list is only valid as arrow-function parameters before '=>'");
+        parser_error_at(P, &P->cur, "unexpected ',', a parenthesized list is only valid as arrow-function parameters before '=>'");
         return expr;
     }
     if (p_match(P, T_EQ)) {
@@ -1196,7 +1203,7 @@ static Node *parse_statement(Parser *P) {
     if (p_match(P, T_FOR))    return parse_for(P);
     if (p_match(P, T_MATCH))  return parse_match(P);
     if (p_match(P, T_TRY))    return parse_try(P);
-    if (p_match(P, T_LBRACE)) { /* bare block — '{' already consumed, build it here */
+    if (p_match(P, T_LBRACE)) { /* bare block, '{' already consumed, build it here */
         Node *block = new_node(N_BLOCK, P->prev.line);
         skip_newlines(P);
         while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
@@ -1352,7 +1359,7 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
 }
 
 /* ===========================================================================
- * Table — open-addressing hash map with string keys, for global variables.
+ * Table, open-addressing hash map with string keys, for global variables.
  * O(1) average lookup; this is what replaces the old linear-scan environment.
  * ========================================================================= */
 typedef struct {
@@ -1366,7 +1373,7 @@ struct Table {
     int cap;
     TableEntry *entries;
     uint32_t gc_gen;  /* GC generation this table was last marked in (dedup) */
-    uint32_t version; /* bumped on every rehash/grow (entries move) — invalidates GCache */
+    uint32_t version; /* bumped on every rehash/grow (entries move), invalidates GCache */
 };
 
 static uint32_t hash_string(const char *s, size_t n) {
@@ -1413,7 +1420,7 @@ static bool table_set(Table *t, const char *key, uint32_t hash, Value value) {
     if (t->count + 1 > t->cap * 3 / 4) table_grow(t);
     TableEntry *e = table_find(t->entries, t->cap, key, hash);
     bool is_new = e->key == NULL;
-    if (is_new) { e->key = strdup(key); e->hash = hash; t->count++; }
+    if (is_new) { e->key = xstrdup(key); e->hash = hash; t->count++; }
     e->value = value;
     return is_new;
 }
@@ -1502,11 +1509,11 @@ static char *value_to_cstr(Interp *I, Value v) { return value_to_cstr_depth(I, v
 static char *value_to_cstr_depth(Interp *I, Value v, int depth) {
     char tmp[64];
     if (depth > MAX_REPR_DEPTH)
-        return strdup(IS_LIST(v) ? "[...]" : IS_MAP(v) ? "{...}" : "...");
+        return xstrdup(IS_LIST(v) ? "[...]" : IS_MAP(v) ? "{...}" : "...");
     switch (v.type) {
-        case VAL_NIL: return strdup("nil");
-        case VAL_BOOL: return strdup(v.as.b ? "true" : "false");
-        case VAL_INT: snprintf(tmp, sizeof(tmp), "%lld", (long long)v.as.i); return strdup(tmp);
+        case VAL_NIL: return xstrdup("nil");
+        case VAL_BOOL: return xstrdup(v.as.b ? "true" : "false");
+        case VAL_INT: snprintf(tmp, sizeof(tmp), "%lld", (long long)v.as.i); return xstrdup(tmp);
         case VAL_FLOAT: {
             double d = v.as.d;
             /* Range-check before the int64 cast: converting an out-of-range double
@@ -1514,11 +1521,11 @@ static char *value_to_cstr_depth(Interp *I, Value v, int depth) {
             if (isfinite(d) && fabs(d) < 1e15 && d == (double)(int64_t)d)
                 snprintf(tmp, sizeof(tmp), "%.1f", d);
             else snprintf(tmp, sizeof(tmp), "%g", d);
-            return strdup(tmp);
+            return xstrdup(tmp);
         }
         case VAL_OBJ:
             switch (OBJ_TYPE(v)) {
-                case OBJ_STRING: return strdup(AS_STRING(v)->chars);
+                case OBJ_STRING: return xstrdup(AS_STRING(v)->chars);
                 case OBJ_NATIVE: {
                     char *b = xmalloc(REPR_BUF);
                     snprintf(b, REPR_BUF, "<native %s>", AS_NATIVE(v)->name);
@@ -1535,7 +1542,7 @@ static char *value_to_cstr_depth(Interp *I, Value v, int depth) {
                     snprintf(b, REPR_BUF, "<proto %s>", AS_PROTO(v)->name ? AS_PROTO(v)->name : "script");
                     return b;
                 }
-                case OBJ_UPVALUE: return strdup("<upvalue>");
+                case OBJ_UPVALUE: return xstrdup("<upvalue>");
                 case OBJ_LIST: {
                     ObjList *l = AS_LIST(v);
                     char *b = xmalloc(2); b[0] = '['; b[1] = '\0';
@@ -1562,7 +1569,7 @@ static char *value_to_cstr_depth(Interp *I, Value v, int depth) {
                 }
             }
     }
-    return strdup("?");
+    return xstrdup("?");
 }
 
 static const char *type_name(Value v) {
@@ -1659,7 +1666,7 @@ static ObjUpvalue *new_upvalue(Interp *I, Value *slot) {
 }
 
 /* ===========================================================================
- * Compiler — walks the AST and emits bytecode. Locals resolve to stack slots
+ * Compiler, walks the AST and emits bytecode. Locals resolve to stack slots
  * at compile time; globals to a hash table. Closures capture via upvalues.
  * ========================================================================= */
 #define MAX_LOCALS 256
@@ -1694,7 +1701,7 @@ typedef struct Compiler {
 } Compiler;
 /* Cap expression-tree depth at compile time: the iterative binary/pipe/index parse
  * loops can build very deep ASTs that the recursive compiler would otherwise walk
- * until the C stack overflows. Kept well below the C-stack ceiling — under
+ * until the C stack overflows. Kept well below the C-stack ceiling, under
  * AddressSanitizer (large instrumented frames) compile_expr overflows ~1500 deep,
  * so 500 leaves a ~3x margin while staying far above any real expression. Matches
  * the parser's MAX_PARSE_DEPTH. */
@@ -1760,7 +1767,7 @@ static void init_compiler(Compiler *C, Interp *I, Compiler *enclosing, const cha
     C->enclosing = enclosing; C->I = I; C->local_count = 0; C->scope_depth = 0;
     C->loop = NULL; C->try_depth = 0; C->expr_depth = 0; C->stmt_depth = 0; C->had_error = had_error;
     C->proto = new_proto(I);
-    if (name) C->proto->name = strdup(name);
+    if (name) C->proto->name = xstrdup(name);
     /* slot 0 holds the executing closure itself */
     CompLocal *l = &C->locals[C->local_count++];
     l->name = ""; l->name_len = 0; l->depth = 0; l->is_captured = false;
@@ -2009,7 +2016,7 @@ static void compile_block_value(Compiler *C, Node *block) {
     }
     /* Locals declared in an expression-position block would land at the wrong stack
        slot when temporaries sit beneath them (the VM indexes locals from the frame
-       base, not the live top), so disallow them here — use a statement `if` instead. */
+       base, not the live top), so disallow them here, use a statement `if` instead. */
     if (C->local_count > base) {
         *C->had_error = true;
         fprintf(stderr, "an if/match expression branch cannot declare local variables (use the statement form)\n");
@@ -2264,7 +2271,7 @@ static ObjProto *compile_script(Interp *I, Node *program) {
 }
 
 /* ===========================================================================
- * Virtual machine — a stack-based bytecode interpreter.
+ * Virtual machine, a stack-based bytecode interpreter.
  * ========================================================================= */
 #define FRAMES_MAX 128
 #define STACK_MAX (FRAMES_MAX * 256)
@@ -2276,7 +2283,7 @@ typedef struct { uint8_t *catch_ip; Value *stack_top; int frame_count; } TryHand
 
 struct VM {
     Interp *I;
-    VM *enclosing;     /* the VM that started this one (during imports) — a GC root chain */
+    VM *enclosing;     /* the VM that started this one (during imports), a GC root chain */
     Value stack[STACK_MAX];
     Value *stack_top;
     CallFrame frames[FRAMES_MAX];
@@ -2295,7 +2302,7 @@ static void vm_error(VM *vm, const char *fmt, ...);
  * Resolving the same module via different spellings then yields one stable string,
  * which keeps relative-path resolution IDEMPOTENT. Without this a relative cyclic
  * import ('./a.lq') accumulates a './' each level, so I->path keeps changing and the
- * strcmp-based cycle detector never matches — the cycle degrades to the depth-limit
+ * strcmp-based cycle detector never matches, the cycle degrades to the depth-limit
  * backstop instead of an immediate 'cyclic import' error. Returns a fresh string. */
 static char *normalize_path(const char *in) {
     size_t n = strlen(in);
@@ -2598,13 +2605,13 @@ static Value iter_seq(VM *vm, Value it) {
 /* Run until the current frame count drops back to `stop_at` (0 for the top-level
  * script; a higher baseline for a re-entrant vm_invoke). */
 /* ===========================================================================
- * Garbage collector — precise mark & sweep over the object arena.
+ * Garbage collector, precise mark & sweep over the object arena.
  *
  * Collection runs only at the VM dispatch safe-point (top of run_vm's loop),
  * where every live value is reachable from a root: the value stacks and call
  * frames of the active VM chain, the current module globals, and the open
  * upvalues. Because GC never fires in the middle of a native, a native's C-local
- * temporaries can't be collected out from under it — the one exception is the
+ * temporaries can't be collected out from under it, the one exception is the
  * higher-order natives (map/filter/reduce) that re-enter the VM via a callback,
  * which root their accumulator on the value stack while the callback runs.
  * ========================================================================= */
@@ -2971,7 +2978,7 @@ static void run_vm(VM *vm, int stop_at) {
                 /* A flat sub-import binds into the current module's scope but its
                    names are NOT part of the importing module's public surface, so
                    suspend define-recording for the duration (a module re-exports
-                   only what it defines itself — like Python/JS/Rust). */
+                   only what it defines itself, like Python/JS/Rust). */
                 Table *saved_defines = vm->I->module_defines;
                 vm->I->module_defines = NULL;
                 int rc = run_source(vm->I, NULL, resolved); /* NULL src => read file */
@@ -3008,7 +3015,7 @@ static void run_vm(VM *vm, int stop_at) {
 #undef READ_CONST
 }
 
-/* Call a Loqi callable (closure or native) from C — enables higher-order
+/* Call a Loqi callable (closure or native) from C, enables higher-order
  * built-ins like map/filter/reduce. Re-enters the VM for closures. */
 static Value vm_invoke(VM *vm, Value callee, int argc, Value *argv) {
     vm_push(vm, callee);
@@ -3039,7 +3046,7 @@ static Value vm_invoke(VM *vm, Value callee, int argc, Value *argv) {
 }
 
 /* ===========================================================================
- * Regex engine — a dependency-free, LINEAR-TIME matcher (Thompson NFA / Pike VM).
+ * Regex engine, a dependency-free, LINEAR-TIME matcher (Thompson NFA / Pike VM).
  * Unlike backtracking engines (PCRE/Python re/JS), it cannot catastrophically
  * backtrack ("ReDoS"): matching is O(text * pattern). Semantics are leftmost-first
  * with greedy *, +, ? (like Perl/Python), implemented via thread priority. Supports
@@ -3317,7 +3324,7 @@ static bool rx_search(RxProg *p, const char *text, int len, int from, int *ms, i
 }
 
 /* ===========================================================================
- * Native functions (the "batteries included" standard library — core set)
+ * Native functions (the "batteries included" standard library, core set)
  * ========================================================================= */
 static Value nat_print(Interp *I, int argc, Value *argv) {
     for (int i = 0; i < argc; i++) {
@@ -3521,7 +3528,7 @@ static void define_native(Interp *I, const char *name, NativeFn fn, int arity) {
 }
 
 /* ===========================================================================
- * AI-first batteries — the pieces you'd install separately in other languages,
+ * AI-first batteries, the pieces you'd install separately in other languages,
  * here built into the runtime: JSON, HTTP, environment, files, vectors, and a
  * first-class call to an LLM (`ai`). HTTP/LLM shell out to the always-present
  * `curl`; a native client is a later iteration.
@@ -3735,7 +3742,7 @@ static bool schema_check(Interp *I, Value v, Value schema, char *eb, size_t cap,
     if (!IS_MAP(schema)) runtime_error(I, 0, "validate(): schema must be a map, got %s", type_name(schema));
     if (depth > MAX_SCHEMA_DEPTH) { scherr(eb, cap, el, path, "schema/value nested too deep"); return false; }
     ObjMap *s = AS_MAP(schema);
-    /* A malformed schema is an author bug — raise loudly and deterministically
+    /* A malformed schema is an author bug, raise loudly and deterministically
        (independent of the data) rather than silently dropping the constraint or
        crashing only on some inputs. */
     Value *tv = map_get(s, "type");
@@ -3890,8 +3897,8 @@ static Value ai_parse_json_text(Interp *I, const char *text) {
 }
 
 /* Format a runtime-error message into I->err_msg WITHOUT raising, returning NULL.
-   Lets a caller (e.g. ai_all) release its own resources first, then raise_error()
-   — so a mid-loop failure can't strand key-bearing temp files on disk. */
+   Lets a caller (e.g. ai_all) release its own resources first, then raise_error(),
+   so a mid-loop failure can't strand key-bearing temp files on disk. */
 static char *fail_msg(Interp *I, const char *msg) {
     int n = snprintf(I->err_msg, sizeof(I->err_msg), "runtime error [%s:%d]: ",
                      I->path ? I->path : "?", vm_current_line(I));
@@ -3934,7 +3941,7 @@ static AiOpts ai_parse_opts(Interp *I, int argc, Value *argv, int optidx) {
 
 /* Build the request body + 0600 curl config temp files for one prompt and return
    the curl command (malloc'd, caller frees). Fills body_tmpl/cfg_tmpl (>= 32
-   bytes; caller unlinks them). Runs on the MAIN thread only — it allocates Loqi
+   bytes; caller unlinks them). Runs on the MAIN thread only, it allocates Loqi
    objects (json_stringify) and so must not run on a worker. The API key goes
    only into the 0600 config file, never argv. */
 static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key,
@@ -3995,7 +4002,7 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
    on a curl/API/format error. */
 static Value ai_parse_response(Interp *I, char *resp, int status, bool want_json) {
     if (!resp) runtime_error(I, 0, "ai(): could not run curl");
-    if (status != 0 && !*resp) { free(resp); runtime_error(I, 0, "ai(): API request failed (curl %d) — check network and key", status); }
+    if (status != 0 && !*resp) { free(resp); runtime_error(I, 0, "ai(): API request failed (curl %d), check network and key", status); }
     if (!*resp) { free(resp); runtime_error(I, 0, "ai(): no response from the API"); }
     const char *p = resp;
     Value parsed = json_parse_value(I, &p, 0);
@@ -4048,7 +4055,7 @@ static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
     return ai_parse_response(I, resp, status, true);
 }
-/* ai_json(prompt, schema [, opts]) — structured output: ask the model for JSON that
+/* ai_json(prompt, schema [, opts]), structured output: ask the model for JSON that
    matches `schema`, parse it, validate against the schema, and retry ONCE with the
    validation errors if it doesn't conform. Returns the validated native value, or
    raises if the model can't produce conforming output. The reliable way to get
@@ -4194,10 +4201,10 @@ static Value nat_args(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)l);
 }
 
-/* run_all(cmds) — run shell commands concurrently and collect { out, code } for
+/* run_all(cmds), run shell commands concurrently and collect { out, code } for
  * each, in input order. This is Loqi's concurrency primitive: the worker threads
- * only run a subprocess (popen) and malloc — they never touch the Loqi heap or
- * the VM — so the single-threaded GC stays safe. The blocking I/O (curl, tools)
+ * only run a subprocess (popen) and malloc, they never touch the Loqi heap or
+ * the VM, so the single-threaded GC stays safe. The blocking I/O (curl, tools)
  * is what overlaps, which is exactly the win for fanning out AI/HTTP calls. */
 typedef struct { const char *cmd; char *out; size_t len; int status; } RunJob;
 static void *run_one_job(void *arg) {
@@ -4207,7 +4214,7 @@ static void *run_one_job(void *arg) {
 }
 #define MAX_PARALLEL 32
 /* Run n jobs (each a shell command) on a thread pool, in waves of MAX_PARALLEL.
-   Workers only popen/malloc — they never touch the Loqi heap — so this is safe
+   Workers only popen/malloc, they never touch the Loqi heap, so this is safe
    to call while the single-threaded GC is idle (no VM re-entry here). After it
    returns, every jobs[i].{out,len,status} is filled. Shared by run_all/ai_all. */
 static void run_jobs_parallel(RunJob *jobs, int n) {
@@ -4236,7 +4243,7 @@ static Value nat_run_all(Interp *I, int argc, Value *argv) {
         jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
     }
     run_jobs_parallel(jobs, n);
-    /* back on the single Loqi thread — allocating Loqi objects is safe again */
+    /* back on the single Loqi thread, allocating Loqi objects is safe again */
     ObjList *out = new_list(I);
     for (int i = 0; i < n; i++) {
         ObjMap *m = new_map(I);
@@ -4249,7 +4256,7 @@ static Value nat_run_all(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)out);
 }
 
-/* ai_all(prompts [, options]) — run many model calls concurrently (the AI payoff
+/* ai_all(prompts [, options]), run many model calls concurrently (the AI payoff
    of run_all). Requests are built on the main thread (Loqi-safe), the curl calls
    overlap on the thread pool, responses are parsed on the main thread. Returns a
    list of answers (text, or parsed data with { json: true }) in input order;
@@ -4272,7 +4279,7 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
         jobs[i].cmd = ai_build_request(I, prompts->items[i], o, key, body_tmpls[i], cfg_tmpls[i]);
         if (!jobs[i].cmd) {
             /* a build failed (its own partial files are already cleaned): remove the
-               temp files of the prompts built so far — no API key left on disk — then raise */
+               temp files of the prompts built so far, no API key left on disk, then raise */
             for (int j = 0; j < i; j++) { unlink(body_tmpls[j]); unlink(cfg_tmpls[j]); free((char *)jobs[j].cmd); }
             free(jobs); free(body_tmpls); free(cfg_tmpls);
             raise_error(I);
@@ -4584,7 +4591,7 @@ static Value nat_regex_split(Interp *I, int argc, Value *argv) {
        find_all/replace and with Python re.split): a match at [ms,me) emits the field
        text[last..ms]; `last` then jumps to me. A zero-width match advances the search
        by one byte (so it can't loop) but leaves `last` at the position, so the byte
-       there lands in the next field — no character is dropped. */
+       there lands in the next field, no character is dropped. */
     int from = 0, ms, me, last = 0;
     while (from <= text->length && rx_search(&prog, text->chars, text->length, from, &ms, &me)) {
         list_push(out, string_val(I, text->chars + last, ms - last));
@@ -4596,7 +4603,7 @@ static Value nat_regex_split(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)out);
 }
 /* Cosine similarity of two numeric vectors; 0 if either is the zero vector.
- * Each vector is divided by its largest-magnitude component before accumulating —
+ * Each vector is divided by its largest-magnitude component before accumulating,
  * cosine is scale-invariant, so this changes nothing mathematically but keeps the
  * sums finite for huge embeddings (x*x would otherwise overflow to +inf -> NaN). */
 static double vec_cosine(Interp *I, ObjList *a, ObjList *b, const char *who) {
@@ -4936,7 +4943,7 @@ static Value nat_exp(Interp *I, int argc, Value *argv) {
     return float_val(exp(as_double(argv[0])));
 }
 
-/* xorshift64 — small, fast, decent-quality PRNG (state is never zero). */
+/* xorshift64, small, fast, decent-quality PRNG (state is never zero). */
 static uint64_t rng_next(Interp *I) {
     uint64_t x = I->rng_state;
     x ^= x << 13; x ^= x >> 7; x ^= x << 17;
@@ -5106,7 +5113,7 @@ static Value nat_find(Interp *I, int argc, Value *argv) {
     return NIL_VAL;
 }
 /* The pure-C collection helpers below never re-enter the VM, so the GC (which
-   only runs at the VM safe-point) cannot fire mid-call — their intermediate
+   only runs at the VM safe-point) cannot fire mid-call, their intermediate
    allocations need no rooting. any/all run a callback but hold no unrooted
    accumulator; group_by does, so it roots its result map on the value stack. */
 static Value nat_zip(Interp *I, int argc, Value *argv) {
@@ -5303,8 +5310,8 @@ static void install_stdlib(Interp *I) {
 
     /* --- AI-first batteries --- */
     define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model|opts) */
-    define_native(I, "ai_all", nat_ai_all, -1);      /* ai_all([prompts] [, opts]) — concurrent */
-    define_native(I, "ai_json", nat_ai_json, -1);    /* ai_json(prompt, schema [, opts]) — structured output */
+    define_native(I, "ai_all", nat_ai_all, -1);      /* ai_all([prompts] [, opts]), concurrent */
+    define_native(I, "ai_json", nat_ai_json, -1);    /* ai_json(prompt, schema [, opts]), structured output */
     define_native(I, "env", nat_env, 1);
     define_native(I, "read", nat_read, 1);
     define_native(I, "write", nat_write, 2);
@@ -5434,9 +5441,9 @@ static int run_source(Interp *I, const char *src, const char *path) {
         src = owned;
     }
     /* keep copies of the source + path alive for diagnostics (proto->source/path) */
-    char *kept_source = strdup(src);
+    char *kept_source = xstrdup(src);
     keep_source(I, kept_source);
-    char *kept_path = strdup(path ? path : "?");
+    char *kept_path = xstrdup(path ? path : "?");
     keep_source(I, kept_path);
     const char *prev_source = I->current_source;
     const char *prev_cur_path = I->current_path;
@@ -5508,8 +5515,8 @@ static void table_free(Table *t) {
     table_init(t);
 }
 static Value run_module_ns(Interp *I, char *path /* owned */) {
-    /* A module evaluates exactly once: a second `import "x" as ...` — including a
-       diamond where two modules both import the same file — returns the cached
+    /* A module evaluates exactly once: a second `import "x" as ...`, including a
+       diamond where two modules both import the same file, returns the cached
        namespace instead of re-running the file's top-level code. Keyed by the
        canonical absolute path so "./x.lq", "x.lq" and "../d/x.lq" dedupe. */
     char canon[PATH_MAX];
@@ -5613,7 +5620,7 @@ static void interp_free(Interp *I) {
 #define LOQI_VERSION "0.2.0"
 
 static void repl(Interp *I) {
-    printf("Loqi %s — REPL. Ctrl-D to exit.\n", LOQI_VERSION);
+    printf("Loqi %s, REPL. Ctrl-D to exit.\n", LOQI_VERSION);
     char *line = NULL; size_t cap = 0;
     for (;;) {
         fputs("loqi> ", stdout); fflush(stdout);

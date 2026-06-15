@@ -8,7 +8,7 @@ assert(m.double(21) == 42, "module function via namespace")
 assert(m.area(2) > 12.56 and m.area(2) < 12.57, "module fn resolves its own PI")
 assert(m.PI == 3.14159, "module exposes its constants")
 
-# a module exports exactly the names it defines — even ones that shadow a built-in
+# a module exports exactly the names it defines, even ones that shadow a built-in
 # (PI is a built-in constant, yet the module's own PI is what gets exported)...
 assert(has(m, "PI") and has(m, "area") and has(m, "double"), "module exports its definitions")
 # ...and built-ins the module did NOT define are not part of its namespace
@@ -33,7 +33,7 @@ assert(cycled, "cyclic import is a catchable error, not a segfault")
 
 # A cycle reached via a relative './' spelling must be caught by the cheap cycle
 # detector (paths are normalized, so they stop accumulating './' and strcmp matches)
-# — the error says 'cyclic import', NOT 'nesting too deep' from the depth backstop.
+# the error says 'cyclic import', NOT 'nesting too deep' from the depth backstop.
 let rel_err = ""
 try { import "fixtures/rel_a.lq" as ra } catch e { rel_err = e }
 assert(contains(rel_err, "cyclic import"), "relative-path cycle is detected as a cycle, not depth overflow")

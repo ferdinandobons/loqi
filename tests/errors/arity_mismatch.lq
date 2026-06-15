@@ -1,0 +1,4 @@
+# A fixed-arity function called with the wrong number of arguments must be a clean
+# catchable error, not a crash.
+fn add(a, b) { return a + b }
+add(1)

@@ -35,7 +35,7 @@ let result = [1, 2, 3, 4, 5, 6]
   |> sum
 assert(result == 120, "arrows compose with the pipe operator")
 
-# --- a grouped expression is NOT an arrow (no `=>`) — must still group ---
+# --- a grouped expression is NOT an arrow (no `=>`), must still group ---
 assert((1 + 2) * 3 == 9, "parenthesized expressions still group normally")
 assert(((7)) == 7, "nested parentheses still group normally")
 

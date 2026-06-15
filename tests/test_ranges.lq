@@ -22,4 +22,15 @@ let bad = false
 try { let r = 1.5..3 } catch e { bad = true }
 assert(bad, "non-int range raises")
 
+# the range() builtin: 1-, 2- and 3-argument forms
+assert(range(3) == [0, 1, 2], "range(stop)")
+assert(range(2, 5) == [2, 3, 4], "range(start, stop)")
+assert(range(0, 10, 2) == [0, 2, 4, 6, 8], "range positive step")
+assert(range(10, 0, -2) == [10, 8, 6, 4, 2], "range negative step")
+assert(range(0, 10, -1) == [], "negative step with start < stop is empty")
+assert(range(5, 5, 1) == [], "empty when start == stop")
+let step0 = false
+try { range(5, 10, 0) } catch e { step0 = true }
+assert(step0, "range with step 0 raises")
+
 print("test_ranges: all tests passed ✓")

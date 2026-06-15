@@ -1,5 +1,5 @@
 # Regression tests for the module cache: a module evaluates EXACTLY ONCE, so
-# repeated imports — and diamond imports — share a single instance of its state.
+# repeated imports, and diamond imports, share a single instance of its state.
 
 # Two aliases for the same file resolve to ONE shared module instance.
 import "fixtures/counter.lq" as a

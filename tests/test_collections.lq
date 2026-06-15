@@ -33,4 +33,20 @@ assert(g["1"] == [1, 3, 5], "group_by odd bucket")
 let byfirst = group_by(["apple", "avocado", "banana"], fn(w) { return slice(w, 0, 1) })
 assert(byfirst["a"] == ["apple", "avocado"] and byfirst["b"] == ["banana"], "group_by by first letter")
 
+# del: remove a key from a map (mutates, returns the map)
+let dm = { a: 1, b: 2, c: 3 }
+assert(del(dm, "b") == dm, "del returns the same map")
+assert(not has(dm, "b") and has(dm, "a") and has(dm, "c"), "del removes only the given key")
+assert(len(dm) == 2, "del shrinks the map")
+del(dm, "missing")
+assert(len(dm) == 2, "del of an absent key is a no-op")
+
+# each: call a function for its side effects, returns nil
+let acc = [0]
+each([1, 2, 3, 4], x => acc[0] = acc[0] + x)
+assert(acc[0] == 10, "each runs the callback for every element")
+let seen = []
+each([], x => push(seen, x))
+assert(len(seen) == 0 and each([1], x => x) == nil, "each over [] is a no-op and returns nil")
+
 print("test_collections: all tests passed ✓")

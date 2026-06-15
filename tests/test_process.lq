@@ -8,7 +8,11 @@ assert(run("exit 7").code == 7, "run captures a non-zero exit code")
 # args(): the CLI arguments after the script path (empty when none are passed).
 assert(type(args()) == "list", "args() returns a list")
 
-# (exit(code) is verified manually — it terminates the process, so it can't run
+# env(): read an environment variable, nil when unset.
+assert(env("LOQI_NONEXISTENT_VAR_xyz") == nil, "env() of an unset variable is nil")
+assert(type(env("PATH")) == "str", "env() reads a present variable")
+
+# (exit(code) is verified manually, it terminates the process, so it can't run
 #  inside the suite.)
 
 print("test_process: all tests passed ✓")

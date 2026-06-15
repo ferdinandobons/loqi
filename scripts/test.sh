@@ -35,7 +35,7 @@ for t in tests/errors/*.lq; do
     echo "  ✓ (error) $t  (exit $rc)"
     pass=$((pass+1))
   else
-    echo "  ✗ (error) $t  — expected clean error exit, exit=$rc"
+    echo "  ✗ (error) $t, expected clean error exit, exit=$rc"
     fail=$((fail+1))
   fi
 done

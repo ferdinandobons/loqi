@@ -20,4 +20,12 @@ assert(words("one\ttwo\nthree") == ["one", "two", "three"], "words splits on any
 assert(words("   ") == [], "words of only whitespace is empty")
 assert(words("") == [], "words of empty is empty")
 
+# chars: split a string into single-character strings (byte-oriented)
+assert(chars("abc") == ["a", "b", "c"], "chars splits into characters")
+assert(len(chars("hello")) == 5, "chars length")
+assert(chars("") == [], "chars of empty string is empty")
+
+# lower / upper
+assert(lower("AbC") == "abc" and upper("AbC") == "ABC", "lower/upper")
+
 print("test_strings2: all tests passed ✓")
