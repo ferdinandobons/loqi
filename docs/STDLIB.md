@@ -237,6 +237,25 @@ print("{person.name} ({person.birth_year})")          # person.birth_year is an 
 let summary = ai("Summarize this.", { system: "Be terse.", temperature: 0.2 })
 ```
 
+## `ai_all(prompts) → list` / `ai_all(prompts, options) → list`
+Runs many model calls **concurrently** and returns the answers in input order —
+the same `options` (incl. `json`) apply to every prompt. This is how you fan out
+work to the model in parallel instead of one slow call after another:
+```loqi
+# classify many items at once — N calls overlap instead of running serially
+let labels = ai_all([
+  "Sentiment of 'I love it' in one word",
+  "Sentiment of 'it broke instantly' in one word"
+])
+for l in labels { print(trim(l)) }
+
+# structured output works per-prompt too
+let people = ai_all(["JSON name,age for: Ada, 36", "JSON name,age for: Bob, 25"], { json: true })
+print(people[0].name)
+```
+Built on `run_all`'s thread pool: the model requests overlap, while the Loqi
+runtime stays single-threaded. A failed call raises (use `try` to guard a batch).
+
 ## `json.parse(str) → value` / `json.stringify(value) → str`
 A real JSON codec, built in. `parse` returns native Loqi values
 (`map`/`list`/`str`/`int`/`float`/`bool`/`nil`); `stringify` is the inverse.

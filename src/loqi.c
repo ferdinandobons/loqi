@@ -3048,89 +3048,96 @@ static Value ai_parse_json_text(Interp *I, const char *text) {
     return json_parse_value(I, &p, 0);
 }
 
-static Value nat_ai(Interp *I, int argc, Value *argv) {
-    if (argc < 1 || !IS_STRING(argv[0]))
-        runtime_error(I, 0, "ai() requires a prompt (str)");
-    const char *key = getenv("ANTHROPIC_API_KEY");
-    if (!key || !*key)
-        runtime_error(I, 0, "ai(): set the ANTHROPIC_API_KEY environment variable");
+/* Parsed form of ai()'s optional 2nd argument. */
+typedef struct {
+    const char *model;
+    const char *system;
+    int64_t max_tokens;
+    bool has_temp; double temperature;
+    bool want_json;
+} AiOpts;
 
-    /* Second arg: a model name (str) OR an options map
-       { model, system, temperature, max_tokens, json }. */
-    const char *model = getenv("LOQI_AI_MODEL") ? getenv("LOQI_AI_MODEL") : "claude-sonnet-4-6";
-    const char *system = NULL;
-    int64_t max_tokens = 1024;
-    bool has_temp = false; double temperature = 0;
-    bool want_json = false;
-    if (argc >= 2 && IS_STRING(argv[1])) {
-        model = AS_STRING(argv[1])->chars;
-    } else if (argc >= 2 && IS_MAP(argv[1])) {
-        ObjMap *o = AS_MAP(argv[1]);
-        Value *v;
-        if ((v = map_get(o, "model")) && IS_STRING(*v)) model = AS_STRING(*v)->chars;
-        if ((v = map_get(o, "system")) && IS_STRING(*v)) system = AS_STRING(*v)->chars;
-        if ((v = map_get(o, "max_tokens")) && IS_INT(*v)) max_tokens = AS_INT(*v);
-        if ((v = map_get(o, "temperature")) && IS_NUM(*v)) { has_temp = true; temperature = as_double(*v); }
-        if ((v = map_get(o, "json")) != NULL) want_json = is_truthy(*v);
-    } else if (argc >= 2 && !IS_NIL(argv[1])) {
-        runtime_error(I, 0, "ai(): second argument must be a model name (str) or an options map");
+/* Parse argv[optidx] (a model str, an options map, or absent) into AiOpts. */
+static AiOpts ai_parse_opts(Interp *I, int argc, Value *argv, int optidx) {
+    AiOpts o;
+    o.model = getenv("LOQI_AI_MODEL") ? getenv("LOQI_AI_MODEL") : "claude-sonnet-4-6";
+    o.system = NULL; o.max_tokens = 1024; o.has_temp = false; o.temperature = 0; o.want_json = false;
+    if (argc > optidx && IS_STRING(argv[optidx])) {
+        o.model = AS_STRING(argv[optidx])->chars;
+    } else if (argc > optidx && IS_MAP(argv[optidx])) {
+        ObjMap *m = AS_MAP(argv[optidx]); Value *v;
+        if ((v = map_get(m, "model")) && IS_STRING(*v)) o.model = AS_STRING(*v)->chars;
+        if ((v = map_get(m, "system")) && IS_STRING(*v)) o.system = AS_STRING(*v)->chars;
+        if ((v = map_get(m, "max_tokens")) && IS_INT(*v)) o.max_tokens = AS_INT(*v);
+        if ((v = map_get(m, "temperature")) && IS_NUM(*v)) { o.has_temp = true; o.temperature = as_double(*v); }
+        if ((v = map_get(m, "json")) != NULL) o.want_json = is_truthy(*v);
+    } else if (argc > optidx && !IS_NIL(argv[optidx])) {
+        runtime_error(I, 0, "ai(): options must be a model name (str) or an options map");
     }
-    if (max_tokens <= 0) runtime_error(I, 0, "ai(): max_tokens must be positive");
-    /* When asking for JSON, steer the model unless the caller set their own system prompt. */
-    if (want_json && !system)
-        system = "Respond with a single valid JSON value and nothing else. Do not wrap it in markdown code fences.";
+    if (o.max_tokens <= 0) runtime_error(I, 0, "ai(): max_tokens must be positive");
+    if (o.want_json && !o.system)
+        o.system = "Respond with a single valid JSON value and nothing else. Do not wrap it in markdown code fences.";
+    return o;
+}
 
-    /* build the request JSON safely via the value stringifier */
+/* Build the request body + 0600 curl config temp files for one prompt and return
+   the curl command (malloc'd, caller frees). Fills body_tmpl/cfg_tmpl (>= 32
+   bytes; caller unlinks them). Runs on the MAIN thread only — it allocates Loqi
+   objects (json_stringify) and so must not run on a worker. The API key goes
+   only into the 0600 config file, never argv. */
+static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key,
+                              char *body_tmpl, char *cfg_tmpl) {
     ObjMap *body = new_map(I);
-    map_set(body, "model", cstring_val(I, model));
-    map_set(body, "max_tokens", int_val(max_tokens));
-    if (has_temp) map_set(body, "temperature", float_val(temperature));
-    if (system) map_set(body, "system", cstring_val(I, system));
+    map_set(body, "model", cstring_val(I, o.model));
+    map_set(body, "max_tokens", int_val(o.max_tokens));
+    if (o.has_temp) map_set(body, "temperature", float_val(o.temperature));
+    if (o.system) map_set(body, "system", cstring_val(I, o.system));
     ObjList *msgs = new_list(I);
     ObjMap *msg = new_map(I);
     map_set(msg, "role", cstring_val(I, "user"));
-    map_set(msg, "content", argv[0]);
+    map_set(msg, "content", prompt);
     list_push(msgs, obj_val((Obj *)msg));
     map_set(body, "messages", obj_val((Obj *)msgs));
 
     char *jbuf = xmalloc(16); size_t jl = 0, jc = 16; jbuf[0] = '\0';
     json_stringify_value(I, &jbuf, &jl, &jc, obj_val((Obj *)body), 0);
 
-    /* request body -> temp file so the prompt never touches the shell */
-    char tmpl[] = "/tmp/loqi_ai_XXXXXX";
-    int fd = mkstemp(tmpl); /* mkstemp creates the file 0600 */
+    strcpy(body_tmpl, "/tmp/loqi_ai_XXXXXX");
+    int fd = mkstemp(body_tmpl); /* creates the file 0600 */
     if (fd < 0) { free(jbuf); runtime_error(I, 0, "ai(): could not create temp file"); }
-    if (write(fd, jbuf, jl) < 0) { close(fd); unlink(tmpl); free(jbuf); runtime_error(I, 0, "ai(): temp write failed"); }
+    if (write(fd, jbuf, jl) < 0) { close(fd); unlink(body_tmpl); free(jbuf); runtime_error(I, 0, "ai(): temp write failed"); }
     close(fd);
     free(jbuf);
 
-    /* curl config (0600) so the API key never appears in the process argv (ps) */
-    char cfgtmpl[] = "/tmp/loqi_aicfg_XXXXXX";
-    int cfd = mkstemp(cfgtmpl);
-    if (cfd < 0) { unlink(tmpl); runtime_error(I, 0, "ai(): could not create config file"); }
+    strcpy(cfg_tmpl, "/tmp/loqi_aicfg_XXXXXX");
+    int cfd = mkstemp(cfg_tmpl);
+    if (cfd < 0) { unlink(body_tmpl); runtime_error(I, 0, "ai(): could not create config file"); }
     FILE *cf = fdopen(cfd, "w");
-    if (!cf) { close(cfd); unlink(cfgtmpl); unlink(tmpl); runtime_error(I, 0, "ai(): config not writable"); }
+    if (!cf) { close(cfd); unlink(cfg_tmpl); unlink(body_tmpl); runtime_error(I, 0, "ai(): config not writable"); }
     fputs("url = \"https://api.anthropic.com/v1/messages\"\n", cf);
     fputs("header = \"content-type: application/json\"\n", cf);
     fputs("header = \"anthropic-version: 2023-06-01\"\n", cf);
     fputs("header = \"x-api-key: ", cf);
     for (const char *k = key; *k; k++) { if (*k == '"' || *k == '\\') fputc('\\', cf); fputc(*k, cf); }
     fputs("\"\n", cf);
-    fprintf(cf, "data = \"@%s\"\n", tmpl);
+    fprintf(cf, "data = \"@%s\"\n", body_tmpl);
     fclose(cf);
 
-    char *qcfg = shell_quote(cfgtmpl);
+    char *qcfg = shell_quote(cfg_tmpl);
     size_t clen = strlen(qcfg) + 48;
     char *cmd = xmalloc(clen);
     snprintf(cmd, clen, "curl -fsS --max-time 120 -K %s", qcfg);
-    size_t rlen; int status;
-    char *resp = run_capture(cmd, &rlen, &status);
-    free(qcfg); free(cmd); unlink(tmpl); unlink(cfgtmpl);
-    if (!resp) runtime_error(I, 0, "ai(): could not run curl");
-    if (status != 0 && (!resp || !*resp)) { free(resp); runtime_error(I, 0, "ai(): API request failed (curl %d) — check network and key", status); }
-    if (!*resp) { free(resp); runtime_error(I, 0, "ai(): no response from the API"); }
+    free(qcfg);
+    return cmd;
+}
 
-    /* parse { "content": [ { "type":"text", "text":"..." }, ... ], ... } */
+/* Parse one Anthropic Messages response into a Loqi value (the first text block,
+   or its parsed JSON if want_json). Takes ownership of `resp` (frees it). Raises
+   on a curl/API/format error. */
+static Value ai_parse_response(Interp *I, char *resp, int status, bool want_json) {
+    if (!resp) runtime_error(I, 0, "ai(): could not run curl");
+    if (status != 0 && !*resp) { free(resp); runtime_error(I, 0, "ai(): API request failed (curl %d) — check network and key", status); }
+    if (!*resp) { free(resp); runtime_error(I, 0, "ai(): no response from the API"); }
     const char *p = resp;
     Value parsed = json_parse_value(I, &p, 0);
     free(resp);
@@ -3154,6 +3161,21 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     }
     runtime_error(I, 0, "ai(): API response in unexpected format");
     return NIL_VAL;
+}
+
+static Value nat_ai(Interp *I, int argc, Value *argv) {
+    if (argc < 1 || !IS_STRING(argv[0]))
+        runtime_error(I, 0, "ai() requires a prompt (str)");
+    const char *key = getenv("ANTHROPIC_API_KEY");
+    if (!key || !*key)
+        runtime_error(I, 0, "ai(): set the ANTHROPIC_API_KEY environment variable");
+    AiOpts o = ai_parse_opts(I, argc, argv, 1);
+    char body_tmpl[32], cfg_tmpl[32];
+    char *cmd = ai_build_request(I, argv[0], o, key, body_tmpl, cfg_tmpl);
+    size_t rlen; int status;
+    char *resp = run_capture(cmd, &rlen, &status);
+    free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
+    return ai_parse_response(I, resp, status, o.want_json);
 }
 
 /* ---- environment, files, vectors ---- */
@@ -3268,6 +3290,23 @@ static void *run_one_job(void *arg) {
     return NULL;
 }
 #define MAX_PARALLEL 32
+/* Run n jobs (each a shell command) on a thread pool, in waves of MAX_PARALLEL.
+   Workers only popen/malloc — they never touch the Loqi heap — so this is safe
+   to call while the single-threaded GC is idle (no VM re-entry here). After it
+   returns, every jobs[i].{out,len,status} is filled. Shared by run_all/ai_all. */
+static void run_jobs_parallel(RunJob *jobs, int n) {
+    pthread_t threads[MAX_PARALLEL];
+    bool started[MAX_PARALLEL];
+    for (int base = 0; base < n; base += MAX_PARALLEL) {
+        int cnt = n - base < MAX_PARALLEL ? n - base : MAX_PARALLEL;
+        for (int k = 0; k < cnt; k++)
+            started[k] = (pthread_create(&threads[k], NULL, run_one_job, &jobs[base + k]) == 0);
+        for (int k = 0; k < cnt; k++) {
+            if (started[k]) pthread_join(threads[k], NULL);
+            else run_one_job(&jobs[base + k]); /* thread spawn failed: run it synchronously */
+        }
+    }
+}
 static Value nat_run_all(Interp *I, int argc, Value *argv) {
     (void)argc;
     if (!IS_LIST(argv[0])) runtime_error(I, 0, "run_all() requires a list of command strings");
@@ -3280,18 +3319,7 @@ static Value nat_run_all(Interp *I, int argc, Value *argv) {
         jobs[i].cmd = AS_STRING(cmds->items[i])->chars;
         jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
     }
-    /* run in waves so at most MAX_PARALLEL subprocesses are in flight at once */
-    pthread_t threads[MAX_PARALLEL];
-    bool started[MAX_PARALLEL];
-    for (int base = 0; base < n; base += MAX_PARALLEL) {
-        int cnt = n - base < MAX_PARALLEL ? n - base : MAX_PARALLEL;
-        for (int k = 0; k < cnt; k++)
-            started[k] = (pthread_create(&threads[k], NULL, run_one_job, &jobs[base + k]) == 0);
-        for (int k = 0; k < cnt; k++) {
-            if (started[k]) pthread_join(threads[k], NULL);
-            else run_one_job(&jobs[base + k]); /* thread spawn failed: run it synchronously */
-        }
-    }
+    run_jobs_parallel(jobs, n);
     /* back on the single Loqi thread — allocating Loqi objects is safe again */
     ObjList *out = new_list(I);
     for (int i = 0; i < n; i++) {
@@ -3301,6 +3329,40 @@ static Value nat_run_all(Interp *I, int argc, Value *argv) {
         list_push(out, obj_val((Obj *)m));
         free(jobs[i].out);
     }
+    free(jobs);
+    return obj_val((Obj *)out);
+}
+
+/* ai_all(prompts [, options]) — run many model calls concurrently (the AI payoff
+   of run_all). Requests are built on the main thread (Loqi-safe), the curl calls
+   overlap on the thread pool, responses are parsed on the main thread. Returns a
+   list of answers (text, or parsed data with { json: true }) in input order;
+   raises on the first failed call. */
+static Value nat_ai_all(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "ai_all() requires a list of prompts");
+    const char *key = getenv("ANTHROPIC_API_KEY");
+    if (!key || !*key) runtime_error(I, 0, "ai_all(): set the ANTHROPIC_API_KEY environment variable");
+    ObjList *prompts = AS_LIST(argv[0]);
+    int n = prompts->count;
+    for (int i = 0; i < n; i++)
+        if (!IS_STRING(prompts->items[i])) runtime_error(I, 0, "ai_all(): each prompt must be a str");
+    AiOpts o = ai_parse_opts(I, argc, argv, 1);
+    if (n == 0) return obj_val((Obj *)new_list(I));
+
+    RunJob *jobs = xmalloc(sizeof(RunJob) * (size_t)n);
+    char (*body_tmpls)[32] = xmalloc(sizeof(char[32]) * (size_t)n);
+    char (*cfg_tmpls)[32]  = xmalloc(sizeof(char[32]) * (size_t)n);
+    for (int i = 0; i < n; i++) {
+        jobs[i].cmd = ai_build_request(I, prompts->items[i], o, key, body_tmpls[i], cfg_tmpls[i]);
+        jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
+    }
+    run_jobs_parallel(jobs, n);
+    for (int i = 0; i < n; i++) { unlink(body_tmpls[i]); unlink(cfg_tmpls[i]); free((char *)jobs[i].cmd); }
+    free(body_tmpls); free(cfg_tmpls);
+
+    ObjList *out = new_list(I);
+    for (int i = 0; i < n; i++)
+        list_push(out, ai_parse_response(I, jobs[i].out, jobs[i].status, o.want_json));
     free(jobs);
     return obj_val((Obj *)out);
 }
@@ -4046,7 +4108,8 @@ static void install_stdlib(Interp *I) {
     table_set(I->globals, "E", hash_string("E", 1), float_val(2.71828182845904523536));
 
     /* --- AI-first batteries --- */
-    define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model) */
+    define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model|opts) */
+    define_native(I, "ai_all", nat_ai_all, -1);      /* ai_all([prompts] [, opts]) — concurrent */
     define_native(I, "env", nat_env, 1);
     define_native(I, "read", nat_read, 1);
     define_native(I, "write", nat_write, 2);

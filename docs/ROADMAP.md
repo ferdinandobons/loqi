@@ -31,7 +31,7 @@ imply for the next step.
 | AI | `embed` (embeddings API) | 🔜 next |
 | AI | schema-constrained generation | 🔜 next |
 | Concurrency | `run_all(cmds)` — parallel subprocesses (thread pool) | ✅ done |
-| Concurrency | `ai.batch` / parallel `ai`/`http` helpers on top | 🔜 next |
+| Concurrency | `ai_all(prompts)` — concurrent model calls | ✅ done |
 | Core | garbage collector (mark-sweep) | ✅ done |
 | Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
 | Diagnostics | backtrace on uncaught errors | ✅ done |
