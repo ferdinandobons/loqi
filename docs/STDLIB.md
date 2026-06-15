@@ -221,6 +221,16 @@ print(answer)
 
 let fast = ai("Summarize: {text}", "claude-haiku-4-5")
 ```
+**Multi-turn:** pass a list of messages instead of a string to continue a
+conversation:
+```loqi
+let answer = ai([
+  { role: "user", content: "My name is Ada." },
+  { role: "assistant", content: "Hi Ada!" },
+  { role: "user", content: "What's my name?" },
+])
+```
+
 The second argument can also be an **options map**:
 
 | key | type | meaning |

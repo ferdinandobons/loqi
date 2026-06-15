@@ -3146,10 +3146,17 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
     if (o.has_temp) map_set(body, "temperature", float_val(o.temperature));
     if (o.system) map_set(body, "system", cstring_val(I, o.system));
     ObjList *msgs = new_list(I);
-    ObjMap *msg = new_map(I);
-    map_set(msg, "role", cstring_val(I, "user"));
-    map_set(msg, "content", prompt);
-    list_push(msgs, obj_val((Obj *)msg));
+    if (IS_LIST(prompt)) {
+        /* a conversation: pass the caller's [{role, content}, ...] through as-is */
+        ObjList *conv = AS_LIST(prompt);
+        for (int i = 0; i < conv->count; i++) list_push(msgs, conv->items[i]);
+    } else {
+        /* a single string prompt -> one user message */
+        ObjMap *msg = new_map(I);
+        map_set(msg, "role", cstring_val(I, "user"));
+        map_set(msg, "content", prompt);
+        list_push(msgs, obj_val((Obj *)msg));
+    }
     map_set(body, "messages", obj_val((Obj *)msgs));
 
     char *jbuf = xmalloc(16); size_t jl = 0, jc = 16; jbuf[0] = '\0';
@@ -3217,8 +3224,8 @@ static Value ai_parse_response(Interp *I, char *resp, int status, bool want_json
 }
 
 static Value nat_ai(Interp *I, int argc, Value *argv) {
-    if (argc < 1 || !IS_STRING(argv[0]))
-        runtime_error(I, 0, "ai() requires a prompt (str)");
+    if (argc < 1 || (!IS_STRING(argv[0]) && !IS_LIST(argv[0])))
+        runtime_error(I, 0, "ai() requires a prompt (str) or a list of messages");
     const char *key = getenv("ANTHROPIC_API_KEY");
     if (!key || !*key)
         runtime_error(I, 0, "ai(): set the ANTHROPIC_API_KEY environment variable");
