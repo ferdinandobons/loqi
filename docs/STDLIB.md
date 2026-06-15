@@ -120,6 +120,40 @@ print("{d.year}-{d.month}-{d.day}")
 print(time.format(now(), `%A, %B %d`))     # e.g. Monday, June 15
 ```
 
+## Regex
+
+A built-in, dependency-free regex engine. It is **linear-time** (a Thompson NFA /
+Pike VM): unlike the backtracking engines in Python, JavaScript, Java or PCRE, it
+**cannot catastrophically backtrack**, so a pattern like `(a+)+$` against a long
+non-matching string returns instantly instead of hanging — there is no "ReDoS".
+Matching is leftmost-first with greedy `*` `+` `?` (the semantics you expect from
+Perl/Python). Use raw strings (backticks) so backslashes need no escaping.
+
+| Function | Result |
+|----------|--------|
+| `regex.test(pattern, text)` | `true` if the pattern matches anywhere |
+| `regex.find(pattern, text)` | the first matched substring, or `nil` |
+| `regex.find_all(pattern, text)` | a list of all non-overlapping matches |
+| `regex.replace(pattern, text, repl)` | `text` with every match replaced by `repl` |
+| `regex.split(pattern, text)` | `text` split on each match |
+
+Supported syntax: literals, `.` (any byte but newline), `*` `+` `?`, `|`, `(...)`
+groups, `[...]` / `[^...]` classes with `a-z` ranges, the anchors `^` and `$`, and
+the escapes `\d \D \w \W \s \S \n \t \r` plus any escaped metacharacter (`\.`, `\(`,
+…). Matching is byte-oriented (a multi-byte UTF-8 character spans several bytes, and
+`.` matches one byte). An invalid pattern raises a catchable error.
+
+`{n,m}` counted repetition is not supported yet; use `*`/`+`/`?` (or repeat the
+atom). Replacement is literal — backreferences like `$1` are not supported yet.
+
+```loqi
+regex.test(`^(yes|no)$`, "yes")            # true
+regex.find(`\w+@\w+`, "ping me at a@b ok") # "a@b"
+regex.find_all(`\d+`, "a1 b22 c333")       # ["1", "22", "333"]
+regex.replace(`\s+`, "a   b  c", " ")      # "a b c"
+regex.split(`,\s*`, "a, b,c,  d")          # ["a", "b", "c", "d"]
+```
+
 ## Testing
 
 ### `assert(cond, message?) → nil`

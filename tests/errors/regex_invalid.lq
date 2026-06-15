@@ -1,0 +1,2 @@
+# An uncaught invalid regex must fail cleanly (runtime error), not crash.
+regex.find("[a-", "text")

@@ -2946,6 +2946,279 @@ static Value vm_invoke(VM *vm, Value callee, int argc, Value *argv) {
 }
 
 /* ===========================================================================
+ * Regex engine — a dependency-free, LINEAR-TIME matcher (Thompson NFA / Pike VM).
+ * Unlike backtracking engines (PCRE/Python re/JS), it cannot catastrophically
+ * backtrack ("ReDoS"): matching is O(text * pattern). Semantics are leftmost-first
+ * with greedy *, +, ? (like Perl/Python), implemented via thread priority. Supports
+ * literals, '.', '*', '+', '?', '|', '(...)', '[...]'/'[^...]' with ranges, anchors
+ * '^'/'$', and escapes \d \D \w \W \s \S \n \t \r plus escaped metacharacters.
+ * Matching is byte-oriented (a UTF-8 char is several bytes; '.' matches one byte).
+ * ========================================================================= */
+#define RX_MAX_PATTERN 512   /* bounds AST/compile/free recursion depth */
+#define RX_MAX_GROUP_DEPTH 100
+
+typedef struct { uint8_t bits[32]; } RxClass;
+static void rx_class_add(RxClass *c, int ch) { c->bits[(ch & 0xff) >> 3] |= (uint8_t)(1u << (ch & 7)); }
+static bool rx_class_test(const RxClass *c, int ch) { return (c->bits[(ch & 0xff) >> 3] >> (ch & 7)) & 1u; }
+static void rx_class_negate(RxClass *c) { for (int i = 0; i < 32; i++) c->bits[i] = (uint8_t)~c->bits[i]; }
+static void rx_class_digit(RxClass *c) { for (int ch = '0'; ch <= '9'; ch++) rx_class_add(c, ch); }
+static void rx_class_word(RxClass *c) {
+    for (int ch = 'a'; ch <= 'z'; ch++) rx_class_add(c, ch);
+    for (int ch = 'A'; ch <= 'Z'; ch++) rx_class_add(c, ch);
+    rx_class_digit(c); rx_class_add(c, '_');
+}
+static void rx_class_space(RxClass *c) {
+    rx_class_add(c, ' '); rx_class_add(c, '\t'); rx_class_add(c, '\n');
+    rx_class_add(c, '\r'); rx_class_add(c, '\f'); rx_class_add(c, '\v');
+}
+
+/* --- regex AST --- */
+enum { RE_EMPTY, RE_CHAR, RE_CAT, RE_ALT, RE_STAR, RE_PLUS, RE_QUEST, RE_BOL, RE_EOL };
+typedef struct ReNode { int type; RxClass cls; struct ReNode *a, *b; } ReNode;
+static ReNode *re_new(int type) { ReNode *n = xmalloc(sizeof(ReNode)); memset(n, 0, sizeof(ReNode)); n->type = type; return n; }
+static void re_free(ReNode *n) { if (!n) return; re_free(n->a); re_free(n->b); free(n); }
+
+typedef struct { const char *p, *end; bool err; int depth; } ReP;
+static ReNode *re_alt(ReP *rp);
+
+static ReNode *re_escape_class(ReP *rp, RxClass *cls, int *single) {
+    /* fills cls for \d\w\s (returns single=-1) or returns single literal byte */
+    *single = -1;
+    if (rp->p >= rp->end) { rp->err = true; return NULL; }
+    char e = *rp->p++;
+    switch (e) {
+        case 'd': rx_class_digit(cls); return NULL;
+        case 'D': rx_class_digit(cls); rx_class_negate(cls); return NULL;
+        case 'w': rx_class_word(cls); return NULL;
+        case 'W': rx_class_word(cls); rx_class_negate(cls); return NULL;
+        case 's': rx_class_space(cls); return NULL;
+        case 'S': rx_class_space(cls); rx_class_negate(cls); return NULL;
+        case 'n': *single = '\n'; return NULL;
+        case 't': *single = '\t'; return NULL;
+        case 'r': *single = '\r'; return NULL;
+        default:  *single = (unsigned char)e; return NULL; /* escaped literal */
+    }
+}
+
+static ReNode *re_charclass(ReP *rp) {
+    rp->p++; /* '[' */
+    ReNode *n = re_new(RE_CHAR);
+    bool negate = false;
+    if (rp->p < rp->end && *rp->p == '^') { negate = true; rp->p++; }
+    bool first = true;
+    while (rp->p < rp->end && (*rp->p != ']' || first)) {
+        first = false;
+        int lo;
+        if (*rp->p == '\\') {
+            rp->p++; RxClass sub; memset(&sub, 0, sizeof sub); int single;
+            re_escape_class(rp, &sub, &single);
+            if (rp->err) break;
+            if (single < 0) { for (int i = 0; i < 32; i++) n->cls.bits[i] |= sub.bits[i]; continue; }
+            lo = single;
+        } else {
+            lo = (unsigned char)*rp->p++;
+        }
+        if (rp->p + 1 < rp->end && *rp->p == '-' && rp->p[1] != ']') {
+            rp->p++; /* '-' */
+            int hi;
+            if (*rp->p == '\\') { rp->p++; RxClass s2; memset(&s2,0,sizeof s2); int sg; re_escape_class(rp,&s2,&sg); hi = sg < 0 ? lo : sg; }
+            else hi = (unsigned char)*rp->p++;
+            if (hi < lo) { int t = lo; lo = hi; hi = t; }
+            for (int ch = lo; ch <= hi; ch++) rx_class_add(&n->cls, ch);
+        } else {
+            rx_class_add(&n->cls, lo);
+        }
+    }
+    if (rp->p < rp->end && *rp->p == ']') rp->p++; else rp->err = true;
+    if (negate) rx_class_negate(&n->cls);
+    return n;
+}
+
+static ReNode *re_atom(ReP *rp) {
+    if (rp->p >= rp->end || *rp->p == '|' || *rp->p == ')') return re_new(RE_EMPTY);
+    char c = *rp->p;
+    if (c == '(') {
+        rp->p++;
+        if (++rp->depth > RX_MAX_GROUP_DEPTH) { rp->err = true; return re_new(RE_EMPTY); }
+        ReNode *n = re_alt(rp);
+        rp->depth--;
+        if (rp->p < rp->end && *rp->p == ')') rp->p++; else rp->err = true;
+        return n;
+    }
+    if (c == '[') return re_charclass(rp);
+    if (c == '.') { rp->p++; ReNode *n = re_new(RE_CHAR); for (int i = 0; i < 256; i++) if (i != '\n') rx_class_add(&n->cls, i); return n; }
+    if (c == '^') { rp->p++; return re_new(RE_BOL); }
+    if (c == '$') { rp->p++; return re_new(RE_EOL); }
+    if (c == '\\') {
+        rp->p++;
+        ReNode *n = re_new(RE_CHAR); int single;
+        re_escape_class(rp, &n->cls, &single);
+        if (single >= 0) rx_class_add(&n->cls, single);
+        return n;
+    }
+    rp->p++;
+    ReNode *n = re_new(RE_CHAR); rx_class_add(&n->cls, (unsigned char)c); return n;
+}
+
+static ReNode *re_rep(ReP *rp) {
+    ReNode *n = re_atom(rp);
+    while (rp->p < rp->end) {
+        char c = *rp->p;
+        if (c == '*') { rp->p++; ReNode *s = re_new(RE_STAR);  s->a = n; n = s; }
+        else if (c == '+') { rp->p++; ReNode *s = re_new(RE_PLUS);  s->a = n; n = s; }
+        else if (c == '?') { rp->p++; ReNode *s = re_new(RE_QUEST); s->a = n; n = s; }
+        else break;
+    }
+    return n;
+}
+
+static ReNode *re_cat(ReP *rp) {
+    ReNode *n = NULL;
+    while (rp->p < rp->end && *rp->p != '|' && *rp->p != ')') {
+        ReNode *r = re_rep(rp);
+        if (!n) n = r;
+        else { ReNode *cat = re_new(RE_CAT); cat->a = n; cat->b = r; n = cat; }
+        if (rp->err) break;
+    }
+    return n ? n : re_new(RE_EMPTY);
+}
+
+static ReNode *re_alt(ReP *rp) {
+    ReNode *n = re_cat(rp);
+    while (rp->p < rp->end && *rp->p == '|') {
+        rp->p++;
+        ReNode *r = re_cat(rp);
+        ReNode *alt = re_new(RE_ALT); alt->a = n; alt->b = r; n = alt;
+    }
+    return n;
+}
+
+/* --- compiled program (instruction list) --- */
+enum { RX_CHAR, RX_MATCH, RX_JMP, RX_SPLIT, RX_BOL, RX_EOL };
+typedef struct { uint8_t op; int x, y; RxClass cls; } RxInst;
+typedef struct { RxInst *insts; int count, cap; } RxProg;
+
+static int rx_emit(RxProg *p, uint8_t op) {
+    if (p->count == p->cap) { p->cap = p->cap ? p->cap * 2 : 32; p->insts = xrealloc(p->insts, sizeof(RxInst) * (size_t)p->cap); }
+    memset(&p->insts[p->count], 0, sizeof(RxInst));
+    p->insts[p->count].op = op;
+    return p->count++;
+}
+static void rx_compile_node(RxProg *p, ReNode *n) {
+    switch (n->type) {
+        case RE_EMPTY: break;
+        case RE_BOL: rx_emit(p, RX_BOL); break;
+        case RE_EOL: rx_emit(p, RX_EOL); break;
+        case RE_CHAR: { int i = rx_emit(p, RX_CHAR); p->insts[i].cls = n->cls; break; }
+        case RE_CAT: rx_compile_node(p, n->a); rx_compile_node(p, n->b); break;
+        case RE_ALT: {
+            int sp = rx_emit(p, RX_SPLIT);
+            p->insts[sp].x = p->count;
+            rx_compile_node(p, n->a);
+            int jmp = rx_emit(p, RX_JMP);
+            p->insts[sp].y = p->count;
+            rx_compile_node(p, n->b);
+            p->insts[jmp].x = p->count;
+            break;
+        }
+        case RE_STAR: {
+            int l1 = rx_emit(p, RX_SPLIT);
+            p->insts[l1].x = p->count;            /* greedy: prefer entering the body */
+            rx_compile_node(p, n->a);
+            int j = rx_emit(p, RX_JMP); p->insts[j].x = l1;
+            p->insts[l1].y = p->count;
+            break;
+        }
+        case RE_PLUS: {
+            int l1 = p->count;
+            rx_compile_node(p, n->a);
+            int sp = rx_emit(p, RX_SPLIT);
+            p->insts[sp].x = l1;                  /* greedy: prefer looping back */
+            p->insts[sp].y = p->count;
+            break;
+        }
+        case RE_QUEST: {
+            int sp = rx_emit(p, RX_SPLIT);
+            p->insts[sp].x = p->count;            /* greedy: prefer taking it */
+            rx_compile_node(p, n->a);
+            p->insts[sp].y = p->count;
+            break;
+        }
+    }
+}
+
+static bool rx_compile(const char *pat, int patlen, RxProg *out, const char **err) {
+    out->insts = NULL; out->count = 0; out->cap = 0;
+    if (patlen > RX_MAX_PATTERN) { *err = "regex pattern too long (max 512)"; return false; }
+    ReP rp = { pat, pat + patlen, false, 0 };
+    ReNode *ast = re_alt(&rp);
+    if (rp.err || rp.p != rp.end) { re_free(ast); *err = "invalid regex pattern"; return false; }
+    rx_compile_node(out, ast);
+    rx_emit(out, RX_MATCH);
+    re_free(ast);
+    return true;
+}
+static void rx_free(RxProg *p) { free(p->insts); p->insts = NULL; p->count = p->cap = 0; }
+
+/* Add pc and its epsilon-closure (JMP/SPLIT/BOL/EOL) to `list` in priority order,
+ * de-duplicated via seen[]==gen. Iterative (explicit stack) so a large NFA can't
+ * overflow the C stack. stk must hold >= 2*prog->count entries. */
+static void rx_add(RxProg *p, int *list, int *ln, int *seen, int gen, int *stk, int pc0, int pos, int len) {
+    int sp = 0;
+    stk[sp++] = pc0;
+    while (sp > 0) {
+        int pc = stk[--sp];
+        if (seen[pc] == gen) continue;
+        seen[pc] = gen;
+        RxInst *in = &p->insts[pc];
+        switch (in->op) {
+            case RX_JMP:   stk[sp++] = in->x; break;
+            case RX_SPLIT: stk[sp++] = in->y; stk[sp++] = in->x; break; /* x first = higher priority */
+            case RX_BOL:   if (pos == 0)   stk[sp++] = pc + 1; break;
+            case RX_EOL:   if (pos == len) stk[sp++] = pc + 1; break;
+            default:       list[(*ln)++] = pc; break;                    /* CHAR or MATCH */
+        }
+    }
+}
+
+/* Longest greedy match starting exactly at `start`; returns the end index, or -1. */
+static int rx_match_at(RxProg *p, const char *text, int len, int start,
+                       int *clist, int *nlist, int *seen, int *stk) {
+    for (int i = 0; i < p->count; i++) seen[i] = -1;
+    int gen = 0, cn = 0;
+    rx_add(p, clist, &cn, seen, gen, stk, 0, start, len);
+    int matched = -1;
+    for (int pos = start; ; pos++) {
+        int c = (pos < len) ? (unsigned char)text[pos] : -1;
+        int nn = 0; gen++;
+        for (int i = 0; i < cn; i++) {
+            RxInst *in = &p->insts[clist[i]];
+            if (in->op == RX_MATCH) { matched = pos; break; } /* leftmost-first: cut lower-priority threads */
+            if (in->op == RX_CHAR && c >= 0 && rx_class_test(&in->cls, c))
+                rx_add(p, nlist, &nn, seen, gen, stk, clist[i] + 1, pos + 1, len);
+        }
+        int *t = clist; clist = nlist; nlist = t; cn = nn;
+        if (pos >= len || cn == 0) break;
+    }
+    return matched;
+}
+
+/* Leftmost search from `from`; on success sets *ms,*me (byte offsets) and returns true. */
+static bool rx_search(RxProg *p, const char *text, int len, int from, int *ms, int *me) {
+    int *clist = xmalloc(sizeof(int) * (size_t)p->count);
+    int *nlist = xmalloc(sizeof(int) * (size_t)p->count);
+    int *seen  = xmalloc(sizeof(int) * (size_t)p->count);
+    int *stk   = xmalloc(sizeof(int) * (size_t)(2 * p->count + 1));
+    bool found = false;
+    for (int start = from; start <= len; start++) {
+        int end = rx_match_at(p, text, len, start, clist, nlist, seen, stk);
+        if (end >= 0) { *ms = start; *me = end; found = true; break; }
+    }
+    free(clist); free(nlist); free(seen); free(stk);
+    return found;
+}
+
+/* ===========================================================================
  * Native functions (the "batteries included" standard library — core set)
  * ========================================================================= */
 static Value nat_print(Interp *I, int argc, Value *argv) {
@@ -3942,6 +4215,87 @@ static Value nat_time_format(Interp *I, int argc, Value *argv) {
     size_t n = strftime(buf, sizeof(buf), AS_STRING(argv[1])->chars, &tmv);
     return string_val(I, buf, (int)n); /* n == 0 if the result didn't fit */
 }
+/* ---- regex.* : linear-time pattern matching (see the engine above) ---- */
+static void rx_compile_or_raise(Interp *I, Value patv, const char *who, RxProg *prog) {
+    if (!IS_STRING(patv)) runtime_error(I, 0, "%s requires a string pattern", who);
+    ObjString *pat = AS_STRING(patv);
+    const char *err = NULL;
+    if (!rx_compile(pat->chars, pat->length, prog, &err)) runtime_error(I, 0, "%s: %s", who, err);
+}
+static Value nat_regex_test(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[1])) runtime_error(I, 0, "regex.test() requires (pattern, text)");
+    RxProg prog; rx_compile_or_raise(I, argv[0], "regex.test()", &prog);
+    ObjString *text = AS_STRING(argv[1]);
+    int ms, me;
+    bool found = rx_search(&prog, text->chars, text->length, 0, &ms, &me);
+    rx_free(&prog);
+    return bool_val(found);
+}
+static Value nat_regex_find(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[1])) runtime_error(I, 0, "regex.find() requires (pattern, text)");
+    RxProg prog; rx_compile_or_raise(I, argv[0], "regex.find()", &prog);
+    ObjString *text = AS_STRING(argv[1]);
+    int ms, me;
+    bool found = rx_search(&prog, text->chars, text->length, 0, &ms, &me);
+    rx_free(&prog);
+    if (!found) return NIL_VAL;
+    return string_val(I, text->chars + ms, me - ms);
+}
+static Value nat_regex_find_all(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[1])) runtime_error(I, 0, "regex.find_all() requires (pattern, text)");
+    RxProg prog; rx_compile_or_raise(I, argv[0], "regex.find_all()", &prog);
+    ObjString *text = AS_STRING(argv[1]);
+    ObjList *out = new_list(I);
+    int from = 0, ms, me;
+    while (from <= text->length && rx_search(&prog, text->chars, text->length, from, &ms, &me)) {
+        list_push(out, string_val(I, text->chars + ms, me - ms));
+        from = (me > ms) ? me : ms + 1; /* advance past an empty match to avoid looping */
+    }
+    rx_free(&prog);
+    return obj_val((Obj *)out);
+}
+static Value nat_regex_replace(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[1]) || !IS_STRING(argv[2]))
+        runtime_error(I, 0, "regex.replace() requires (pattern, text, replacement)");
+    RxProg prog; rx_compile_or_raise(I, argv[0], "regex.replace()", &prog);
+    ObjString *text = AS_STRING(argv[1]), *rep = AS_STRING(argv[2]);
+    char *buf = xmalloc(64); size_t cap = 64, len = 0;
+    #define RX_PUT(ptr, n) do { size_t _n = (size_t)(n); \
+        while (len + _n + 1 > cap) { cap *= 2; buf = xrealloc(buf, cap); } \
+        memcpy(buf + len, (ptr), _n); len += _n; } while (0)
+    int from = 0, ms, me;
+    while (from <= text->length && rx_search(&prog, text->chars, text->length, from, &ms, &me)) {
+        RX_PUT(text->chars + from, ms - from);  /* text before the match */
+        RX_PUT(rep->chars, rep->length);        /* the replacement (literal) */
+        if (me > ms) { from = me; }
+        else { if (ms < text->length) RX_PUT(text->chars + ms, 1); from = ms + 1; } /* empty match: keep one char */
+    }
+    if (from < text->length) RX_PUT(text->chars + from, text->length - from);
+    #undef RX_PUT
+    rx_free(&prog);
+    Value v = string_val(I, buf, (int)len);
+    free(buf);
+    return v;
+}
+static Value nat_regex_split(Interp *I, int argc, Value *argv) {
+    if (!IS_STRING(argv[1])) runtime_error(I, 0, "regex.split() requires (pattern, text)");
+    RxProg prog; rx_compile_or_raise(I, argv[0], "regex.split()", &prog);
+    ObjString *text = AS_STRING(argv[1]);
+    ObjList *out = new_list(I);
+    int from = 0, ms, me, piece = 0;
+    while (from <= text->length && rx_search(&prog, text->chars, text->length, from, &ms, &me)) {
+        if (me == ms) { /* empty match: skip past one char so split terminates */
+            if (ms >= text->length) break;
+            from = ms + 1;
+            continue;
+        }
+        list_push(out, string_val(I, text->chars + piece, ms - piece));
+        from = me; piece = me;
+    }
+    list_push(out, string_val(I, text->chars + piece, text->length - piece));
+    rx_free(&prog);
+    return obj_val((Obj *)out);
+}
 static Value nat_similarity(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
         runtime_error(I, 0, "similarity() requires two vectors (list of numbers)");
@@ -4615,6 +4969,14 @@ static void install_stdlib(Interp *I) {
     define_native_in(I, tm, "parts", nat_time_parts, -1);   /* time.parts([secs]) */
     define_native_in(I, tm, "format", nat_time_format, 2);  /* time.format(secs, fmt) */
     table_set(I->globals, "time", hash_string("time", 4), obj_val((Obj *)tm));
+
+    ObjMap *rx = new_map(I);
+    define_native_in(I, rx, "test", nat_regex_test, 2);         /* regex.test(pattern, text) -> bool */
+    define_native_in(I, rx, "find", nat_regex_find, 2);         /* regex.find(pattern, text) -> str|nil */
+    define_native_in(I, rx, "find_all", nat_regex_find_all, 2); /* regex.find_all(pattern, text) -> list */
+    define_native_in(I, rx, "replace", nat_regex_replace, 3);   /* regex.replace(pattern, text, repl) -> str */
+    define_native_in(I, rx, "split", nat_regex_split, 2);       /* regex.split(pattern, text) -> list */
+    table_set(I->globals, "regex", hash_string("regex", 5), obj_val((Obj *)rx));
 }
 
 /* ===========================================================================

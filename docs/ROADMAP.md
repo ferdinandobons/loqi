@@ -39,6 +39,7 @@ imply for the next step.
 | Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
 | Diagnostics | backtrace on uncaught errors | ✅ done |
 | Stdlib | filesystem (ls/exists/mkdir/rm) + `path` ops | ✅ done |
+| Stdlib | **regex** (linear-time Thompson NFA, ReDoS-proof) | ✅ done |
 | Diagnostics | source-line snippet on uncaught errors | ✅ done |
 | Diagnostics | accurate per-frame file names (cross-module) | ✅ done |
 | Diagnostics | caret under the column (needs column tracking) | 🔜 next |

@@ -1,0 +1,51 @@
+# Regression tests for the regex engine (linear-time Thompson NFA, leftmost-first
+# greedy semantics like Perl/Python, but with no catastrophic backtracking).
+
+# --- test: does the pattern match anywhere ---
+assert(regex.test(`\d+`, "abc123"), "digits found anywhere")
+assert(not regex.test(`^\d+$`, "abc123"), "anchored full-match fails on mixed input")
+assert(regex.test(`^\d+$`, "12345"), "anchored full-match on all digits")
+assert(regex.test(`^$`, ""), "empty-string anchors")
+assert(not regex.test("a", ""), "no match in an empty string")
+
+# --- find: leftmost, greedy ---
+assert(regex.find(`\d+`, "ab 42 cd 99") == "42", "find leftmost run of digits")
+assert(regex.find(`a|ab`, "xabz") == "a", "alternation is leftmost-FIRST (a before ab)")
+assert(regex.find(`a.*z`, "azXzaz") == "azXzaz", "'.*' is greedy (longest)")
+assert(regex.find(`colou?r`, "the colour") == "colour", "optional quantifier")
+assert(regex.find(`[A-Za-z_][A-Za-z0-9_]*`, "  foo_bar99 = 1") == "foo_bar99", "identifier class+range")
+assert(regex.find(`\d+`, "no digits here") == nil, "find returns nil when absent")
+
+# --- find_all: non-overlapping matches ---
+assert(regex.find_all(`\d+`, "a1 b22 c333") == ["1", "22", "333"], "find_all numbers")
+assert(regex.find_all(`[a-z]+`, "Hello World 99") == ["ello", "orld"], "find_all lowercase runs")
+assert(len(regex.find_all(`z`, "nothing here")) == 0, "find_all empty when no match")
+
+# --- replace (literal replacement of each match) ---
+assert(regex.replace(`\d+`, "a1b22c333", "#") == "a#b#c#", "replace digit runs")
+assert(regex.replace(`\s+`, "a   b  c", "_") == "a_b_c", "collapse whitespace")
+assert(regex.replace(`cat`, "cat and dog", "feline") == "feline and dog", "replace literal word")
+
+# --- split ---
+assert(regex.split(`,\s*`, "a, b,c,  d") == ["a", "b", "c", "d"], "split on comma+spaces")
+assert(regex.split(`\d+`, "x10y20z") == ["x", "y", "z"], "split on number separators")
+
+# --- groups, alternation, anchors together ---
+assert(regex.test(`(cat|dog)s?`, "I have dogs"), "grouped alternation + optional")
+assert(regex.find(`\w+@\w+`, "mail x@y now") == "x@y", "simple email-ish pattern")
+assert(regex.test(`^(yes|no)$`, "yes"), "anchored alternation")
+
+# --- escaped metacharacters are literal ---
+assert(regex.test(`a\.b`, "a.b") and not regex.test(`a\.b`, "axb"), "escaped dot is literal")
+assert(regex.find(`\(\d+\)`, "call (42) now") == "(42)", "escaped parens")
+
+# --- an invalid pattern raises a catchable error (never crashes) ---
+let caught = false
+try { regex.test("(unclosed", "x") } catch e { caught = true }
+assert(caught, "an invalid pattern is a catchable runtime error")
+
+# --- linear time: a classic ReDoS pattern is instant, not exponential ---
+let bomb = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaX"
+assert(not regex.test(`(a+)+$`, bomb), "no catastrophic backtracking (runs in linear time)")
+
+print("test_regex: all tests passed ✓")
