@@ -328,7 +328,7 @@ typedef enum {
     T_MATCH, T_TRY, T_CATCH,
     /* punctuation / operators */
     T_LPAREN, T_RPAREN, T_LBRACE, T_RBRACE, T_LBRACKET, T_RBRACKET,
-    T_COMMA, T_DOT, T_COLON,
+    T_COMMA, T_DOT, T_DOTDOT, T_COLON,
     T_PLUS, T_MINUS, T_STAR, T_SLASH, T_SLASHSLASH, T_PERCENT,
     T_EQ, T_EQEQ, T_BANGEQ, T_LT, T_LTEQ, T_GT, T_GTEQ,
     T_QQ, T_QDOT, /* ?? null-coalescing, ?. optional chaining */
@@ -577,7 +577,7 @@ static Token lex_next(Lexer *L) {
         case '[': return make_token(L, T_LBRACKET);
         case ']': return make_token(L, T_RBRACKET);
         case ',': return make_token(L, T_COMMA);
-        case '.': return make_token(L, T_DOT);
+        case '.': return make_token(L, match_ch(L, '.') ? T_DOTDOT : T_DOT);
         case ':': return make_token(L, T_COLON);
         case ';': return make_token(L, T_NEWLINE); /* ';' separates statements like a newline */
         case '+': return make_token(L, T_PLUS);
@@ -854,6 +854,7 @@ static int bin_prec(TokType t) {
         case T_STAR: case T_SLASH: case T_SLASHSLASH: case T_PERCENT: return 7;
         case T_PLUS: case T_MINUS: return 6;
         case T_LT: case T_LTEQ: case T_GT: case T_GTEQ: return 5;
+        case T_DOTDOT: return 5; /* range: above ==, below arithmetic (0..n-1 == 0..(n-1)) */
         case T_EQEQ: case T_BANGEQ: return 4;
         case T_AND: return 3;
         case T_OR:  return 2;
@@ -1457,7 +1458,7 @@ typedef enum {
     OP_NEGATE, OP_NOT,
     OP_JUMP, OP_JUMP_IF_FALSE, OP_JUMP_IF_NOT_NIL, OP_JUMP_IF_NIL, OP_LOOP,
     OP_CALL, OP_CLOSURE, OP_CLOSE_UPVALUE, OP_RETURN,
-    OP_BUILD_LIST, OP_BUILD_MAP,
+    OP_BUILD_LIST, OP_BUILD_MAP, OP_RANGE,
     OP_GET_INDEX, OP_SET_INDEX, OP_GET_PROPERTY, OP_SET_PROPERTY,
     OP_ITER_SEQ, OP_FOR_NEXT, OP_IMPORT, OP_IMPORT_AS,
     OP_TRY_BEGIN, OP_TRY_END
@@ -1720,6 +1721,7 @@ static void compile_expr(Compiler *C, Node *n) {
                 case T_LTEQ: op = OP_LESS_EQUAL; break;
                 case T_GT: op = OP_GREATER; break;
                 case T_GTEQ: op = OP_GREATER_EQUAL; break;
+                case T_DOTDOT: op = OP_RANGE; break;
                 default: op = OP_NIL; *C->had_error = true; break;
             }
             emit_byte(C, op, n->line);
@@ -2527,6 +2529,17 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_TRY_END:
                 if (vm->handler_count > 0) vm->handler_count--;
                 break;
+            case OP_RANGE: {
+                Value bv = vm_pop(vm), av = vm_pop(vm);
+                if (!IS_INT(av) || !IS_INT(bv)) vm_error(vm, "range '..' requires two ints");
+                int64_t a = AS_INT(av), b = AS_INT(bv);
+                if (b >= a && (uint64_t)(b - a) > 100000000ULL)
+                    vm_error(vm, "range '..' too large (> 100M elements)");
+                ObjList *l = new_list(vm->I);
+                for (int64_t i = a; i <= b; i++) list_push(l, int_val(i)); /* inclusive; empty if a > b */
+                vm_push(vm, obj_val((Obj *)l));
+                break;
+            }
             case OP_BUILD_LIST: {
                 int count = READ_U16();
                 ObjList *l = new_list(vm->I);

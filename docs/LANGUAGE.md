@@ -70,6 +70,7 @@ Variables are block-scoped. An inner scope can shadow an outer one.
 | Comparison  | `==  !=  <  <=  >  >=`                  | numeric and value equality     |
 | Logical     | `and  or  not`                         | short-circuit; return operands |
 | Null-safety | `?.`  `??`                             | optional chaining; nil-coalescing |
+| Range       | `a..b`                                 | inclusive int range → list     |
 | Unary       | `-x`, `not x`                          |                                |
 
 Notes:
@@ -77,6 +78,9 @@ Notes:
 - `+` also concatenates strings (`"a" + "b"`) and lists (`[1] + [2]`).
 - `and`/`or` short-circuit and return the deciding operand, so
   `let name = input or "anon"` works as a default.
+- `a..b` is an **inclusive** integer range that builds a list — `1..3` is
+  `[1, 2, 3]`; `5..1` is `[]`. Great in `for`: `for i in 1..n { ... }`. It binds
+  looser than arithmetic (`0..n-1` is `0..(n-1)`).
 
 ### Null-safety: `?.` and `??`
 
