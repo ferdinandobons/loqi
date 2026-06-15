@@ -4358,13 +4358,15 @@ typedef struct {
     int64_t max_tokens;
     bool has_temp; double temperature;
     bool want_json;
+    bool want_usage; /* return { output, usage } with the API's token counts */
 } AiOpts;
 
 /* Parse argv[optidx] (a model str, an options map, or absent) into AiOpts. */
 static AiOpts ai_parse_opts(Interp *I, int argc, Value *argv, int optidx) {
     AiOpts o;
     o.model = getenv("LOQI_AI_MODEL") ? getenv("LOQI_AI_MODEL") : "claude-sonnet-4-6";
-    o.system = NULL; o.max_tokens = 1024; o.has_temp = false; o.temperature = 0; o.want_json = false;
+    o.system = NULL; o.max_tokens = 1024; o.has_temp = false; o.temperature = 0;
+    o.want_json = false; o.want_usage = false;
     if (argc > optidx && IS_STRING(argv[optidx])) {
         o.model = AS_STRING(argv[optidx])->chars;
     } else if (argc > optidx && IS_MAP(argv[optidx])) {
@@ -4374,6 +4376,7 @@ static AiOpts ai_parse_opts(Interp *I, int argc, Value *argv, int optidx) {
         if ((v = map_get(m, "max_tokens")) && IS_INT(*v)) o.max_tokens = AS_INT(*v);
         if ((v = map_get(m, "temperature")) && IS_NUM(*v)) { o.has_temp = true; o.temperature = as_double(*v); }
         if ((v = map_get(m, "json")) != NULL) o.want_json = is_truthy(*v);
+        if ((v = map_get(m, "usage")) != NULL) o.want_usage = is_truthy(*v);
     } else if (argc > optidx && !IS_NIL(argv[optidx])) {
         runtime_error(I, 0, "ai(): options must be a model name (str) or an options map");
     }
@@ -4561,7 +4564,7 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
    a raise here (longjmp) can't leak a raw buffer. Errors include the attempt count
    and HTTP status so a call that burned its whole retry budget says so. */
 static Value ai_value_from_body(Interp *I, const char *body, int status, long http_code,
-                                int attempts, bool want_json) {
+                                int attempts, bool want_json, bool want_usage) {
     if (status != 0 && (!body || !*body)) {
         if (attempts > 1)
             runtime_error(I, 0, "ai(): API request failed after %d attempts (curl %d), check network and key", attempts, status);
@@ -4581,8 +4584,16 @@ static Value ai_value_from_body(Interp *I, const char *body, int status, long ht
             for (int i = 0; i < blocks->count; i++) { /* first text block */
                 if (IS_MAP(blocks->items[i])) {
                     Value *text = map_get(AS_MAP(blocks->items[i]), "text");
-                    if (text && IS_STRING(*text))
-                        return want_json ? ai_parse_json_text(I, AS_STRING(*text)->chars) : *text;
+                    if (text && IS_STRING(*text)) {
+                        Value answer = want_json ? ai_parse_json_text(I, AS_STRING(*text)->chars) : *text;
+                        if (!want_usage) return answer;
+                        /* wrap as { output, usage } with the API's token counts */
+                        ObjMap *out = new_map(I);
+                        map_set(out, "output", answer);
+                        Value *u = map_get(AS_MAP(parsed), "usage");
+                        map_set(out, "usage", (u && IS_MAP(*u)) ? *u : obj_val((Obj *)new_map(I)));
+                        return obj_val((Obj *)out);
+                    }
                 }
             }
         }
@@ -4607,12 +4618,12 @@ static Value ai_value_from_body(Interp *I, const char *body, int status, long ht
    buffer up front means a parse-time raise can't strand it (the GC string is
    reclaimed at teardown). */
 static Value ai_parse_response(Interp *I, char *resp, int status, long http_code,
-                               int attempts, bool want_json) {
+                               int attempts, bool want_json, bool want_usage) {
     if (!resp) runtime_error(I, 0, "ai(): could not run curl");
     Value bodyv = string_val(I, resp, (int)strlen(resp));
     free(resp);
     return ai_value_from_body(I, IS_STRING(bodyv) ? AS_STRING(bodyv)->chars : NULL,
-                              status, http_code, attempts, want_json);
+                              status, http_code, attempts, want_json, want_usage);
 }
 
 static Value nat_ai(Interp *I, int argc, Value *argv) {
@@ -4628,10 +4639,11 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     size_t rlen; int status; long http; int attempts;
     char *resp = ai_run_with_retry(cmd, &rlen, &status, &http, &attempts);
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
-    return ai_parse_response(I, resp, status, http, attempts, o.want_json);
+    return ai_parse_response(I, resp, status, http, attempts, o.want_json, o.want_usage);
 }
 
-/* One model call returning a parsed JSON value (want_json forced). */
+/* One model call returning a parsed JSON value (want_json forced). ai_json validates
+   against a schema, so it always returns the data itself, never a usage wrapper. */
 static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key) {
     char body_tmpl[32], cfg_tmpl[32];
     char *cmd = ai_build_request(I, prompt, o, key, body_tmpl, cfg_tmpl);
@@ -4639,7 +4651,7 @@ static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key
     size_t rlen; int status; long http; int attempts;
     char *resp = ai_run_with_retry(cmd, &rlen, &status, &http, &attempts);
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
-    return ai_parse_response(I, resp, status, http, attempts, true);
+    return ai_parse_response(I, resp, status, http, attempts, true, false);
 }
 /* ai_json(prompt, schema [, opts]), structured output: ask the model for JSON that
    matches `schema`, parse it, validate against the schema, and retry ONCE with the
@@ -4906,7 +4918,7 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
         const char *body = (bodyv && IS_STRING(*bodyv)) ? AS_STRING(*bodyv)->chars : NULL;
         list_push(out, ai_value_from_body(I, body,
             (int)AS_INT(*map_get(m, "status")), (long)AS_INT(*map_get(m, "http")),
-            (int)AS_INT(*map_get(m, "attempts")), o.want_json));
+            (int)AS_INT(*map_get(m, "attempts")), o.want_json, o.want_usage));
     }
     return obj_val((Obj *)out);
 }

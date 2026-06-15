@@ -1,0 +1,5 @@
+# Driven by scripts/test.sh with a stubbed `curl` on PATH that returns a fixed body
+# with a usage block. ai(.., { usage: true }) must return { output, usage } carrying
+# the API's token counts. Output is "ok|11|2" for the stubbed response.
+let r = ai("anything", { usage: true })
+print("{r.output}|{r.usage.input_tokens}|{r.usage.output_tokens}")

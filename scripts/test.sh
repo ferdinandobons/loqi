@@ -91,6 +91,25 @@ else
   fail=$((fail+1))
 fi
 
+# ai usage reporting: a stubbed `curl` on PATH returns a fixed body with a usage
+# block; ai(.., { usage: true }) must return { output, usage } with the token counts.
+ai_stub="$(mktemp -d)"
+cat > "$ai_stub/curl" <<'STUB'
+#!/bin/sh
+printf '%s' '{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":11,"output_tokens":2}}'
+printf '\n__LQHTTP:200__'
+STUB
+chmod +x "$ai_stub/curl"
+usage_out="$(PATH="$ai_stub:$PATH" ANTHROPIC_API_KEY=dummy "$LOQI" tests/fixtures/ai_usage.lq 2>&1)"
+rm -rf "$ai_stub"
+if [ "$usage_out" = "ok|11|2" ]; then
+  echo "  ✓ (ai-usage) ai(.., { usage: true }) returns { output, usage } with token counts"
+  pass=$((pass+1))
+else
+  echo "  ✗ (ai-usage) expected 'ok|11|2', got: $usage_out"
+  fail=$((fail+1))
+fi
+
 # Syntax-error caret: a parse error must print a file:line:column location, the
 # offending source line, and a ^ caret under the exact column (here column 14).
 caret_out="$("$LOQI" tests/fixtures/syntax_caret.lq 2>&1)"

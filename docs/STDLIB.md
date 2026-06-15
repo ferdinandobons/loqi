@@ -286,6 +286,7 @@ The second argument can also be an **options map**:
 | `temperature` | float | sampling temperature |
 | `max_tokens` | int | response cap (default 1024) |
 | `json` | bool | return parsed native data instead of text |
+| `usage` | bool | return `{ output, usage }` with the API's token counts |
 
 With `{ json: true }`, `ai` steers the model toward JSON, tolerates ```` ```json ````
 fences, and returns native Loqi values, no manual parsing:
@@ -294,6 +295,16 @@ let person = ai("Extract name and birth_year from: {text}", { json: true })
 print("{person.name} ({person.birth_year})")          # person.birth_year is an int
 
 let summary = ai("Summarize this.", { system: "Be terse.", temperature: 0.2 })
+```
+
+With `{ usage: true }`, `ai` returns a map `{ output, usage }` instead of bare text,
+so you can track tokens (and cost) per call. `output` is the answer (text, or parsed
+data if `json` is also set); `usage` carries the API's counts. The same applies to
+each result of `ai_all`:
+```loqi
+let r = ai("Summarize this.", { usage: true })
+print(r.output)
+print("tokens: {r.usage.input_tokens} in, {r.usage.output_tokens} out")
 ```
 
 **Reliability.** `ai` (and `ai_all`) retries transient failures automatically with
