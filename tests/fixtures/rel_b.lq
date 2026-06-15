@@ -1,0 +1,3 @@
+# Relative-spelling import cycle counterpart.
+import "./rel_a.lq" as a
+let B = 2

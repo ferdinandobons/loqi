@@ -31,4 +31,11 @@ let cycled = false
 try { import "fixtures/cycle_a.lq" } catch e { cycled = true }
 assert(cycled, "cyclic import is a catchable error, not a segfault")
 
+# A cycle reached via a relative './' spelling must be caught by the cheap cycle
+# detector (paths are normalized, so they stop accumulating './' and strcmp matches)
+# — the error says 'cyclic import', NOT 'nesting too deep' from the depth backstop.
+let rel_err = ""
+try { import "fixtures/rel_a.lq" as ra } catch e { rel_err = e }
+assert(contains(rel_err, "cyclic import"), "relative-path cycle is detected as a cycle, not depth overflow")
+
 print("test_modules: all tests passed ✓")

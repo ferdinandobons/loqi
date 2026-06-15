@@ -1581,6 +1581,7 @@ typedef struct Compiler {
     LoopCtx *loop;
     int try_depth; /* number of try handlers currently open in this function */
     int expr_depth; /* compile_expr recursion depth, to bound deep flat chains */
+    int stmt_depth; /* compile_stmt recursion depth, to bound deep nested blocks/if */
     bool *had_error; /* shared flag across nested compilers */
 } Compiler;
 /* Cap expression-tree depth at compile time: the iterative binary/pipe/index parse
@@ -1590,6 +1591,12 @@ typedef struct Compiler {
  * so 500 leaves a ~3x margin while staying far above any real expression. Matches
  * the parser's MAX_PARSE_DEPTH. */
 #define MAX_EXPR_DEPTH 500
+/* Same idea for nested statements (blocks/if/while/for/try): each nesting level
+ * enters compile_stmt a few times, and the parser caps statement nesting too, but
+ * deeply nested blocks still recurse the compiler. ~1500 nested `if`s overflow the
+ * ASan C stack in compile_if/compile_stmt; 250 leaves a comfortable margin and is
+ * far beyond any real nesting. */
+#define MAX_STMT_DEPTH 250
 
 static void compile_expr(Compiler *C, Node *n);
 static void compile_stmt(Compiler *C, Node *n);
@@ -1632,7 +1639,7 @@ static void emit_loop(Compiler *C, int loop_start, int line) {
 
 static void init_compiler(Compiler *C, Interp *I, Compiler *enclosing, const char *name, bool *had_error) {
     C->enclosing = enclosing; C->I = I; C->local_count = 0; C->scope_depth = 0;
-    C->loop = NULL; C->try_depth = 0; C->expr_depth = 0; C->had_error = had_error;
+    C->loop = NULL; C->try_depth = 0; C->expr_depth = 0; C->stmt_depth = 0; C->had_error = had_error;
     C->proto = new_proto(I);
     if (name) C->proto->name = strdup(name);
     /* slot 0 holds the executing closure itself */
@@ -1949,6 +1956,15 @@ static void compile_function(Compiler *enc, Node *fn_node, int line) {
 }
 
 static void compile_stmt(Compiler *C, Node *n) {
+    /* Bound C-stack recursion through nested blocks/if/while/for/try bodies, the
+       statement-level analog of the compile_expr guard. */
+    if (++C->stmt_depth > MAX_STMT_DEPTH) {
+        if (!*C->had_error)
+            fprintf(stderr, "statements nested too deeply (max %d)\n", MAX_STMT_DEPTH);
+        *C->had_error = true;
+        C->stmt_depth--;
+        return;
+    }
     switch (n->type) {
         case N_LET:
             if (n->a) compile_expr(C, n->a); else emit_byte(C, OP_NIL, n->line);
@@ -2010,6 +2026,7 @@ static void compile_stmt(Compiler *C, Node *n) {
         }
         default: compile_expr(C, n); emit_byte(C, OP_POP, n->line); break;
     }
+    C->stmt_depth--;
 }
 
 static ObjProto *compile_script(Interp *I, Node *program) {
@@ -2051,25 +2068,70 @@ static int run_source(Interp *I, const char *src, const char *path);
 static Value run_module_ns(Interp *I, char *path /* owned: freed by callee */);
 static void vm_error(VM *vm, const char *fmt, ...);
 
+/* Collapse '.', '..' and duplicate '/' segments lexically (no filesystem access).
+ * Resolving the same module via different spellings then yields one stable string,
+ * which keeps relative-path resolution IDEMPOTENT. Without this a relative cyclic
+ * import ('./a.lq') accumulates a './' each level, so I->path keeps changing and the
+ * strcmp-based cycle detector never matches — the cycle degrades to the depth-limit
+ * backstop instead of an immediate 'cyclic import' error. Returns a fresh string. */
+static char *normalize_path(const char *in) {
+    size_t n = strlen(in);
+    int absolute = (n > 0 && in[0] == '/');
+    const char **seg = xmalloc(sizeof(char *) * (n + 1));
+    size_t *seglen = xmalloc(sizeof(size_t) * (n + 1));
+    int top = 0;
+    const char *p = in;
+    while (*p) {
+        while (*p == '/') p++;                 /* skip separators (collapses '//') */
+        if (!*p) break;
+        const char *s = p;
+        while (*p && *p != '/') p++;
+        size_t len = (size_t)(p - s);
+        if (len == 1 && s[0] == '.') continue;  /* '.' => current dir, drop */
+        if (len == 2 && s[0] == '.' && s[1] == '.') {
+            int top_is_dotdot = top > 0 && seglen[top - 1] == 2 &&
+                                seg[top - 1][0] == '.' && seg[top - 1][1] == '.';
+            if (top > 0 && !top_is_dotdot) { top--; continue; }   /* pop a real segment */
+            if (absolute) continue;                                /* '..' at root: drop */
+        }
+        seg[top] = s; seglen[top] = len; top++;  /* keep (incl. a leading '..' when relative) */
+    }
+    char *out = xmalloc(n + 2);
+    char *w = out;
+    if (absolute) *w++ = '/';
+    for (int i = 0; i < top; i++) {
+        if (i) *w++ = '/';
+        memcpy(w, seg[i], seglen[i]); w += seglen[i];
+    }
+    if (w == out) *w++ = '.';   /* everything cancelled out (relative) => "." */
+    *w = '\0';
+    free(seg); free(seglen);
+    return out;
+}
+
 /* Resolve a module path relative to the directory of the importing file, so a
  * module's imports work no matter the current working directory (the pitfall
  * CWD-relative resolution creates). Absolute paths (leading '/') pass through.
  * `importer` is the path of the file doing the import (NULL at the REPL/top).
- * Returns a freshly malloc'd string the caller owns. */
+ * The result is lexically normalized so repeated resolution is stable (cycle
+ * detection + the module cache both key on it). Returns a malloc'd string. */
 static char *resolve_import_path(const char *importer, const char *module) {
     const char *slash = importer ? strrchr(importer, '/') : NULL;
+    char *joined;
     if (module[0] == '/' || !slash) {            /* absolute, or importer in CWD */
         size_t n = strlen(module);
-        char *out = xmalloc(n + 1);
-        memcpy(out, module, n + 1);
-        return out;
+        joined = xmalloc(n + 1);
+        memcpy(joined, module, n + 1);
+    } else {
+        size_t dirlen = (size_t)(slash - importer) + 1; /* keep the trailing '/' */
+        size_t mlen = strlen(module);
+        joined = xmalloc(dirlen + mlen + 1);
+        memcpy(joined, importer, dirlen);
+        memcpy(joined + dirlen, module, mlen + 1);
     }
-    size_t dirlen = (size_t)(slash - importer) + 1; /* keep the trailing '/' */
-    size_t mlen = strlen(module);
-    char *out = xmalloc(dirlen + mlen + 1);
-    memcpy(out, importer, dirlen);
-    memcpy(out + dirlen, module, mlen + 1);
-    return out;
+    char *norm = normalize_path(joined);
+    free(joined);
+    return norm;
 }
 
 static inline void vm_push(VM *vm, Value v) {

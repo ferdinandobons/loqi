@@ -1,0 +1,4 @@
+# Relative-spelling import cycle (a -> b -> a via "./"), for regression testing
+# that the cheap cycle detector fires on canonical paths (no "./" accumulation).
+import "./rel_b.lq" as b
+let A = 1
