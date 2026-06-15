@@ -3208,7 +3208,7 @@ static bool rx_search(RxProg *p, const char *text, int len, int from, int *ms, i
     int *clist = xmalloc(sizeof(int) * (size_t)p->count);
     int *nlist = xmalloc(sizeof(int) * (size_t)p->count);
     int *seen  = xmalloc(sizeof(int) * (size_t)p->count);
-    int *stk   = xmalloc(sizeof(int) * (size_t)(2 * p->count + 1));
+    int *stk   = xmalloc(sizeof(int) * (size_t)(2 * p->count + 4)); /* >= 1 + sum of out-degrees */
     bool found = false;
     for (int start = from; start <= len; start++) {
         int end = rx_match_at(p, text, len, start, clist, nlist, seen, stk);
