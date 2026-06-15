@@ -3048,6 +3048,17 @@ static Value ai_parse_json_text(Interp *I, const char *text) {
     return json_parse_value(I, &p, 0);
 }
 
+/* Format a runtime-error message into I->err_msg WITHOUT raising, returning NULL.
+   Lets a caller (e.g. ai_all) release its own resources first, then raise_error()
+   — so a mid-loop failure can't strand key-bearing temp files on disk. */
+static char *fail_msg(Interp *I, const char *msg) {
+    int n = snprintf(I->err_msg, sizeof(I->err_msg), "runtime error [%s:%d]: ",
+                     I->path ? I->path : "?", vm_current_line(I));
+    n = clamp_written(n, sizeof(I->err_msg));
+    snprintf(I->err_msg + n, sizeof(I->err_msg) - (size_t)n, "%s", msg);
+    return NULL;
+}
+
 /* Parsed form of ai()'s optional 2nd argument. */
 typedef struct {
     const char *model;
@@ -3104,16 +3115,16 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
 
     strcpy(body_tmpl, "/tmp/loqi_ai_XXXXXX");
     int fd = mkstemp(body_tmpl); /* creates the file 0600 */
-    if (fd < 0) { free(jbuf); runtime_error(I, 0, "ai(): could not create temp file"); }
-    if (write(fd, jbuf, jl) < 0) { close(fd); unlink(body_tmpl); free(jbuf); runtime_error(I, 0, "ai(): temp write failed"); }
+    if (fd < 0) { free(jbuf); return fail_msg(I, "ai(): could not create temp file"); }
+    if (write(fd, jbuf, jl) < 0) { close(fd); unlink(body_tmpl); free(jbuf); return fail_msg(I, "ai(): temp write failed"); }
     close(fd);
     free(jbuf);
 
     strcpy(cfg_tmpl, "/tmp/loqi_aicfg_XXXXXX");
     int cfd = mkstemp(cfg_tmpl);
-    if (cfd < 0) { unlink(body_tmpl); runtime_error(I, 0, "ai(): could not create config file"); }
+    if (cfd < 0) { unlink(body_tmpl); return fail_msg(I, "ai(): could not create config file"); }
     FILE *cf = fdopen(cfd, "w");
-    if (!cf) { close(cfd); unlink(cfg_tmpl); unlink(body_tmpl); runtime_error(I, 0, "ai(): config not writable"); }
+    if (!cf) { close(cfd); unlink(cfg_tmpl); unlink(body_tmpl); return fail_msg(I, "ai(): config not writable"); }
     fputs("url = \"https://api.anthropic.com/v1/messages\"\n", cf);
     fputs("header = \"content-type: application/json\"\n", cf);
     fputs("header = \"anthropic-version: 2023-06-01\"\n", cf);
@@ -3172,6 +3183,7 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     AiOpts o = ai_parse_opts(I, argc, argv, 1);
     char body_tmpl[32], cfg_tmpl[32];
     char *cmd = ai_build_request(I, argv[0], o, key, body_tmpl, cfg_tmpl);
+    if (!cmd) raise_error(I); /* build cleaned up its own temp files; raise the message */
     size_t rlen; int status;
     char *resp = run_capture(cmd, &rlen, &status);
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
@@ -3354,6 +3366,13 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
     char (*cfg_tmpls)[32]  = xmalloc(sizeof(char[32]) * (size_t)n);
     for (int i = 0; i < n; i++) {
         jobs[i].cmd = ai_build_request(I, prompts->items[i], o, key, body_tmpls[i], cfg_tmpls[i]);
+        if (!jobs[i].cmd) {
+            /* a build failed (its own partial files are already cleaned): remove the
+               temp files of the prompts built so far — no API key left on disk — then raise */
+            for (int j = 0; j < i; j++) { unlink(body_tmpls[j]); unlink(cfg_tmpls[j]); free((char *)jobs[j].cmd); }
+            free(jobs); free(body_tmpls); free(cfg_tmpls);
+            raise_error(I);
+        }
         jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
     }
     run_jobs_parallel(jobs, n);
