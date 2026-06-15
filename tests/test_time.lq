@@ -1,0 +1,22 @@
+# Fixed UTC timestamps (epoch + a known date).
+assert(time.iso(0) == "1970-01-01T00:00:00Z", "epoch ISO")
+assert(time.iso(1700000000) == "2023-11-14T22:13:20Z", "known ISO")
+
+let p = time.parts(0)
+assert(p.year == 1970 and p.month == 1 and p.day == 1, "epoch date parts")
+assert(p.hour == 0 and p.minute == 0 and p.second == 0, "epoch time parts")
+assert(p.weekday == 4, "epoch was a Thursday (0=Sun)")
+
+let q = time.parts(1700000000)
+assert(q.year == 2023 and q.month == 11 and q.day == 14, "known date parts")
+assert(q.hour == 22 and q.minute == 13 and q.second == 20, "known time parts")
+
+assert(time.format(0, `%Y/%m/%d`) == "1970/01/01", "format")
+assert(time.format(1700000000, `%H:%M`) == "22:13", "format time")
+
+# now()-based calls don't crash and produce sane data
+let nowp = time.parts()
+assert(nowp.year >= 2026, "current year is sane")
+assert(type(time.iso()) == "str", "time.iso() current")
+
+print("test_time: all tests passed ✓")

@@ -3370,6 +3370,41 @@ static Value nat_hex_decode(Interp *I, int argc, Value *argv) {
     free(out);
     return r;
 }
+
+/* ---- date/time (UTC, from a Unix timestamp; default = now) ---- */
+static time_t time_arg(int argc, Value *argv) {
+    return (argc >= 1 && IS_NUM(argv[0])) ? (time_t)as_double(argv[0]) : time(NULL);
+}
+static Value nat_time_iso(Interp *I, int argc, Value *argv) {
+    time_t t = time_arg(argc, argv);
+    struct tm tmv; gmtime_r(&t, &tmv);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tmv);  /* ISO-8601 UTC */
+    return cstring_val(I, buf);
+}
+static Value nat_time_parts(Interp *I, int argc, Value *argv) {
+    time_t t = time_arg(argc, argv);
+    struct tm tmv; gmtime_r(&t, &tmv);
+    ObjMap *m = new_map(I);
+    map_set(m, "year", int_val(tmv.tm_year + 1900));
+    map_set(m, "month", int_val(tmv.tm_mon + 1));
+    map_set(m, "day", int_val(tmv.tm_mday));
+    map_set(m, "hour", int_val(tmv.tm_hour));
+    map_set(m, "minute", int_val(tmv.tm_min));
+    map_set(m, "second", int_val(tmv.tm_sec));
+    map_set(m, "weekday", int_val(tmv.tm_wday)); /* 0 = Sunday */
+    map_set(m, "yearday", int_val(tmv.tm_yday + 1));
+    return obj_val((Obj *)m);
+}
+static Value nat_time_format(Interp *I, int argc, Value *argv) {
+    if (argc < 2 || !IS_NUM(argv[0]) || !IS_STRING(argv[1]))
+        runtime_error(I, 0, "time.format() requires (seconds: number, fmt: str)");
+    time_t t = (time_t)as_double(argv[0]);
+    struct tm tmv; gmtime_r(&t, &tmv);
+    char buf[256];
+    size_t n = strftime(buf, sizeof(buf), AS_STRING(argv[1])->chars, &tmv);
+    return string_val(I, buf, (int)n); /* n == 0 if the result didn't fit */
+}
 static Value nat_similarity(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
         runtime_error(I, 0, "similarity() requires two vectors (list of numbers)");
@@ -3967,6 +4002,12 @@ static void install_stdlib(Interp *I) {
     define_native_in(I, hex, "encode", nat_hex_encode, 1);
     define_native_in(I, hex, "decode", nat_hex_decode, 1);
     table_set(I->globals, "hex", hash_string("hex", 3), obj_val((Obj *)hex));
+
+    ObjMap *tm = new_map(I);
+    define_native_in(I, tm, "iso", nat_time_iso, -1);       /* time.iso([secs]) */
+    define_native_in(I, tm, "parts", nat_time_parts, -1);   /* time.parts([secs]) */
+    define_native_in(I, tm, "format", nat_time_format, 2);  /* time.format(secs, fmt) */
+    table_set(I->globals, "time", hash_string("time", 4), obj_val((Obj *)tm));
 }
 
 /* ===========================================================================

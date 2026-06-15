@@ -103,6 +103,22 @@ let t = clock()
 print("elapsed: {clock() - t}s")
 ```
 
+### `now() → float`
+Wall-clock seconds since the Unix epoch (UTC).
+
+### `time` — calendar helpers (UTC)
+| Function | Result |
+|----------|--------|
+| `time.iso(secs?)` | ISO-8601 string `YYYY-MM-DDTHH:MM:SSZ` (default: now) |
+| `time.parts(secs?)` | map: `year, month, day, hour, minute, second, weekday (0=Sun), yearday` |
+| `time.format(secs, fmt)` | `strftime`-style formatting |
+```loqi
+print(time.iso())                          # e.g. 2026-06-15T09:30:00Z
+let d = time.parts(now())
+print("{d.year}-{d.month}-{d.day}")
+print(time.format(now(), `%A, %B %d`))     # e.g. Monday, June 15
+```
+
 ## Testing
 
 ### `assert(cond, message?) → nil`
