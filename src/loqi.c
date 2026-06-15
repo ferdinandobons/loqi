@@ -3276,6 +3276,100 @@ static Value nat_path_ext(Interp *I, int argc, Value *argv) {
     if (dot <= start) return cstring_val(I, ""); /* no dot, or a leading-dot hidden file */
     return string_val(I, s->chars + dot, s->length - dot); /* includes the dot */
 }
+
+/* ---- base64 / hex encoding (byte-accurate, length-aware) ---- */
+static const char B64_ENC[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static int b64_dec(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+static Value nat_base64_encode(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "base64.encode() requires a str");
+    ObjString *s = AS_STRING(argv[0]);
+    const unsigned char *in = (const unsigned char *)s->chars;
+    int n = s->length, o = 0;
+    char *out = xmalloc((size_t)((n + 2) / 3) * 4 + 1);
+    for (int i = 0; i < n; i += 3) {
+        unsigned v = (unsigned)in[i] << 16;
+        if (i + 1 < n) v |= (unsigned)in[i + 1] << 8;
+        if (i + 2 < n) v |= (unsigned)in[i + 2];
+        out[o++] = B64_ENC[(v >> 18) & 0x3f];
+        out[o++] = B64_ENC[(v >> 12) & 0x3f];
+        out[o++] = (i + 1 < n) ? B64_ENC[(v >> 6) & 0x3f] : '=';
+        out[o++] = (i + 2 < n) ? B64_ENC[v & 0x3f] : '=';
+    }
+    Value r = string_val(I, out, o);
+    free(out);
+    return r;
+}
+static Value nat_base64_decode(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "base64.decode() requires a str");
+    ObjString *s = AS_STRING(argv[0]);
+    int n = s->length, o = 0, qc = 0, quad[4];
+    char *out = xmalloc((size_t)(n / 4 + 1) * 3 + 1);
+    for (int i = 0; i < n; i++) {
+        char c = s->chars[i];
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') continue; /* ignore whitespace */
+        if (c == '=') break;                                            /* padding ends input */
+        int v = b64_dec(c);
+        if (v < 0) { free(out); runtime_error(I, 0, "base64.decode(): invalid character"); }
+        quad[qc++] = v;
+        if (qc == 4) {
+            out[o++] = (char)((quad[0] << 2) | (quad[1] >> 4));
+            out[o++] = (char)((quad[1] << 4) | (quad[2] >> 2));
+            out[o++] = (char)((quad[2] << 6) | quad[3]);
+            qc = 0;
+        }
+    }
+    if (qc == 1) { free(out); runtime_error(I, 0, "base64.decode(): truncated input"); }
+    if (qc >= 2) out[o++] = (char)((quad[0] << 2) | (quad[1] >> 4));
+    if (qc == 3) out[o++] = (char)((quad[1] << 4) | (quad[2] >> 2));
+    Value r = string_val(I, out, o);
+    free(out);
+    return r;
+}
+static Value nat_hex_encode(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "hex.encode() requires a str");
+    ObjString *s = AS_STRING(argv[0]);
+    static const char H[] = "0123456789abcdef";
+    const unsigned char *in = (const unsigned char *)s->chars;
+    char *out = xmalloc((size_t)s->length * 2 + 1);
+    for (int i = 0; i < s->length; i++) {
+        out[i * 2]     = H[in[i] >> 4];
+        out[i * 2 + 1] = H[in[i] & 0xf];
+    }
+    Value r = string_val(I, out, s->length * 2);
+    free(out);
+    return r;
+}
+static int hex_dec(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+static Value nat_hex_decode(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "hex.decode() requires a str");
+    ObjString *s = AS_STRING(argv[0]);
+    if (s->length % 2 != 0) runtime_error(I, 0, "hex.decode(): odd-length input");
+    char *out = xmalloc((size_t)(s->length / 2) + 1);
+    for (int i = 0; i < s->length; i += 2) {
+        int hi = hex_dec(s->chars[i]), lo = hex_dec(s->chars[i + 1]);
+        if (hi < 0 || lo < 0) { free(out); runtime_error(I, 0, "hex.decode(): invalid character"); }
+        out[i / 2] = (char)((hi << 4) | lo);
+    }
+    Value r = string_val(I, out, s->length / 2);
+    free(out);
+    return r;
+}
 static Value nat_similarity(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
         runtime_error(I, 0, "similarity() requires two vectors (list of numbers)");
@@ -3863,6 +3957,16 @@ static void install_stdlib(Interp *I) {
     define_native_in(I, path, "basename", nat_path_basename, 1);
     define_native_in(I, path, "ext", nat_path_ext, 1);
     table_set(I->globals, "path", hash_string("path", 4), obj_val((Obj *)path));
+
+    ObjMap *b64 = new_map(I);
+    define_native_in(I, b64, "encode", nat_base64_encode, 1);
+    define_native_in(I, b64, "decode", nat_base64_decode, 1);
+    table_set(I->globals, "base64", hash_string("base64", 6), obj_val((Obj *)b64));
+
+    ObjMap *hex = new_map(I);
+    define_native_in(I, hex, "encode", nat_hex_encode, 1);
+    define_native_in(I, hex, "decode", nat_hex_decode, 1);
+    table_set(I->globals, "hex", hash_string("hex", 3), obj_val((Obj *)hex));
 }
 
 /* ===========================================================================

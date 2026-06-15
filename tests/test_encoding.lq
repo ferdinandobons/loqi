@@ -1,0 +1,31 @@
+# base64 — RFC 4648 test vectors
+assert(base64.encode("") == "", "b64 empty")
+assert(base64.encode("f") == "Zg==", "b64 f")
+assert(base64.encode("fo") == "Zm8=", "b64 fo")
+assert(base64.encode("foo") == "Zm9v", "b64 foo")
+assert(base64.encode("foob") == "Zm9vYg==", "b64 foob")
+assert(base64.encode("fooba") == "Zm9vYmE=", "b64 fooba")
+assert(base64.encode("foobar") == "Zm9vYmFy", "b64 foobar")
+assert(base64.encode("hello") == "aGVsbG8=", "b64 hello")
+
+# base64 decode + round-trip
+assert(base64.decode("aGVsbG8=") == "hello", "b64 decode")
+assert(base64.decode("Zm9vYmFy") == "foobar", "b64 decode no padding char")
+assert(base64.decode(base64.encode("The quick brown fox")) == "The quick brown fox", "b64 round-trip")
+
+# invalid base64 is a catchable error, not a crash
+let bad = false
+try { base64.decode("not base64 @@@") } catch e { bad = true }
+assert(bad, "invalid base64 raises")
+
+# hex
+assert(hex.encode("AB") == "4142", "hex AB")          # A=0x41 B=0x42
+assert(hex.encode("hello") == "68656c6c6f", "hex hello")
+assert(hex.decode("4142") == "AB", "hex decode")
+assert(hex.decode(hex.encode("round trip!")) == "round trip!", "hex round-trip")
+
+let bad2 = false
+try { hex.decode("xyz") } catch e { bad2 = true }      # invalid + odd length
+assert(bad2, "invalid hex raises")
+
+print("test_encoding: all tests passed ✓")

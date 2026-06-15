@@ -287,3 +287,16 @@ for name in ls(dir) {
   if path.ext(name) == ".txt" { print(read(path.join(dir, name))) }
 }
 ```
+
+## `base64` / `hex` — encoding
+| Function | Result |
+|----------|--------|
+| `base64.encode(s)` / `base64.decode(s)` | standard base64 (RFC 4648, padded) |
+| `hex.encode(s)` / `hex.decode(s)` | lowercase hex of the bytes |
+
+```loqi
+let token = base64.encode("user:secret")        # "dXNlcjpzZWNyZXQ="
+print(base64.decode(token))                      # user:secret
+print(hex.encode("Loqi"))                        # 4c6f7169
+```
+
