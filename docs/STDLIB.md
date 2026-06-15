@@ -175,6 +175,9 @@ print(zip(["a", "b"], [1, 2]))                                    # [["a", 1], [
 | `starts_with(s, p)` / `ends_with(s, p)` | prefix/suffix test |
 | `repeat(s, n)` | `s` repeated `n` times |
 | `chars(s)` | list of single-character strings |
+| `pad_start(s, w[, fill])` / `pad_end(s, w[, fill])` | pad to width `w` with `fill` (default space) |
+| `lines(s)` | split into lines (handles CRLF; drops a trailing newline's empty) |
+| `words(s)` | split on whitespace runs, dropping empties |
 
 ## More math
 | Function | Result |

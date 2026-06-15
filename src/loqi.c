@@ -3913,6 +3913,63 @@ static Value nat_chars(Interp *I, int argc, Value *argv) {
     for (int i = 0; i < s->length; i++) list_push(l, string_val(I, s->chars + i, 1));
     return obj_val((Obj *)l);
 }
+/* pad a string to `width` with `fill` (default " ", cycled) on the left/right */
+static Value nat_pad(Interp *I, int argc, Value *argv, bool at_start) {
+    const char *who = at_start ? "pad_start" : "pad_end";
+    if (!IS_STRING(argv[0]) || !IS_INT(argv[1]))
+        runtime_error(I, 0, "%s() requires (str, width:int [, fill:str])", who);
+    ObjString *s = AS_STRING(argv[0]);
+    int64_t width = AS_INT(argv[1]);
+    bool has_fill = argc >= 3 && IS_STRING(argv[2]);
+    const char *fill = has_fill ? AS_STRING(argv[2])->chars : " ";
+    int fill_len = has_fill ? AS_STRING(argv[2])->length : 1;
+    if (fill_len <= 0 || width <= s->length) return argv[0]; /* nothing to add */
+    if (width > 100 * 1024 * 1024) runtime_error(I, 0, "%s(): width too large", who);
+    int pad = (int)width - s->length;
+    char *buf = xmalloc((size_t)width + 1);
+    char *fillp = at_start ? buf : buf + s->length;
+    char *strp  = at_start ? buf + pad : buf;
+    for (int i = 0; i < pad; i++) fillp[i] = fill[i % fill_len];
+    memcpy(strp, s->chars, (size_t)s->length);
+    Value out = string_val(I, buf, (int)width);
+    free(buf);
+    return out;
+}
+static Value nat_pad_start(Interp *I, int argc, Value *argv) { return nat_pad(I, argc, argv, true); }
+static Value nat_pad_end(Interp *I, int argc, Value *argv) { return nat_pad(I, argc, argv, false); }
+static Value nat_lines(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "lines() requires str");
+    ObjString *s = AS_STRING(argv[0]);
+    ObjList *out = new_list(I);
+    if (s->length == 0) return obj_val((Obj *)out);
+    int start = 0;
+    for (int i = 0; i <= s->length; i++) {
+        if (i == s->length || s->chars[i] == '\n') {
+            int end = i;
+            if (end > start && s->chars[end - 1] == '\r') end--; /* handle CRLF */
+            /* drop the final empty segment produced by a trailing newline */
+            if (i == s->length && start == i && s->chars[s->length - 1] == '\n') break;
+            list_push(out, string_val(I, s->chars + start, end - start));
+            start = i + 1;
+        }
+    }
+    return obj_val((Obj *)out);
+}
+static Value nat_words(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "words() requires str");
+    ObjString *s = AS_STRING(argv[0]);
+    ObjList *out = new_list(I);
+    int i = 0;
+    while (i < s->length) {
+        while (i < s->length && isspace((unsigned char)s->chars[i])) i++;
+        int start = i;
+        while (i < s->length && !isspace((unsigned char)s->chars[i])) i++;
+        if (i > start) list_push(out, string_val(I, s->chars + start, i - start));
+    }
+    return obj_val((Obj *)out);
+}
 static Value nat_now(Interp *I, int argc, Value *argv) {
     (void)I; (void)argc; (void)argv;
     struct timeval tv;
@@ -4152,6 +4209,10 @@ static void install_stdlib(Interp *I) {
     define_native(I, "ends_with", nat_ends_with, 2);
     define_native(I, "repeat", nat_repeat, 2);
     define_native(I, "chars", nat_chars, 1);
+    define_native(I, "pad_start", nat_pad_start, -1);
+    define_native(I, "pad_end", nat_pad_end, -1);
+    define_native(I, "lines", nat_lines, 1);
+    define_native(I, "words", nat_words, 1);
 
     /* --- math --- */
     define_native(I, "round", nat_round, 1);
