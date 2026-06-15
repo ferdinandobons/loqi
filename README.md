@@ -5,28 +5,48 @@
 [![CI](https://github.com/ferdinandobons/loqi/actions/workflows/ci.yml/badge.svg)](https://github.com/ferdinandobons/loqi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**The AI-first programming language, the language you speak to machines.**
+**jq for the text only an LLM can parse.**
 
-In a classic language, Python, JavaScript, Go, talking to an AI is something you
-*bolt on*: install an SDK, build a client, parse the JSON, validate the shape, wire up
-retries and parallelism yourself. **In Loqi it *is* the language.** Calling an LLM,
-getting back schema-validated data, fanning calls out in parallel, vector search for
-RAG, JSON and HTTP, all built in, no packages to hunt down.
+Pipe in messy text, get back schema-validated structured rows (NDJSON) your next pipe
+stage can trust, or a hard failure naming the field that didn't validate.
+One static binary: no Python, no venv, no SDK, no runtime. The script *is* the filter.
 
-*Loqi* (from Latin *loqui*, "to speak") is small, modern and memory-safe: simple to
-read, fast on Apple Silicon, one dependency-free binary, no toolchain to assemble.
+```sh
+cat tickets.txt | loqi extract.lq > tickets.ndjson
+```
 
 ```loqi
-# Fetch live data, then let a model reason about it.
-# No pip install, no SDK, no API client, http, json and ai ARE the language.
-let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
-print("{repo.full_name}, {repo.stargazers_count} ⭐")
+# extract.lq, one record per input line, validated against a schema, emitted as NDJSON.
+let schema = {
+  type: "object",
+  required: ["id", "severity", "summary"],
+  fields: {
+    id:       { type: "int", min: 1 },
+    severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    summary:  { type: "string", min_length: 3 },
+  },
+}
+let opts = { model: "claude-sonnet-4-6", temperature: 0 }   # same input -> same row
 
-let summary = ai("In one tweet, what is {repo.name} and why does it matter?")
-print(summary)
+for line in lines(stdin()) {
+  print(json.stringify(ai_json("Extract id, severity, summary from:\n{line}", schema, opts)))
+}
 ```
 
 </div>
+
+**Validated-or-fails.** Every row matches the schema (with one automatic retry), or the
+run stops with a caret on the field that broke, so the next pipe stage never eats
+half-parsed garbage. *Loqi* (from Latin *loqui*, "to speak") is a small, memory-safe
+language, not a CLI flag: real variables, functions, JSON and parallel calls, in one
+dependency-free binary for macOS and Linux.
+
+**Why not Python + an SDK?** In a pipe you pay the venv/pip/import tax, then hand-roll
+the client, JSON parsing, schema check and retries. Loqi bakes all of that into one
+binary you drop on any box: typed, validated, retry-on-429.
+
+**Why not jq?** jq needs structured input. Loqi *produces* it, from the free-form text
+jq, grep and awk can read but can't reason about.
 
 ---
 

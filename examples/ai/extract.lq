@@ -1,12 +1,26 @@
-# Structured extraction: ask for JSON and get back native Loqi data directly.
-# `{ json: true }` steers the model, strips any ```fences```, and parses for you,
-# no HTTP libraries, no JSON glue, no SDK.
-#   ANTHROPIC_API_KEY=... loqi examples/ai/extract.lq
+# The flagship: turn messy text on stdin into schema-validated NDJSON, one row per
+# input line. Each row matches the schema (ai_json validates and retries once) or the
+# run stops with the field that didn't validate. No SDK, no JSON glue, one binary.
+#
+#   cat tickets.txt | loqi examples/ai/extract.lq > tickets.ndjson
+#
+# Needs: curl on PATH and ANTHROPIC_API_KEY in the env.
 
-let text = "Ada Lovelace, born in 1815, is considered the first programmer."
+let schema = {
+  type: "object",
+  required: ["id", "severity", "summary"],
+  fields: {
+    id:       { type: "int", min: 1 },
+    severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    summary:  { type: "string", min_length: 3 },
+  },
+}
 
-let data = ai("Extract name, birth_year (int) and role from: {text}", { json: true })
+# temperature 0: same input -> same row, so the next pipe stage is reproducible.
+let opts = { model: "claude-sonnet-4-6", temperature: 0 }
 
-print("Name: {data.name}")
-print("Year: {data.birth_year}")
-print("Role: {data.role}")
+for line in lines(stdin()) {
+  if trim(line) == "" { continue }
+  let row = ai_json("Extract id, severity and summary from this support ticket:\n{line}", schema, opts)
+  print(json.stringify(row))   # one NDJSON line, validated
+}
