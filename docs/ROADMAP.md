@@ -37,6 +37,7 @@ imply for the next step.
 | Diagnostics | backtrace on uncaught errors | ✅ done |
 | Stdlib | filesystem (ls/exists/mkdir/rm) + `path` ops | ✅ done |
 | Diagnostics | source-line snippet on uncaught errors | ✅ done |
+| Diagnostics | accurate per-frame file names (cross-module) | ✅ done |
 | Diagnostics | caret under the column (needs column tracking) | 🔜 next |
 | Core | module cache (single-evaluation) | 📋 planned |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |

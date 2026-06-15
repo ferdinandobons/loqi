@@ -112,6 +112,7 @@ struct ObjProto {
     char *name;            /* for diagnostics; NULL for the top-level script */
     Table *module_globals; /* the globals table of the module this proto belongs to */
     const char *source;    /* borrowed: the module's source text (kept alive in I->sources) */
+    const char *path;      /* borrowed: the module's file path (kept alive in I->sources) */
 };
 
 /* A captured variable that may outlive the stack frame that created it. */
@@ -188,7 +189,8 @@ struct Interp {
     char err_trace[1024]; /* call-stack backtrace for an uncaught runtime error */
     char err_source[320]; /* the offending source line for an uncaught error */
     const char *current_source; /* source being compiled now (-> proto->source) */
-    char **sources;       /* every source text, kept alive for diagnostics */
+    const char *current_path;   /* path being compiled now (-> proto->path) */
+    char **sources;       /* every source text + path, kept alive for diagnostics */
     int source_count, source_cap;
     int import_depth;  /* number of files currently being loaded (import stack height) */
     const char *import_stack[64]; /* paths currently loading, for cycle detection */
@@ -222,13 +224,14 @@ static int clamp_written(int n, size_t cap) {
  * top-level landing pad if none is active. Defined after the VM. */
 static void raise_error(Interp *I);
 static int vm_current_line(Interp *I); /* line of the instruction currently executing */
+static const char *vm_current_path(Interp *I); /* file of the frame currently executing */
 
 static void runtime_error(Interp *I, int line, const char *fmt, ...) {
     if (line == 0) line = vm_current_line(I); /* natives pass 0 -> use the call site */
     va_list ap;
     va_start(ap, fmt);
     int n = snprintf(I->err_msg, sizeof(I->err_msg),
-                     "runtime error [%s:%d]: ", I->path ? I->path : "?", line);
+                     "runtime error [%s:%d]: ", vm_current_path(I), line);
     n = clamp_written(n, sizeof(I->err_msg));
     vsnprintf(I->err_msg + n, sizeof(I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
@@ -1458,6 +1461,7 @@ static ObjProto *new_proto(Interp *I) {
     p->arity = 0; p->upvalue_count = 0; p->name = NULL;
     p->module_globals = I->globals; /* globals of the module being compiled */
     p->source = I->current_source;  /* for source-line diagnostics */
+    p->path = I->current_path;      /* for accurate per-frame file names */
     chunk_init(&p->chunk);
     return p;
 }
@@ -1981,9 +1985,11 @@ static void vm_error(VM *vm, const char *fmt, ...) {
     Chunk *ch = &frame->closure->proto->chunk;
     int idx = (int)(frame->ip - ch->code) - 1;
     int line = (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
+    const char *fpath = frame->closure->proto->path ? frame->closure->proto->path
+                      : (vm->I->path ? vm->I->path : "?");
     va_list ap; va_start(ap, fmt);
     int n = snprintf(vm->I->err_msg, sizeof(vm->I->err_msg),
-                     "runtime error [%s:%d]: ", vm->I->path ? vm->I->path : "?", line);
+                     "runtime error [%s:%d]: ", fpath, line);
     n = clamp_written(n, sizeof(vm->I->err_msg));
     vsnprintf(vm->I->err_msg + n, sizeof(vm->I->err_msg) - (size_t)n, fmt, ap);
     va_end(ap);
@@ -2002,6 +2008,15 @@ static int vm_current_line(Interp *I) {
     Chunk *ch = &fr->closure->proto->chunk;
     int idx = (int)(fr->ip - ch->code) - 1;
     return (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
+}
+/* File path of the top frame's module (accurate across modules), else I->path. */
+static const char *vm_current_path(Interp *I) {
+    VM *vm = I->vm;
+    if (vm && vm->frame_count > 0) {
+        const char *p = vm->frames[vm->frame_count - 1].closure->proto->path;
+        if (p) return p;
+    }
+    return I->path ? I->path : "?";
 }
 
 /* Copy source line `line` of `src` into buf as "  N | <text>" (empty if absent). */
@@ -2035,8 +2050,10 @@ static void build_backtrace(Interp *I) {
             capture_source_line(I->err_source, sizeof(I->err_source), fr->closure->proto->source, line);
         const char *name = (i == 0) ? "<script>"
                          : (fr->closure->proto->name ? fr->closure->proto->name : "<anonymous>");
+        const char *fpath = fr->closure->proto->path ? fr->closure->proto->path
+                          : (I->path ? I->path : "?");
         int w = snprintf(I->err_trace + off, sizeof(I->err_trace) - off,
-                         "  at %s (%s:%d)\n", name, I->path ? I->path : "?", line);
+                         "  at %s (%s:%d)\n", name, fpath, line);
         if (w < 0) break;
         off += (size_t)w;
         if (off >= sizeof(I->err_trace)) { off = sizeof(I->err_trace) - 1; break; }
@@ -4269,11 +4286,15 @@ static int run_source(Interp *I, const char *src, const char *path) {
         if (!owned) { I->import_depth--; return 74; }
         src = owned;
     }
-    /* keep a copy of the source alive for source-line diagnostics (proto->source) */
+    /* keep copies of the source + path alive for diagnostics (proto->source/path) */
     char *kept_source = strdup(src);
     keep_source(I, kept_source);
+    char *kept_path = strdup(path ? path : "?");
+    keep_source(I, kept_path);
     const char *prev_source = I->current_source;
+    const char *prev_cur_path = I->current_path;
     I->current_source = kept_source;
+    I->current_path = kept_path;
     const char *prev_path = I->path;
     I->path = path;
 
@@ -4282,10 +4303,10 @@ static int run_source(Interp *I, const char *src, const char *path) {
     lex_init(&P.lex, I, src);
     p_advance(&P);
     Node *prog = parse_program(&P);
-    if (P.had_error) { free(owned); I->path = prev_path; I->current_source = prev_source; I->import_depth--; return 65; }
+    if (P.had_error) { free(owned); I->path = prev_path; I->current_source = prev_source; I->current_path = prev_cur_path; I->import_depth--; return 65; }
 
     ObjProto *script = compile_script(I, prog);
-    if (!script) { free(owned); I->path = prev_path; I->current_source = prev_source; I->import_depth--; return 65; }
+    if (!script) { free(owned); I->path = prev_path; I->current_source = prev_source; I->current_path = prev_cur_path; I->import_depth--; return 65; }
 
     /* save the enclosing error landing pad + VM for safe nesting (imports) */
     jmp_buf saved; memcpy(saved, I->err_jmp, sizeof(jmp_buf));
@@ -4322,6 +4343,7 @@ static int run_source(Interp *I, const char *src, const char *path) {
     memcpy(I->err_jmp, saved, sizeof(jmp_buf)); /* restore enclosing landing pad */
     I->path = prev_path;
     I->current_source = prev_source;
+    I->current_path = prev_cur_path;
     I->import_depth--;
     return rc;
 }
@@ -4380,6 +4402,7 @@ static void interp_init(Interp *I) {
     I->err_trace[0] = '\0';
     I->err_source[0] = '\0';
     I->current_source = NULL;
+    I->current_path = NULL;
     I->sources = NULL; I->source_count = 0; I->source_cap = 0;
     I->import_depth = 0;
     I->obj_count = 0;
