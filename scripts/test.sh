@@ -73,6 +73,24 @@ else
   fail=$((fail+1))
 fi
 
+# ai_all error path: same closed-port setup, fanned out. Each parallel call retries
+# the transient failure then ai_all raises cleanly. This exercises the ai_all result
+# loop, which must stay leak-clean (a parse error mid-loop must not strand the worker
+# buffers or jobs array); run it under `leaks --atExit` locally to confirm 0.
+allretry_out="$(ANTHROPIC_API_KEY=dummy-key \
+  LOQI_AI_BASE_URL='http://127.0.0.1:1/v1/messages' \
+  LOQI_AI_MAX_RETRIES=1 LOQI_AI_RETRY_BASE_MS=1 \
+  "$LOQI" tests/fixtures/ai_all_retry.lq 2>&1)"
+rc=$?
+if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ] && printf '%s' "$allretry_out" | grep -q "after 2 attempts"; then
+  echo "  ✓ (ai-all-retry) a fanned-out transient failure is retried and raised cleanly"
+  pass=$((pass+1))
+else
+  echo "  ✗ (ai-all-retry) expected a bounded retry failure (exit 64-127, 'after 2 attempts'), exit=$rc:"
+  printf '%s\n' "$allretry_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

@@ -4029,14 +4029,25 @@ static bool ai_status_retryable(int curl_status, long http_code) {
     return http_code == 429 || (http_code >= 500 && http_code <= 599);
 }
 
-/* Sleep before the next attempt: exponential (base_ms << attempt, capped 16s)
-   with full jitter so concurrent callers don't retry in lockstep. */
+/* Sleep before the next attempt: exponential (base_ms << attempt, capped 16s) with
+   full jitter in [0, cap] ms. The jitter is seeded from a per-thread, per-call mix
+   (wall-clock nanoseconds, the thread id, the attempt) run through splitmix64, so
+   the concurrent retries of ai_all actually decorrelate. (clock() alone is no good
+   here: it is process-wide CPU time and barely moves while threads block in curl.) */
 static void ai_backoff_sleep(int attempt, long base_ms) {
     if (base_ms <= 0) return;
     long cap = base_ms;
     for (int i = 0; i < attempt && cap < 16000; i++) cap *= 2;
     if (cap > 16000 || cap < base_ms) cap = 16000;
-    long jitter = (long)((unsigned long)clock() % (unsigned long)(cap + 1)); /* [0, cap] */
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    uint64_t x = (uint64_t)now.tv_nsec ^ ((uint64_t)now.tv_sec << 32)
+               ^ (uint64_t)(uintptr_t)pthread_self() ^ ((uint64_t)attempt * 0x9E3779B97F4A7C15ull);
+    x += 0x9E3779B97F4A7C15ull;                       /* splitmix64 */
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    x ^= x >> 31;
+    long jitter = (long)(x % (uint64_t)(cap + 1));     /* [0, cap] ms */
     struct timespec ts;
     ts.tv_sec = jitter / 1000;
     ts.tv_nsec = (jitter % 1000) * 1000000L;
@@ -4138,24 +4149,24 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
 /* Parse one Anthropic Messages response into a Loqi value (the first text block,
    or its parsed JSON if want_json). Takes ownership of `resp` (frees it). Raises
    on a curl/API/format error. */
-static Value ai_parse_response(Interp *I, char *resp, int status, long http_code,
-                               int attempts, bool want_json) {
-    if (!resp) runtime_error(I, 0, "ai(): could not run curl");
-    if (status != 0 && !*resp) {
-        free(resp);
+/* Turn one response body (borrowed, NUL-terminated; NULL or empty means none) into
+   a Loqi value. Does NOT own `body`, so callers can hold it in GC-managed memory and
+   a raise here (longjmp) can't leak a raw buffer. Errors include the attempt count
+   and HTTP status so a call that burned its whole retry budget says so. */
+static Value ai_value_from_body(Interp *I, const char *body, int status, long http_code,
+                                int attempts, bool want_json) {
+    if (status != 0 && (!body || !*body)) {
         if (attempts > 1)
             runtime_error(I, 0, "ai(): API request failed after %d attempts (curl %d), check network and key", attempts, status);
         runtime_error(I, 0, "ai(): API request failed (curl %d), check network and key", status);
     }
-    if (!*resp) {
-        free(resp);
+    if (!body || !*body) {
         if (http_code >= 400)
             runtime_error(I, 0, "ai(): API returned HTTP %ld with no body%s", http_code, attempts > 1 ? " (after retries)" : "");
         runtime_error(I, 0, "ai(): no response from the API");
     }
-    const char *p = resp;
+    const char *p = body;
     Value parsed = json_parse_value(I, &p, 0);
-    free(resp);
     if (IS_MAP(parsed)) {
         Value *content = map_get(AS_MAP(parsed), "content");
         if (content && IS_LIST(*content)) {
@@ -4171,11 +4182,30 @@ static Value ai_parse_response(Interp *I, char *resp, int status, long http_code
         Value *err = map_get(AS_MAP(parsed), "error");
         if (err && IS_MAP(*err)) {
             Value *m = map_get(AS_MAP(*err), "message");
-            if (m && IS_STRING(*m)) runtime_error(I, 0, "ai(): %s", AS_STRING(*m)->chars);
+            if (m && IS_STRING(*m)) {
+                if (attempts > 1)
+                    runtime_error(I, 0, "ai(): %s (after %d attempts, HTTP %ld)", AS_STRING(*m)->chars, attempts, http_code);
+                runtime_error(I, 0, "ai(): %s", AS_STRING(*m)->chars);
+            }
         }
     }
+    if (attempts > 1)
+        runtime_error(I, 0, "ai(): API response in unexpected format (after %d attempts)", attempts);
     runtime_error(I, 0, "ai(): API response in unexpected format");
     return NIL_VAL;
+}
+
+/* Owning wrapper for the single-call paths: takes the raw curl response, moves it
+   into a GC-managed string, frees the raw buffer, then delegates. Freeing the raw
+   buffer up front means a parse-time raise can't strand it (the GC string is
+   reclaimed at teardown). */
+static Value ai_parse_response(Interp *I, char *resp, int status, long http_code,
+                               int attempts, bool want_json) {
+    if (!resp) runtime_error(I, 0, "ai(): could not run curl");
+    Value bodyv = string_val(I, resp, (int)strlen(resp));
+    free(resp);
+    return ai_value_from_body(I, IS_STRING(bodyv) ? AS_STRING(bodyv)->chars : NULL,
+                              status, http_code, attempts, want_json);
 }
 
 static Value nat_ai(Interp *I, int argc, Value *argv) {
@@ -4447,10 +4477,30 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
     for (int i = 0; i < n; i++) { unlink(body_tmpls[i]); unlink(cfg_tmpls[i]); free((char *)jobs[i].cmd); }
     free(body_tmpls); free(cfg_tmpls);
 
-    ObjList *out = new_list(I);
-    for (int i = 0; i < n; i++)
-        list_push(out, ai_parse_response(I, jobs[i].out, jobs[i].status, jobs[i].http, jobs[i].attempts, o.want_json));
+    /* Move every worker result into GC-managed memory and release ALL raw buffers
+       and the jobs array up front. Parsing below can raise (longjmp past any cleanup
+       here); GC objects are reclaimed at teardown, raw mallocs are not. */
+    ObjList *staged = new_list(I);
+    for (int i = 0; i < n; i++) {
+        ObjMap *m = new_map(I);
+        map_set(m, "body", jobs[i].out ? string_val(I, jobs[i].out, (int)jobs[i].len) : NIL_VAL);
+        map_set(m, "status", int_val(jobs[i].status));
+        map_set(m, "http", int_val(jobs[i].http));
+        map_set(m, "attempts", int_val(jobs[i].attempts));
+        list_push(staged, obj_val((Obj *)m));
+        free(jobs[i].out);
+    }
     free(jobs);
+
+    ObjList *out = new_list(I);
+    for (int i = 0; i < n; i++) {
+        ObjMap *m = AS_MAP(staged->items[i]);
+        Value *bodyv = map_get(m, "body");
+        const char *body = (bodyv && IS_STRING(*bodyv)) ? AS_STRING(*bodyv)->chars : NULL;
+        list_push(out, ai_value_from_body(I, body,
+            (int)AS_INT(*map_get(m, "status")), (long)AS_INT(*map_get(m, "http")),
+            (int)AS_INT(*map_get(m, "attempts")), o.want_json));
+    }
     return obj_val((Obj *)out);
 }
 static Value nat_exit(Interp *I, int argc, Value *argv) {

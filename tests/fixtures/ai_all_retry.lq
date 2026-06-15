@@ -1,0 +1,7 @@
+# Driven by scripts/test.sh with a dummy key and LOQI_AI_BASE_URL pointing at a
+# closed local port: ai_all fans out, every call hits a transient connection
+# failure, retries the configured number of times, then fails cleanly. Exercises
+# the ai_all error path (which must stay leak-clean: a parse error mid-loop must
+# not strand the worker buffers or the jobs array).
+let answers = ai_all(["one", "two", "three"])
+print(answers)
