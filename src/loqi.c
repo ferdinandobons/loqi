@@ -884,6 +884,9 @@ static Node *parse_expression(Parser *P) {
         if (expr->type != N_IDENT && expr->type != N_INDEX && expr->type != N_MEMBER) {
             parser_error_at(P, &P->prev, "invalid assignment target");
         }
+        if (expr->type == N_MEMBER && expr->op == T_QDOT) {
+            parser_error_at(P, &P->prev, "optional chaining '?.' is not allowed on an assignment target");
+        }
         Node *n = new_node(N_ASSIGN, P->prev.line);
         n->a = expr; n->b = value;
         return n;

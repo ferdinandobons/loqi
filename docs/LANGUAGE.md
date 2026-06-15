@@ -94,6 +94,11 @@ fn display_name(user) {
 display_name(nil)              # "guest"
 display_name({ name: "Ada" })  # "Ada"
 ```
+
+`?.` guards the member access itself (not a following call or index): `obj?.field`
+is nil-safe, but in `obj?.method()` the `?.` only protects reading `method` — pair
+it with `??` (`obj?.method ?? default`) when the base may be nil. `?.` is not
+allowed on the left of an assignment.
 - Integer arithmetic stays `int`; mixing with a `float` produces a `float`.
 - `5 / 2` is `2.5`; `5 // 2` is `2`; `-7 // 2` is `-4` (floor).
 
