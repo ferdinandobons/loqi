@@ -29,7 +29,9 @@ let schema = {
 let opts = { model: "claude-sonnet-4-6", temperature: 0 }   # same input -> same row
 
 for line in lines(stdin()) {
-  print(json.stringify(ai_json("Extract id, severity, summary from:\n{line}", schema, opts)))
+  if trim(line) == "" { continue }
+  let row = ai_json("Extract id, severity and summary from:\n{line}", schema, opts)
+  print(json.stringify(row))   # one NDJSON line, validated
 }
 ```
 
@@ -37,288 +39,146 @@ for line in lines(stdin()) {
 
 **Validated-or-fails.** Every row matches the schema (with one automatic retry), or the
 run stops with a caret on the field that broke, so the next pipe stage never eats
-half-parsed garbage. *Loqi* (from Latin *loqui*, "to speak") is a small, memory-safe
-language, not a CLI flag: real variables, functions, JSON and parallel calls, in one
-dependency-free binary for macOS and Linux.
+half-parsed garbage. Same input plus `temperature: 0` gives the same row, so the
+output is reproducible. The whole filter is the script above: no client to build, no
+fences to strip, no retry loop to hand-roll.
 
-**Why not Python + an SDK?** In a pipe you pay the venv/pip/import tax, then hand-roll
-the client, JSON parsing, schema check and retries. Loqi bakes all of that into one
-binary you drop on any box: typed, validated, retry-on-429.
+## The one job
 
-**Why not jq?** jq needs structured input. Loqi *produces* it, from the free-form text
-jq, grep and awk can read but can't reason about.
+`ai()`, `ai_json(prompt, schema)`, `ai_all` (parallel), plus `stdin()` and `lines()`,
+turn free-form text into typed, validated rows in one pipe stage. That is the job Loqi
+is built for, and the wedge is simple: **typed + validated-or-fails + parallel, in one
+binary, where the script itself is the filter.**
 
----
+| Tool | What it is | Why it falls short here |
+| --- | --- | --- |
+| **jq** | filter for JSON | needs structured input; Loqi *produces* the structure from prose |
+| **grep / awk** | line/field tools | match and slice text, but can't reason about it |
+| **Python + SDK** | full language | venv/pip/import tax in a pipe, then you hand-roll the client, JSON parse, schema check, retries |
+| **Simon Willison `llm`** | pip CLI, huge ecosystem | a pip install with plugins; no typed schema-validated-or-fails contract |
+| **charm `mods`** | static Go binary, great UX | a single static binary too, but returns text, not schema-validated typed rows |
+| **Loqi** | static binary + tiny language | one binary, typed, validated-or-fails, parallel; the script *is* the filter |
 
-> **🌐 Live site: [ferdinandobons.github.io/loqi](https://ferdinandobons.github.io/loqi/)**
+The runtime needs only `curl` on PATH and `ANTHROPIC_API_KEY` in the environment.
+Instant startup, single static binary, macOS and Linux.
 
-> **Status: v0.2, small but real, and it does what it says.** A **bytecode VM** with a
-> precise **garbage collector**; the **AI-native layer**, `ai` (options + structured
-> JSON), **`ai_json(prompt, schema)`** (schema-validated output with auto-retry),
-> **parallel model calls** (`ai_all`/`run_all`), **automatic retry/backoff** on rate
-> limits (429) and transient errors, **vector search / RAG** (`similarity`,
-> `topk`, `normalize`), `json`, `http`; a **linear-time, ReDoS-proof `regex`** engine; a
-> modern surface, **arrow functions** (`x => x*2`), **`if`/`match` expressions**,
-> null-safety (`?.`/`??`), ranges, the pipe `|>`; **modules**, **`try`/`catch`** with
-> backtraces; and a broad standard library (collections, math/random, filesystem +
-> `path`, `base64`/`hex`, date/time, subprocess). All implemented in dependency-free
-> C11, built with nothing but `clang`, **memory-safe and leak-clean under ASan/UBSan**,
-> **CI-green on Apple Silicon**. Every claim is backed by code, tests, and an honest
-> [ROADMAP](docs/ROADMAP.md).
+## Install
 
-## Why Loqi
-
-Three ideas drive every decision:
-
-1. **AI-first, batteries included.** The things you install separately today, an HTTP
-   client, a JSON parser, an LLM SDK, a vector-similarity helper, are part of the
-   language and its runtime. `ai("...")` calls a model. `json.parse`, `json.stringify`,
-   `http.get`, `http.post`, `similarity`, `read`, `write`, `env` are always there.
-   No `pip install`, no `npm i`, no SDK, no glue code.
-2. **Fast on Apple Silicon.** A single-pass compiler lowers your code to bytecode that
-   runs on a stack VM tuned for arm64, compiled with `-O3 -mcpu=apple-m1 -flto`. One
-   binary, instant startup, no warm-up.
-3. **Simple to read and write.** No semicolons, no ceremony. Curly-brace blocks,
-   `let`/`fn`, string interpolation with `{}`. If you've read code before, you can
-   read Loqi.
-
-Loqi is **not** built on top of another language. It is its own grammar, parser,
-bytecode compiler, and virtual machine.
-
-## Quickstart
-
-Requirements: macOS with the Xcode Command Line Tools (`clang`). Nothing else.
+Requirements to build: a C compiler (`clang`; the Xcode Command Line Tools on macOS).
+Nothing else.
 
 ```sh
 git clone https://github.com/ferdinandobons/loqi && cd loqi
 ./scripts/build.sh            # produces ./build/loqi
-./build/loqi examples/01_hello.lq
-./build/loqi                  # starts the REPL
+sudo cp build/loqi /usr/local/bin/    # optional: put loqi on PATH
 ```
 
-A first program (`hello.lq`):
+To run anything that calls a model, set a key (it only ever goes into a 0600 temp
+config file, never argv):
 
-```loqi
-fn greet(name) {
-  return "Hello, {name}!"
-}
-
-print(greet("world"))         # Hello, world!
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-## A taste
+## Usage
 
-**Functions, closures, and collections, no imports.**
+Run a script as a pipe filter, or inline:
+
+```sh
+cat tickets.txt | loqi extract.lq > tickets.ndjson    # script is the filter
+loqi -e 'print(ai("one word for the mood of: it works"))'   # inline program
+loqi extract.lq                                        # reads stdin, writes stdout
+loqi                                                   # REPL
+```
+
+**Try it without spending a cent.** `--dry-run` stubs every model call so you can wire
+up and test the pipe, and `--limit N` caps how many real calls a run may make (the
+same guards exist as `LOQI_AI_DRY_RUN` and `LOQI_AI_MAX_CALLS`):
+
+```sh
+cat tickets.txt | loqi --dry-run extract.lq      # no API calls, exercises the pipe
+cat tickets.txt | loqi --limit 5 extract.lq      # stop after 5 real model calls
+```
+
+Other flags:
+
+```sh
+loqi --help        # usage and flags
+loqi --version     # version string
+```
+
+Exit codes are pipe-friendly: `0` success, `64` usage error, `65` a syntax/compile error, `70` a runtime error (where a row that fails schema
+validation lands, with the offending field named), `74` an I/O error. A non-zero
+exit means the structured output is not trustworthy, so a failing run never silently
+feeds garbage downstream.
+
+## Also in the language
+
+Loqi (from Latin *loqui*, "to speak") is a real, small, memory-safe language, not a
+single CLI flag. The extraction job is the point, but the surface underneath it is a
+genuine programming language:
+
+- **Modern syntax**: `let`/`const`, `fn`, arrow functions (`x => x * 2`), `if`/`match`
+  as expressions, the pipe `|>`, null-safety (`?.`/`??`), string interpolation `{}`,
+  modules, `try`/`catch`, implicit line continuation. No semicolons, no ceremony.
+- **AI layer**: `ai(prompt, opts)` for a plain answer, `ai_json(prompt, schema, opts)`
+  for schema-validated structured output with auto-retry, `ai_all(prompts)` to run
+  calls in parallel and get answers back in order. Pass `{ usage: true }` in opts to
+  get token counts back.
+- **Schema constraints**: `type`, `enum`, `required`, `fields`, `items`, `pattern`,
+  `min_length`/`max_length`, `min`/`max`. Validate any value yourself with
+  `json.validate(value, schema)`.
+- **Data and I/O**: `json.parse`/`json.stringify`, `http.get`/`http.post`/`http.serve`,
+  plus collections, math, and the usual standard library.
+- **RAG helpers**: `similarity`, `topk`, `normalize` for ranking and retrieval.
+- **Linear-time regex**: a Thompson-NFA engine that cannot catastrophically backtrack,
+  so a crafted input can't trigger ReDoS (no `{n,m}` repetition yet).
+- **Best-in-class errors**: syntax *and* runtime errors report `file:line:column`,
+  print the offending source line, and underline the exact spot with a `^` caret.
+
+A taste, past the one job:
 
 ```loqi
 let nums = [1, 2, 3, 4, 5]
-
-# arrow functions keep callbacks tiny
-let squares = map(nums, x => x * x)
-print(squares)                                            # [1, 4, 9, 16, 25]
-print("sum of evens: {sum(filter(nums, x => x % 2 == 0))}")  # 6
-
-# `if` and `match` are expressions, no ternary needed
+let squares = map(nums, x => x * x)         # [1, 4, 9, 16, 25]
 let parity = n => if n % 2 == 0 { "even" } else { "odd" }
-print(map(nums, parity))                                  # [odd, even, odd, even, odd]
 
-# maps iterate cleanly; interpolation accepts any expression
-let user = { name: "Ada", role: "engineer" }
-for key in user {
-  print("{key} -> {user[key]}")
-}
+let labels = ai_all(map(["love it", "broke on day one"], r => "Sentiment in one word: {r}"))
+for l in labels { print(trim(l)) }          # all calls overlap, ~1 call's latency
 ```
 
-**Pattern matching and error handling that doesn't bite.**
+The runtime stays single-threaded (your logic is never racy); only the blocking I/O in
+`ai_all` overlaps. See [`docs/LANGUAGE.md`](docs/LANGUAGE.md) for the full reference.
 
-```loqi
-fn classify(n) {
-  match n {
-    0:       { return "zero" }
-    1, 2, 3: { return "small" }
-    _:       { return "large" }
-  }
-}
+## Status
 
-# errors are values you handle, not crashes you fear
-let config = { theme: "dark" }
-try {
-  config = json.parse(read("config.json"))
-} catch e {
-  print("config.json missing, using defaults ({e})")
-}
-print(classify(len(keys(config))))
-```
+**v0.2, small but real, and it does what it says.** A single-pass bytecode compiler and
+stack VM with a precise mark-and-sweep garbage collector, all in dependency-free C11,
+built with nothing but `clang`. Memory-safe and leak-clean under AddressSanitizer and
+UBSan; CI-green on macOS arm64 and Linux (glibc); roughly CPython-class speed with
+instant startup.
 
-**AI-native: typed, schema-validated data straight out of a model, no SDK, no glue.**
-
-Getting reliable structured data out of an LLM is the #1 chore in AI apps. In Loqi it's
-one call: `ai_json` shows the model your schema, parses the reply (markdown fences and
-all), **validates it against the schema, and retries once** if it doesn't conform.
-
-```loqi
-let text = "Ada Lovelace, born 1815, is regarded as the first programmer."
-
-let schema = {
-  type: "object",
-  fields: {
-    name:       { type: "string" },
-    birth_year: { type: "int" },
-  },
-  required: ["name", "birth_year"],
-}
-
-let person = ai_json("Extract the person from: {text}", schema)
-print("{person.name} was born in {person.birth_year}")   # Ada Lovelace was born in 1815
-```
-
-Prefer a plain answer? `ai("...")`. Need options? `ai(prompt, { model, system,
-temperature, max_tokens, json })`. Validate any value yourself with
-`json.validate(value, schema)`. See [`examples/ai/extract.lq`](examples/ai/extract.lq).
-
-**Call the model in parallel.** Slow model calls are the bottleneck in AI work, so
-fanning them out is built in, `ai_all` runs them concurrently and returns the
-answers in order:
-
-```loqi
-let reviews = ["Love it!", "Broke on day one.", "It's fine, nothing special."]
-let prompts = map(reviews, r => "Sentiment in one word: {r}")
-
-let labels = ai_all(prompts)            # all calls overlap, ~1 call's latency, not N
-for l in labels { print(trim(l)) }      # Positive / Negative / Mixed
-```
-
-The runtime stays single-threaded (your logic is never racy); only the blocking
-I/O overlaps. The same trick works for any commands via `run_all`. See
-[`examples/ai/parallel.lq`](examples/ai/parallel.lq).
-
-**Split your program into modules.**
-
-```loqi
-# geometry.lq
-let PI = 3.14159
-fn area(r) { return PI * r * r }
-```
-
-```loqi
-# main.lq, import paths resolve relative to this file, so it runs from anywhere
-import "geometry.lq" as geo
-
-print("circle area: {geo.area(2)}")                      # circle area: 12.56636
-print("module's pi: {geo.PI}")                           # module's pi: 3.14159
-```
-
-## Loqi vs Python
-
-The same everyday AI task, *extract structured, typed data from text*, in both
-languages. It's the job at the heart of most AI apps, and it's where "batteries
-included" stops being a slogan.
-
-**Python**, install an SDK, build the client, hand-craft the prompt, strip the
-markdown fences the model adds, parse, and validate the shape yourself:
-
-```python
-import os, json, anthropic                       # pip install anthropic
-
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-text = "Ada Lovelace, born 1815, is regarded as the first programmer."
-
-resp = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=1024,
-    messages=[{"role": "user", "content":
-        f'Extract JSON {{"name": str, "birth_year": int}} from: {text}. Return only JSON.'}],
-)
-raw = resp.content[0].text.strip()
-if raw.startswith("```"):                          # models love to add code fences
-    raw = raw.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
-data = json.loads(raw)                             # may throw on bad JSON
-if not isinstance(data.get("birth_year"), int):   # validate the shape yourself
-    raise ValueError("birth_year missing or not an int")
-print(data["name"], data["birth_year"])
-```
-
-**Loqi**, the model call, JSON, fence-stripping, schema validation, and a retry are
-*the language*:
-
-```loqi
-let text = "Ada Lovelace, born 1815, is regarded as the first programmer."
-let schema = {
-  type: "object",
-  fields: { name: { type: "string" }, birth_year: { type: "int" } },
-  required: ["name", "birth_year"],
-}
-let p = ai_json("Extract the person from: {text}", schema)
-print(p.name, p.birth_year)                        # Ada Lovelace 1815
-```
-
-No SDK, no client object, no fence-stripping, no manual validation, no retry loop
-(rate limits and transient 5xx are retried with backoff for you), and the result is
-**guaranteed** to match the schema or it raises. Same story for
-fetching (`http.get`), parsing (`json.parse`), parallel calls (`ai_all`), and
-semantic search (`topk`): in Python each is a dependency and some glue; in Loqi each
-is one built-in.
-
-## What makes Loqi different
-
-Other languages bolt AI on through libraries. Loqi builds it into the core, and pairs
-it with a small, modern, memory-safe runtime:
-
-- **The AI layer *is* the language.** `ai`, `ai_json` (schema-validated output),
-  `ai_all` (parallel calls), `similarity`, `topk`, `normalize`, `json`, `http` are
-  built-ins, not packages, clients, or glue. The thing every AI app does on line one
-  is already done.
-- **Structured output that's actually reliable.** `ai_json(prompt, schema)` validates
-  the model's answer against your schema and retries on a miss. The single biggest
-  source of flaky AI code, "the model returned almost-JSON", is handled by the
-  runtime, not your error handling.
-- **Parallel agents without the ceremony.** `ai_all` fans slow model calls out across
-  a thread pool and returns answers in order, while your code stays single-threaded
-  and race-free. No async colouring, no event loop, no GIL workaround.
-- **An agent endpoint is one built-in.** `http.serve(port, handler)` makes a webhook,
-  agent, or API a Loqi program end to end, request → `ai()` → JSON response, no web
-  framework. An uncaught error in a handler becomes a `500` and the server keeps
-  serving, so one bad request never takes the service down.
-- **RAG without a vector database.** `similarity` + `topk` + `normalize` are enough to
-  embed, rank, and retrieve in a few lines, semantic search is a language feature.
-- **Safer text processing.** The `regex` engine is a linear-time Thompson NFA: it
-  **cannot** catastrophically backtrack, so the ReDoS that hangs Python/JS/Java/PCRE
-  on a crafted input simply can't happen here.
-- **Errors that point at the problem.** A syntax error reports `file:line:column`,
-  prints the offending source line, and underlines the exact spot with a `^` caret
-  (Rust/Elm style); runtime errors carry a full backtrace and the offending line.
-  Recoverable with `try`/`catch`, so one bad input or failed call never kills the run.
-- **Modern, expression-oriented surface.** Arrow functions (`x => x*2`), `if`/`match`
-  as expressions, the pipe `|>`, null-safety (`?.`/`??`), ranges, string interpolation:
-  concise to read and write, no semicolons, no ceremony.
-- **Memory-safe and honest.** A precise mark-and-sweep GC, **leak-clean and clean
-  under AddressSanitizer/UBSan**, every feature hardened by an adversarial multi-agent
-  code review. Dependency-free C11 in one file, built with nothing but `clang`.
-
-In short: the things that make AI software tedious and fragile in other languages,
-SDK setup, fence-stripping, schema validation, retries, parallel fan-out, vector
-search, ReDoS-safe parsing, are first-class here, in a language that stays small,
-fast, and safe.
+Honest about the edges: `ai_all` batches calls, it does not stream tokens. There are no
+embeddings, no sandbox, no Windows build, and no package manager. Every claim here is
+backed by code, tests, and an honest [ROADMAP](docs/ROADMAP.md).
 
 ## Documentation
 
 - **[Language guide](docs/LANGUAGE.md)**, the full language reference.
 - **[Standard library](docs/STDLIB.md)**, every built-in (incl. the AI layer), with examples.
 - **[Cheatsheet](docs/CHEATSHEET.md)**, the whole language on one page.
-- **[Why Loqi](docs/WHY-LOQI.md)**, the positioning and the bet.
-- **[Comparison](docs/COMPARISON.md)**, Loqi vs Python, JS/Node, Go, Rust, Mojo (honest).
 - **[Roadmap & engineering log](docs/ROADMAP.md)**, what's done, what's next, honest benchmarks.
-- **[Examples](examples/)**, runnable `.lq` programs (`examples/ai/` for AI demos).
+- **[Examples](examples/)**, runnable `.lq` programs ([`examples/ai/extract.lq`](examples/ai/extract.lq) is the flagship).
 
 ## Project layout
 
 ```
-src/loqi.c        the language implementation (lexer, parser, bytecode compiler, VM)
+src/loqi.c        the language implementation (lexer, parser, bytecode compiler, VM, GC, stdlib)
 scripts/build.sh  build script (release / debug with ASan + UBSan)
 scripts/test.sh   test runner
 examples/         runnable example programs (examples/ai/ for AI demos)
 tests/            test suite (incl. error-handling tests)
-docs/             language guide, stdlib reference, roadmap, comparison
+docs/             language guide, stdlib reference, cheatsheet, roadmap
 web/              landing page + SEO assets (deployed to GitHub Pages)
 editors/          editor syntax highlighting (TextMate grammar)
 ```

@@ -21,7 +21,7 @@ suite cleanly under AddressSanitizer/UBSan before it lands.
 | `src/loqi.c` | the whole implementation: lexer → parser → AST → bytecode compiler → VM |
 | `tests/` | `.lq` programs that assert behaviour (exit non-zero on failure) |
 | `examples/` | runnable showcase programs |
-| `docs/` | language guide, stdlib reference, comparison, roadmap |
+| `docs/` | language guide, stdlib reference, cheatsheet, roadmap |
 | `editors/` | TextMate grammar for syntax highlighting |
 
 The source file is organized top-to-bottom in pipeline order with banner

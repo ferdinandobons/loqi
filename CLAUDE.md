@@ -81,7 +81,7 @@ src/loqi.c   the whole language (lexer, parser, bytecode compiler, VM, GC, stdli
 scripts/     build.sh (release / debug=ASan+UBSan), test.sh
 tests/       test_*.lq, errors/*.lq (exit-code tests), fixtures/
 examples/    runnable .lq programs (examples/ai/ for AI demos, need a key)
-docs/        LANGUAGE, STDLIB, CHEATSHEET, COMPARISON, WHY-LOQI, ROADMAP
+docs/        LANGUAGE, STDLIB, CHEATSHEET, ROADMAP
 web/         landing page + SEO assets (GitHub Pages)
 editors/     TextMate grammar for syntax highlighting
 ```

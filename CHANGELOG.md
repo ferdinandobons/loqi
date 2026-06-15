@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+
+### Changed, product pivot: jq for the text only an LLM can parse
+- **Repositioned around one job.** Loqi is now presented as a single static binary that
+  turns messy text into schema-validated NDJSON in one pipe stage
+  (`cat tickets.txt | loqi extract.lq > tickets.ndjson`), validated-or-fails. The
+  README, landing page (`web/index.html`), `web/llms.txt`, `web/og.svg` and the docs now
+  lead with the extraction job instead of "the AI-first programming language". The
+  language reference (`docs/LANGUAGE.md`, `docs/STDLIB.md`, `docs/CHEATSHEET.md`,
+  `docs/ROADMAP.md`) is unchanged in substance but reframed to lead with the job; RAG
+  (`similarity`/`topk`/`normalize`), `http.serve` and modules are demoted to an
+  "Also in the language" mention.
+- **Perf reframed.** "Fast on Apple Silicon" is replaced everywhere by "instant startup,
+  single static binary, macOS arm64 + Linux"; the honest fib(30)/loop benchmark is kept
+  only in `docs/ROADMAP.md`.
+
+### Added, the extraction pipeline (the product surface)
+- **`stdin()` + `lines()`**, the pipe filter: read standard input and iterate it line by
+  line (`for line in lines(stdin())`).
+- **`ai_json(prompt, schema[, options])`**, schema-validated structured output with one
+  automatic retry, the flagship call. `options` takes `model` and `temperature` (use
+  `temperature: 0` for deterministic rows).
+- **`ai_all(prompts)`**, parallel model calls returned in input order (batched, not
+  streamed).
+- **`{ usage: true }`** on `ai`/`ai_all` for per-call token counts.
+- **Schema constraints**: `type`, `enum`, `required`, `fields`, `items`, `pattern`,
+  `min_length`/`max_length`, `min`/`max`.
+- **Spend guard**: `LOQI_AI_DRY_RUN`, `LOQI_AI_MAX_CALLS`, and the CLI `--dry-run` /
+  `--limit`, plus the documented `head -N | loqi extract.lq` idiom, so a fat-fingered
+  `cat hugefile | loqi` can't quietly bill a fortune.
+- **Linux support**: builds and CI green on macOS arm64 AND Linux (glibc), in addition
+  to the existing memory-safety gates (ASan/UBSan/leaks clean). Runtime deps: `curl` and
+  `ANTHROPIC_API_KEY`.
+
+### Removed
+- **`docs/WHY-LOQI.md`** (the old "AI-first programming language" manifesto, wrong
+  audience) and **`docs/COMPARISON.md`** (general-language duel vs Go/Rust/Mojo). Their
+  value moves into the README as a tight niche comparison table (vs jq / grep+awk /
+  Python+SDK / `llm` / `mods`). All references in `README.md`, `web/llms.txt`,
+  `CONTRIBUTING.md` and `CLAUDE.md` are updated to no longer point at them.
+
 ### Renamed
 - **Lume → Loqi.** "Lume" was already taken (an AI-first language, a Rust language,
   and a `lume` CLI). After live availability research, the project is now **Loqi**

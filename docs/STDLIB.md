@@ -1,8 +1,10 @@
 # Loqi Standard Library
 
-Everything here is **built in**, always available, no import, no packages. This
-is the "batteries included" core, including the **AI-native layer** (`ai`, `json`,
-`http`, ...) that you would otherwise assemble from separate libraries.
+Everything here is **built in**, always available, no import, no packages. The one job
+is text extraction (`stdin`/`lines` + `ai_json` + `json` make `cat data | loqi
+extract.lq > out.ndjson` a one-liner), and the same core gives you the rest of a real
+standard library: the AI layer (`ai`, `ai_json`, `ai_all`), `json`, `http`, strings,
+collections, math, and RAG helpers, with nothing to assemble from separate libraries.
 
 ## Conventions
 

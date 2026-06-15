@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Loqi, The AI-first language</title>
-<meta name="description" content="Loqi is the AI-first programming language: the LLM call, schema-validated structured output, parallel model calls and vector search (RAG) are built into the runtime, not SDKs you install like in Python or JS. Plus JSON, HTTP and a ReDoS-proof regex. Memory-safe, fast on Apple Silicon, one binary." />
-<meta name="keywords" content="Loqi, AI-first programming language, AI language, LLM programming language, json built-in, http built-in, ai() function, Apple Silicon language, bytecode VM, dependency-free" />
+<title>Loqi: jq for the text only an LLM can parse</title>
+<meta name="description" content="Loqi is jq for text. One static binary turns messy text into schema-validated NDJSON in a single pipe: cat tickets.txt | loqi extract.lq. Typed, validated, parallel." />
+<meta name="keywords" content="Loqi, jq for text, LLM text extraction, structured output, JSON schema, NDJSON, ai_json, data extraction, command-line, unix pipe, single binary, schema validation" />
 <meta name="author" content="Loqi contributors" />
 <meta name="theme-color" content="#0e0e10" />
 <meta name="robots" content="index, follow, max-image-preview:large" />
@@ -15,15 +15,15 @@
 <!-- Open Graph -->
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Loqi" />
-<meta property="og:title" content="Loqi, the AI-first programming language" />
-<meta property="og:description" content="ai(), json, http and similarity are built into the language. Simple to read, fast on Apple Silicon, one binary, no dependency hell." />
+<meta property="og:title" content="Loqi: jq for the text only an LLM can parse" />
+<meta property="og:description" content="cat tickets.txt | loqi extract.lq &gt; tickets.ndjson. One static binary that turns messy text into schema-validated NDJSON. Typed, validated-or-fails, parallel. macOS and Linux." />
 <meta property="og:url" content="https://ferdinandobons.github.io/loqi/" />
 <meta property="og:image" content="https://ferdinandobons.github.io/loqi/og.svg" />
 
 <!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Loqi, the AI-first programming language" />
-<meta name="twitter:description" content="ai(), json, http and similarity are built into the language. Fast on Apple Silicon, single binary, no dependency hell." />
+<meta name="twitter:title" content="Loqi: jq for the text only an LLM can parse" />
+<meta name="twitter:description" content="One static binary that turns messy text into schema-validated NDJSON in a single pipe. Typed, validated-or-fails, parallel. macOS and Linux." />
 <meta name="twitter:image" content="https://ferdinandobons.github.io/loqi/og.svg" />
 
 <!-- Structured data: software + FAQ (boosts AI-search citation) -->
@@ -34,13 +34,13 @@
     {
       "@type": "SoftwareSourceCode",
       "name": "Loqi",
-      "description": "An AI-first programming language with ai(), JSON, HTTP and vector similarity built into the runtime. Implemented in dependency-free C as a bytecode VM; fast on Apple Silicon.",
+      "description": "Loqi turns messy text into schema-validated NDJSON in a single pipe stage (cat tickets.txt | loqi extract.lq), the way jq transforms structured JSON. A small language and a single static binary: it reads stdin, calls ai_json(prompt, schema) to extract typed fields, and prints one validated row per line, or fails naming the field that broke.",
       "url": "https://ferdinandobons.github.io/loqi/",
       "codeRepository": "https://github.com/ferdinandobons/loqi",
       "programmingLanguage": "C",
-      "runtimePlatform": "macOS (Apple Silicon)",
+      "runtimePlatform": "macOS (Apple Silicon), Linux",
       "license": "https://opensource.org/licenses/MIT",
-      "keywords": "AI-first language, LLM, JSON, HTTP, bytecode VM, Apple Silicon"
+      "keywords": "jq for text, LLM text extraction, structured output, NDJSON, JSON schema, command-line, single binary, schema validation"
     },
     {
       "@type": "FAQPage",
@@ -48,22 +48,22 @@
         {
           "@type": "Question",
           "name": "What is Loqi?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Loqi is an AI-first programming language: calling a large language model with ai(), parsing JSON, making HTTP requests, and computing vector similarity are built into the language and its runtime, not separate packages. It is implemented in dependency-free C as a bytecode virtual machine and is on par with CPython on recursion and about 1.4x faster on tight loops." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Loqi is a command-line tool for turning messy, unstructured text into schema-validated NDJSON in a single pipe stage, the way jq transforms structured JSON. You write a short .lq script that reads stdin line by line, calls ai_json(prompt, schema) to extract typed fields with an LLM, and prints one validated JSON object per line: cat tickets.txt | loqi extract.lq > tickets.ndjson. Every row is checked against your schema and the model is auto-retried; if a row cannot be made to validate, the run fails naming the field that broke, so the next stage never gets garbage. It ships as a single static binary with instant startup on macOS and Linux; the only runtime needs are curl and an ANTHROPIC_API_KEY." }
         },
         {
           "@type": "Question",
-          "name": "What makes Loqi AI-first?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Loqi ships ai(prompt), json.parse/json.stringify, http.get/http.post, similarity(), env, read and write as built-ins. You write an AI program without installing an HTTP client, a JSON library, or an LLM SDK, and without a virtualenv or node_modules." }
+          "name": "How is Loqi different from jq, grep/awk, or Python plus an SDK?",
+          "acceptedAnswer": { "@type": "Answer", "text": "jq needs structured input; Loqi produces the structure from prose. grep and awk match and slice text but cannot reason about it. Python plus an SDK drags a virtualenv, pip install and import boilerplate into what should be one pipe stage, then you hand-roll the client, JSON parsing, schema check and retries. Loqi bakes typed, validated-or-fails, parallel extraction into one static binary where the script itself is the filter." }
         },
         {
           "@type": "Question",
           "name": "How fast is Loqi?",
-          "acceptedAnswer": { "@type": "Answer", "text": "On fib(30) Loqi runs in about 0.097s versus CPython 3.13 at 0.094s (on par), and on a 50-million-iteration loop Loqi is about 1.4x faster than CPython. It does not yet JIT, so V8 is faster on micro-benchmarks. Loqi is built in C with a stack bytecode VM and compiled with -O3 for Apple Silicon." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Loqi is a single static binary with instant startup (no virtualenv or import cost) on macOS arm64 and Linux. The interpreter is a stack bytecode VM in C, roughly CPython-class on compute, but for a text-extraction pipe the time is dominated by the model calls, which Loqi runs in parallel with ai_all." }
         },
         {
           "@type": "Question",
           "name": "How do I install Loqi?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Clone the repository from github.com/ferdinandobons/loqi and run ./scripts/build.sh, which produces ./build/loqi using clang. The only requirement is the macOS Xcode Command Line Tools." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Clone github.com/ferdinandobons/loqi and run ./scripts/build.sh, which produces ./build/loqi with clang. It builds on macOS (Xcode Command Line Tools) and Linux. At runtime it needs curl on PATH and, for model calls, an ANTHROPIC_API_KEY." }
         }
       ]
     }
@@ -524,10 +524,10 @@
   <div class="wrap">
     <div class="hero-grid">
       <div class="hero-copy">
-        <span class="eyebrow"><span class="dot"></span> AI is a keyword, not an SDK</span>
-        <h1>The <span class="accent">AI-first</span> language.</h1>
-        <p class="lede">In Python or JS, talking to a model is an SDK you install and glue together. In Loqi it <strong>is the language</strong>: LLM calls, schema-validated output, parallel calls and vector search (RAG) are built into the runtime, alongside JSON, HTTP and a ReDoS-proof regex. Simple to read, fast on Apple Silicon.</p>
-        <p class="valueprop">$ one binary. no SDK. no venv. no node_modules.</p>
+        <span class="eyebrow"><span class="dot"></span> jq for the text only an LLM can parse</span>
+        <h1>Messy text in. <span class="accent">Validated JSON</span> out.</h1>
+        <p class="lede">One static binary that turns messy, human-written text into schema-validated NDJSON in a single pipe stage. The script <strong>is</strong> the filter: it reads stdin, asks an LLM for typed fields, and prints one validated row per line. Every row matches your schema or the run fails naming the field that broke, so the next pipe stage never sees garbage.</p>
+        <p class="valueprop">$ cat tickets.txt | loqi extract.lq &gt; tickets.ndjson</p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="#install">
             Get started
@@ -555,21 +555,22 @@
       </div>
 
       <!-- HERO CODE: SNIPPET-WEB -->
-      <div class="code-card" aria-label="Loqi code example: fetch, parse JSON, summarize with AI">
+      <div class="code-card" aria-label="Loqi example: extract validated NDJSON from messy text">
         <div class="code-head">
           <span class="dots"><i></i><i></i><i></i></span>
-          <span class="fname">repo_stars.lq</span>
+          <span class="fname">extract.lq</span>
           <button class="copy" data-copy="hero-code" aria-label="Copy code">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" stroke="currentColor" stroke-width="1.4"/></svg>
             Copy
           </button>
         </div>
-        <pre><code id="hero-code"><span class="tc"># fetch, parse JSON, and summarize, all built in</span>
-<span class="tk">let</span> <span class="ti">repo</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="tb">http</span><span class="tp">.</span><span class="tf">get</span><span class="tp">(</span><span class="ts">"https://api.github.com/repos/python/cpython"</span><span class="tp">))</span>
-<span class="tf">print</span><span class="tp">(</span><span class="ts">"{repo.full_name}: {repo.stargazers_count} stars"</span><span class="tp">)</span>
+        <pre><code id="hero-code"><span class="tc"># one record per input line, type-checked against your schema</span>
+<span class="tk">let</span> <span class="ti">schema</span> <span class="tp">=</span> <span class="tp">{</span> <span class="ti">type</span><span class="tp">:</span> <span class="ts">"object"</span><span class="tp">,</span> <span class="ti">required</span><span class="tp">:</span> <span class="tp">[</span><span class="ts">"id"</span><span class="tp">,</span> <span class="ts">"severity"</span><span class="tp">],</span>
+  <span class="ti">fields</span><span class="tp">:</span> <span class="tp">{</span> <span class="ti">id</span><span class="tp">:</span> <span class="tp">{</span> <span class="ti">type</span><span class="tp">:</span> <span class="ts">"int"</span> <span class="tp">},</span> <span class="ti">severity</span><span class="tp">:</span> <span class="tp">{</span> <span class="ti">type</span><span class="tp">:</span> <span class="ts">"string"</span><span class="tp">,</span> <span class="ti">enum</span><span class="tp">:</span> <span class="tp">[</span><span class="ts">"low"</span><span class="tp">,</span> <span class="ts">"high"</span><span class="tp">]</span> <span class="tp">}</span> <span class="tp">}</span> <span class="tp">}</span>
 
-<span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Write a haiku about clean code"</span><span class="tp">)</span>
-<span class="tf">print</span><span class="tp">(</span><span class="ti">poem</span><span class="tp">)</span></code></pre>
+<span class="tk">for</span> <span class="ti">line</span> <span class="tk">in</span> <span class="tf">lines</span><span class="tp">(</span><span class="tf">stdin</span><span class="tp">())</span> <span class="tp">{</span>
+  <span class="tf">print</span><span class="tp">(</span><span class="tb">json</span><span class="tp">.</span><span class="tf">stringify</span><span class="tp">(</span><span class="tf">ai_json</span><span class="tp">(</span><span class="ts">"Extract id, severity from:\n{line}"</span><span class="tp">,</span> <span class="ti">schema</span><span class="tp">)))</span>
+<span class="tp">}</span></code></pre>
       </div>
     </div>
   </div>
@@ -582,8 +583,8 @@
   <div class="wrap">
     <div class="section-head">
       <div class="kicker">Why Loqi</div>
-      <h2>Built for people gluing an LLM SDK to an HTTP lib to a JSON lib.</h2>
-      <p>You like Python's readability but want a single fast binary. Loqi puts the whole AI toolchain inside the language.</p>
+      <h2>The extraction step shouldn't need a virtualenv.</h2>
+      <p>You have prose on stdin and you want typed JSON on stdout. Loqi makes that one pipe stage: a short script, a schema, one static binary.</p>
     </div>
     <div class="why-grid">
 
@@ -591,24 +592,24 @@
         <div class="why-icon">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l1.8 5.4L19 10l-4.5 2.3L13 18l-1-4.5L7 12l4.2-1.3L12 3z" stroke="#f5b942" stroke-width="1.6" stroke-linejoin="round"/><circle cx="18.5" cy="5.5" r="1.3" fill="#f5b942"/></svg>
         </div>
-        <h3>AI is in the language</h3>
-        <p><code>ai(prompt)</code> is a first-class call, not a bolted-on package. It speaks to the Anthropic Messages API, reads <code>ANTHROPIC_API_KEY</code>, and defaults to a sensible model you can override per call.</p>
+        <h3>Validated, or it fails</h3>
+        <p><code>ai_json(prompt, schema)</code> returns typed fields, retried against the model, or the run exits naming the field that broke. The next stage in your pipe never gets garbage.</p>
       </div>
 
       <div class="why-card">
         <div class="why-icon">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="9" width="16" height="9" rx="2" stroke="#f5b942" stroke-width="1.6"/><path d="M8 9V7a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="#f5b942" stroke-width="1.6"/><path d="M9 13.5h2M14 13.5h1" stroke="#f5b942" stroke-width="1.6" stroke-linecap="round"/></svg>
         </div>
-        <h3>Batteries included</h3>
-        <p>One binary, no dependency hell. JSON, HTTP, vector similarity, file and env I/O, plus 25+ core built-ins ship inside the runtime. Nothing to <code>pip install</code>, nothing to vendor.</p>
+        <h3>One binary in your pipe</h3>
+        <p>Reads stdin, writes one JSON object per line. Composes with <code>jq</code>, <code>grep</code>, <code>sort</code> and <code>xargs</code>. Nothing to <code>pip install</code>, no virtualenv, no SDK to vendor.</p>
       </div>
 
       <div class="why-card">
         <div class="why-icon">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z" stroke="#f5b942" stroke-width="1.6" stroke-linejoin="round"/></svg>
         </div>
-        <h3>Reads like Python, runs native</h3>
-        <p>Clean, readable syntax with no semicolons and string interpolation, compiled to bytecode for a stack VM. One fast native binary on Apple Silicon, and getting faster each iteration.</p>
+        <h3>Parallel by default</h3>
+        <p><code>ai_all</code> fires prompts concurrently, so a 10k-line file isn't 10k sequential round-trips. The slow part is the network, and Loqi overlaps it.</p>
       </div>
 
     </div>
@@ -622,8 +623,8 @@
   <div class="wrap">
     <div class="section-head">
       <div class="kicker">Batteries included</div>
-      <h2>The whole AI toolchain, as built-ins.</h2>
-      <p>No installs, no SDK, no virtualenv. These all live in the runtime and work out of the box.</p>
+      <h2>Everything the extraction job needs, in the binary.</h2>
+      <p>The model call, the JSON codec, the HTTP client, vector search and file/env I/O all live in the runtime. No installs, no SDK, no virtualenv.</p>
     </div>
 
     <div class="bat-grid">
@@ -700,8 +701,8 @@
     <div class="bench">
       <div class="bench-copy">
         <div class="kicker">Honest about speed</div>
-        <h2>Python-class speed, often faster on loops.</h2>
-        <p>Measured on Apple Silicon with <code>process_time</code>. On <code>fib(30)</code> Loqi is on par with CPython 3.13. On a tight loop to 50M, Loqi is about 1.4&times; faster than CPython, and roughly 5&times; faster than Loqi's own first tree-walking interpreter.</p>
+        <h2>Instant startup, Python-class compute.</h2>
+        <p>For a text-extraction pipe the wall-clock is dominated by model calls, which Loqi overlaps with <code>ai_all</code>. The interpreter is a stack bytecode VM: measured on Apple Silicon with <code>process_time</code>, on par with CPython 3.13 on <code>fib(30)</code> and about 1.4&times; faster on a tight loop to 50M. No virtualenv to spin up, no JIT to warm: the binary starts and the pipe runs.</p>
         <div class="honest">
           <strong>The honest part:</strong> Node/V8 runs <code>fib(30)</code> faster (0.017s) because it JITs. Loqi does not JIT <em>yet</em>. We do not claim to beat Go, Rust, C or Node, just a single compiled binary with Python-class speed that gets faster each iteration.
         </div>
@@ -775,9 +776,11 @@
           <span class="ex-title">extract.lq</span>
           <span class="ex-tag">ai + json</span>
         </div>
-        <pre><code><span class="tc"># ask the model for JSON, then parse it natively</span>
-<span class="tk">let</span> <span class="ti">data</span> <span class="tp">=</span> <span class="tb">json</span><span class="tp">.</span><span class="tf">parse</span><span class="tp">(</span><span class="tf">ai</span><span class="tp">(</span><span class="ts">"Extract name and year as JSON from: "</span> <span class="tp">+</span> <span class="ti">text</span><span class="tp">))</span>
-<span class="tf">print</span><span class="tp">(</span><span class="ti">data</span><span class="tp">.</span><span class="ti">name</span><span class="tp">)</span></code></pre>
+        <pre><code><span class="tc"># prose in, typed + validated JSON out</span>
+<span class="tk">let</span> <span class="ti">schema</span> <span class="tp">=</span> <span class="tp">{</span> <span class="ti">type</span><span class="tp">:</span> <span class="ts">"object"</span><span class="tp">,</span>
+  <span class="ti">fields</span><span class="tp">:</span> <span class="tp">{</span> <span class="ti">name</span><span class="tp">:</span> <span class="tp">{</span> <span class="ti">type</span><span class="tp">:</span> <span class="ts">"string"</span> <span class="tp">},</span> <span class="ti">year</span><span class="tp">:</span> <span class="tp">{</span> <span class="ti">type</span><span class="tp">:</span> <span class="ts">"int"</span> <span class="tp">}</span> <span class="tp">}</span> <span class="tp">}</span>
+<span class="tk">let</span> <span class="ti">row</span> <span class="tp">=</span> <span class="tf">ai_json</span><span class="tp">(</span><span class="ts">"Extract name, year from: {text}"</span><span class="tp">,</span> <span class="ti">schema</span><span class="tp">)</span>
+<span class="tf">print</span><span class="tp">(</span><span class="tb">json</span><span class="tp">.</span><span class="tf">stringify</span><span class="tp">(</span><span class="ti">row</span><span class="tp">))</span></code></pre>
       </div>
 
       <!-- SNIPPET-JSON-RAW -->
@@ -804,7 +807,7 @@
       <div>
         <div class="kicker">Quickstart</div>
         <h2 style="font-size: clamp(28px,3.6vw,38px); line-height:1.12; margin-bottom:16px;">Up and running in three commands.</h2>
-        <p style="color:var(--text-dim); font-size:16px; margin:0 0 30px;">Built with nothing but <code>clang</code> at <code>-O3 -mcpu=apple-m1 -flto</code>. No package manager, no toolchain zoo. Clone, build, run.</p>
+        <p style="color:var(--text-dim); font-size:16px; margin:0 0 30px;">Built with nothing but <code>clang</code>, portable by default (<code>LOQI_NATIVE=1</code> for <code>-mcpu=apple-m1 -flto</code>). No package manager, no toolchain zoo. Clone, build, run.</p>
         <div class="steps">
           <div class="step">
             <div class="num">1</div>
@@ -863,19 +866,19 @@
     <div style="display:flex; flex-direction:column; gap:18px; max-width:820px;">
       <div class="code-card" style="padding:22px 24px;">
         <h3 style="font-size:19px; margin-bottom:8px;">What is Loqi?</h3>
-        <p style="color:var(--text-dim); margin:0;">Loqi is an AI-first programming language: calling an LLM with <code>ai()</code>, parsing JSON, making HTTP requests, and computing vector similarity are built into the language and its runtime, not separate packages. It's implemented in dependency-free C as a bytecode VM and is on par with CPython on recursion, ~1.4× faster on tight loops.</p>
+        <p style="color:var(--text-dim); margin:0;">A command-line tool that turns messy, unstructured text into schema-validated NDJSON in a single pipe stage, the way <code>jq</code> transforms structured JSON. A short <code>.lq</code> script reads stdin, calls <code>ai_json(prompt, schema)</code> to extract typed fields with an LLM, and prints one validated row per line: <code>cat tickets.txt | loqi extract.lq &gt; tickets.ndjson</code>. If a row can't be made to validate, the run fails naming the field that broke, so the next stage never gets garbage. One static binary, macOS and Linux.</p>
       </div>
       <div class="code-card" style="padding:22px 24px;">
-        <h3 style="font-size:19px; margin-bottom:8px;">What makes it AI-first?</h3>
-        <p style="color:var(--text-dim); margin:0;"><code>ai(prompt)</code>, <code>json.parse</code>/<code>json.stringify</code>, <code>http.get</code>/<code>http.post</code>, <code>similarity()</code>, <code>env</code>, <code>read</code> and <code>write</code> are built in. You write an AI program with no HTTP client, no JSON library, no LLM SDK, and no virtualenv or node_modules to install.</p>
+        <h3 style="font-size:19px; margin-bottom:8px;">How is it different from jq, grep/awk, or Python + an SDK?</h3>
+        <p style="color:var(--text-dim); margin:0;"><code>jq</code> needs structured input; Loqi <em>produces</em> the structure from prose. <code>grep</code> and <code>awk</code> match and slice text but can't reason about it. Python plus an SDK drags a virtualenv, <code>pip install</code> and import boilerplate into what should be one pipe stage, then you hand-roll the client, JSON parse, schema check and retries. Loqi bakes typed, validated-or-fails, parallel extraction into one binary where the script <em>is</em> the filter.</p>
       </div>
       <div class="code-card" style="padding:22px 24px;">
         <h3 style="font-size:19px; margin-bottom:8px;">How fast is it?</h3>
-        <p style="color:var(--text-dim); margin:0;">On <code>fib(30)</code>, Loqi runs in ~0.097s versus CPython 3.13's ~0.094s (on par); on a 50-million-iteration loop it's ~1.4× faster than CPython. It doesn't JIT yet, so V8 wins micro-benchmarks, that's the next speed iteration.</p>
+        <p style="color:var(--text-dim); margin:0;">A single static binary with instant startup (no virtualenv or import cost). The interpreter is a stack bytecode VM in C, roughly CPython-class on compute, but for a text-extraction pipe the time is dominated by the model calls, which Loqi runs in parallel with <code>ai_all</code>.</p>
       </div>
       <div class="code-card" style="padding:22px 24px;">
         <h3 style="font-size:19px; margin-bottom:8px;">How do I install it?</h3>
-        <p style="color:var(--text-dim); margin:0;">Clone <a href="https://github.com/ferdinandobons/loqi" style="color:var(--amber);">github.com/ferdinandobons/loqi</a> and run <code>./scripts/build.sh</code> (needs only the macOS Xcode Command Line Tools) to get <code>./build/loqi</code>.</p>
+        <p style="color:var(--text-dim); margin:0;">Clone <a href="https://github.com/ferdinandobons/loqi" style="color:var(--amber);">github.com/ferdinandobons/loqi</a> and run <code>./scripts/build.sh</code> to get <code>./build/loqi</code>. It builds on macOS and Linux. At runtime it needs <code>curl</code> and, for model calls, an <code>ANTHROPIC_API_KEY</code>.</p>
       </div>
     </div>
   </div>
@@ -897,8 +900,8 @@
           </svg>
           <span class="wordmark">Loqi</span>
         </a>
-        <p>The AI-first language, simple to read, fast on Apple Silicon. A brand-new language with its own grammar, parser and stack VM, built in dependency-free C11.</p>
-        <p class="foot-honest">Honest about limitations: no JIT yet (so V8 wins micro-benchmarks), Apple-Silicon-first, a young and small ecosystem, and <code>http</code>/<code>ai</code> shell out to <code>curl</code> today. Memory is reclaimed by a precise mark-sweep GC (leak-clean under ASan/UBSan). It's all on the public roadmap.</p>
+        <p>jq for the text only an LLM can parse: one static binary that turns messy text into schema-validated NDJSON in a single pipe stage. A small, memory-safe language with its own grammar, parser and stack VM, in dependency-free C11.</p>
+        <p class="foot-honest">Honest about limitations: <code>ai_all</code> batches calls, it does not stream tokens; no embeddings, no sandbox, no Windows build, no package manager; <code>http</code>/<code>ai</code> shell out to <code>curl</code>. Single static binary on macOS and Linux, memory-safe under ASan/UBSan. It's all on the public roadmap.</p>
       </div>
 
       <div class="foot-links">

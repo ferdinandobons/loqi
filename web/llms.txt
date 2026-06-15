@@ -1,44 +1,102 @@
 # Loqi
 
-> Loqi is an AI-first programming language: calling an LLM with `ai()`, parsing
-> JSON, making HTTP requests, and computing vector similarity are built into the
-> language and its runtime, not separate packages. It is implemented in
-> dependency-free C as a stack bytecode VM and is fast on Apple Silicon.
+> Loqi is jq for the text only an LLM can parse: a single static binary that turns
+> messy, human-written text into schema-validated NDJSON in one pipe stage. You write a
+> short .lq script that reads stdin, asks an LLM for typed fields, and prints one
+> validated JSON object per line. Each row matches your schema or the run fails with the
+> field that broke, so the next stage in your pipe never sees garbage.
 
-Loqi (from Latin *loqui*, "to speak") is designed for people building AI features
-who are tired of gluing together an HTTP library, a JSON library, an LLM SDK, and a
-virtualenv or node_modules. Reads like Python; ships as a single native binary.
-
-## Key facts
-
-- **AI-first built-ins:** `ai(prompt[, model])` calls a large language model
-  (Anthropic Messages API, `ANTHROPIC_API_KEY`); `json.parse` / `json.stringify`;
-  `http.get` / `http.post`; `similarity(a, b)` cosine similarity; `env`, `read`, `write`.
-- **Speed (measured, Apple Silicon):** `fib(30)` ≈ 0.097s vs CPython 3.13 ≈ 0.094s
-  (on par); a 50M-iteration loop ≈ 1.4x faster than CPython. No JIT yet, so V8 is
-  faster on micro-benchmarks. ~5x faster than Loqi's own first tree-walking interpreter.
-- **Implementation:** dependency-free C11, built with `clang -O3 -mcpu=apple-m1 -flto`.
-  Pipeline: lexer → Pratt parser → AST → single-pass bytecode compiler → stack VM
-  (stack-slot locals, hash-table globals, closures via upvalues).
-- **Language:** `let`/`fn`, closures, `if`/`while`/`for-in`, `match` pattern matching,
-  `try`/`catch` error handling, `"{interpolation}"` strings and `` `raw` `` strings,
-  `#` comments, no semicolons. Types: nil, bool, int (i64), float (f64), str, list, map, fn.
-- **Honest limitations:** no JIT yet, Apple-Silicon-first, young/small ecosystem,
-  `http`/`ai` shell out to `curl` today. (Memory IS reclaimed by a precise mark-sweep GC.)
-- **License:** MIT. **Repository:** https://github.com/ferdinandobons/loqi
-
-## Example
-
-```loqi
-let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
-print("{repo.full_name}: {repo.stargazers_count} stars")
-let summary = ai("Summarize in one line: {repo.description}")
-print(summary)
+```
+cat tickets.txt | loqi extract.lq > tickets.ndjson
 ```
 
-## Docs
+Where jq needs structured input, grep and awk cannot reason about prose, and Python plus
+an SDK drags a virtualenv and pip install into what should be one pipe stage, Loqi is the
+filter you drop in: typed, validated-or-fails, parallel, one binary. Instant startup on
+macOS (Apple Silicon) and Linux (glibc). Runtime needs: curl and ANTHROPIC_API_KEY.
 
+## The one job: messy text to validated NDJSON
+
+- **The script IS the filter.** `stdin()` reads the pipe, `lines(text)` splits it, you
+  loop and print one row per line. No framework, no glue.
+- **Validated-or-fails.** `ai_json(prompt, schema, opts?)` asks the model for JSON,
+  validates it against your schema, and auto-retries; if a row still cannot validate, the
+  run stops and tells you the exact field that broke (correct exit code, not garbage out).
+- **Typed schemas.** Constraints are checked at runtime: `type`, `enum`, `required`,
+  nested `fields`, `items` for lists, `pattern`, `min_length` / `max_length`, `min` / `max`.
+- **Reproducible by default.** Set `temperature: 0` in opts so the same input yields the
+  same row, and the next pipe stage stays deterministic.
+- **Parallel.** `ai_all(prompts)` runs many calls at once (batched, not streamed) so a
+  whole file of inputs comes back together; pass `{usage: true}` for token counts.
+- **Spend guard.** `LOQI_AI_DRY_RUN`, `LOQI_AI_MAX_CALLS`, and CLI `--dry-run` / `--limit`
+  cap calls before you point it at a large file.
+
+## Why not the tool you already use
+
+- **jq** is the model we copy: one pipe stage, the script is the filter. But jq only
+  transforms already-structured JSON. Loqi takes the unstructured text jq cannot.
+- **grep / awk** match and slice patterns; they cannot reason about prose a human wrote.
+- **Python + an SDK** can do it, but you pay a venv, a `pip install`, and import
+  boilerplate to put one model call in a pipe. Loqi is a single binary you drop in.
+- **Simon Willison's `llm`** is a rich pip-installed ecosystem for talking to models;
+  **charm `mods`** is a static Go binary for terminal chat. Loqi's wedge is narrower and
+  sharper: typed output, validated-or-fails, parallel, with the schema living in the script.
+
+## Example: the whole filter
+
+```loqi
+let schema = {
+  type: "object",
+  required: ["id", "severity", "summary"],
+  fields: {
+    id:       { type: "int", min: 1 },
+    severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    summary:  { type: "string", min_length: 3 },
+  },
+}
+let opts = { model: "claude-sonnet-4-6", temperature: 0 }
+
+for line in lines(stdin()) {
+  if trim(line) == "" { continue }
+  let row = ai_json("Extract id, severity and summary from this ticket:\n{line}", schema, opts)
+  print(json.stringify(row))   # one NDJSON line, validated
+}
+```
+
+```
+cat tickets.txt | loqi extract.lq > tickets.ndjson
+```
+
+## Also in the language
+
+Loqi is a real, small, readable language, not just a CLI flag. Beyond the extraction job
+it has: `let` / `const`, `fn` and arrow functions, `if` / `match` as expressions, the pipe
+operator `|>`, `?.` and `??`, string interpolation, modules, `try` / `catch`, and implicit
+line continuation. The stdlib includes `json.parse` / `json.stringify`, `http.get` /
+`http.post` / `http.serve`, RAG helpers (`similarity`, `topk`, `normalize`), and a
+linear-time, ReDoS-proof regex (no `{n,m}` repetition yet). These support the job; they are
+not the pitch.
+
+## Errors and safety
+
+- **Best-in-class errors.** Syntax and runtime errors point at `file:line:col` with a `^`
+  caret under the offending token.
+- **CLI.** Run a file, `-e` for an inline program, `--help`, `--version`. Exit codes are
+  meaningful: 0 ok, 64 usage, 65 syntax/compile, 70 runtime, 74 I/O. Easy to wire into a
+  pipeline or CI.
+- **Memory-safe.** ASan, UBSan and `leaks` clean; CI green on macOS arm64 and Linux (glibc).
+
+## Honest limits
+
+No streaming (`ai_all` batches), no embeddings, no sandboxing, no Windows, no package
+manager. Speed is roughly CPython-class; the point is instant startup and one static
+binary, not raw throughput.
+
+## Links
+
+- Repository: https://github.com/ferdinandobons/loqi
 - Language guide: https://github.com/ferdinandobons/loqi/blob/main/docs/LANGUAGE.md
 - Standard library: https://github.com/ferdinandobons/loqi/blob/main/docs/STDLIB.md
-- Comparison vs Python/JS/Go/Rust/Mojo: https://github.com/ferdinandobons/loqi/blob/main/docs/COMPARISON.md
-- Roadmap & benchmarks: https://github.com/ferdinandobons/loqi/blob/main/docs/ROADMAP.md
+- Cheatsheet: https://github.com/ferdinandobons/loqi/blob/main/docs/CHEATSHEET.md
+- Roadmap and benchmarks: https://github.com/ferdinandobons/loqi/blob/main/docs/ROADMAP.md
+- License: MIT

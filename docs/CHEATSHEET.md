@@ -1,8 +1,9 @@
 # Loqi Cheatsheet
 
-The AI-first language, simple to read, fast on Apple Silicon. One page, copy-pasteable.
-File extension `.lq`. Run with `loqi file.lq`. Comments start with `#`. No semicolons (a
-newline ends a statement; `;` also separates). Blocks use `{ }`.
+The language behind "jq for the text only an LLM can parse": small, readable, one page,
+copy-pasteable. File extension `.lq`. Run with `loqi file.lq` (or `cat data | loqi
+script.lq`). Comments start with `#`. No semicolons (a newline ends a statement; `;`
+also separates). Blocks use `{ }`.
 
 ## Variables
 

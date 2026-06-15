@@ -1,9 +1,14 @@
 # Loqi, Roadmap & Engineering Log
 
+Loqi's product is **"jq for the text only an LLM can parse"**: a single static binary
+that turns messy text into schema-validated NDJSON in one pipe stage. The plan to get
+there is `PRODUCT-PLAN.md`; this file is the honest engineering log behind it.
+
 Loqi is built in a deliberate loop: **build → measure → decide the next
-improvement → build again.** This document is the honest record of that loop.
-Each iteration states what was done, what the measurements showed, and what they
-imply for the next step.
+improvement → build again.** Each iteration below states what was done, what the
+measurements showed, and what they imply for the next step. (The earlier iterations
+were framed around "the AI-first language"; the capabilities are real, the product
+framing is now the extraction job above.)
 
 ## Feature status
 
