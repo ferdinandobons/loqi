@@ -605,6 +605,9 @@ static bool tok_continues_line(TokType t) {
 static Token lex_next(Lexer *L); /* wrapper below tracks the previous token */
 
 static Token lex_scan(Lexer *L) {
+  /* Loop (not recursion) so an arbitrarily long run of continued/blank lines after a
+     continuation token can't overflow the C stack. */
+  for (;;) {
     skip_trivia(L);
     L->start = L->cur;
     if (is_at_end(L)) return make_token(L, T_EOF);
@@ -617,8 +620,8 @@ static Token lex_scan(Lexer *L) {
            comma, ...), or when the next non-blank content begins with `|>`. */
         const char *p = L->cur;
         while (*p == ' ' || *p == '\t' || *p == '\r') p++;
-        if (p[0] == '|' && p[1] == '>') { L->cur = p; return lex_next(L); }
-        if (tok_continues_line(L->prev)) return lex_next(L);
+        if (p[0] == '|' && p[1] == '>') { L->cur = p; continue; }
+        if (tok_continues_line(L->prev)) continue;
         return make_token(L, T_NEWLINE);
     }
     if (isdigit((unsigned char)c)) { L->cur--; return lex_number(L); }
@@ -662,6 +665,7 @@ static Token lex_scan(Lexer *L) {
         case '`': return lex_raw_string(L);
     }
     return error_token(L, "unexpected character");
+  }
 }
 
 /* Public lexer entry: scan one token and remember it (unless it is a newline) so the

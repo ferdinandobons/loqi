@@ -123,6 +123,17 @@ else
   fail=$((fail+1))
 fi
 
+# Line continuation must be iterative, not recursive: a huge run of blank lines after
+# a trailing operator must not overflow the C stack (it once segfaulted).
+cont_deep="$(awk 'BEGIN{printf "let x = 1 +"; for(i=0;i<200000;i++) printf "\n"; print "2"; print "print(x)"}' | "$LOQI" /dev/stdin 2>&1)"
+if [ "$?" -eq 0 ] && [ "$cont_deep" = "3" ]; then
+  echo "  ✓ (cont-deep) 200k continued blank lines lex iteratively (no stack overflow)"
+  pass=$((pass+1))
+else
+  echo "  ✗ (cont-deep) expected '3' and a clean exit, got: $cont_deep"
+  fail=$((fail+1))
+fi
+
 # http.serve: launch a tiny server on the loopback, hit it with curl, assert the
 # string and map (status + content-type) responses, then stop it via /quit.
 HTTP_PORT=8911
