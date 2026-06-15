@@ -706,6 +706,14 @@ static void parser_error_at(Parser *P, Token *t, const char *msg) {
         fprintf(stderr, "syntax error [%s:%d] at '%.*s': %s\n", P->I->path, t->line, t->length, t->start, msg);
 }
 
+/* Report at a specific source line (no token lexeme) — for errors whose offending
+ * node isn't the current token, e.g. an invalid arrow parameter. */
+static void parser_error_line(Parser *P, int line, const char *msg) {
+    if (P->had_error) return;
+    P->had_error = true;
+    fprintf(stderr, "syntax error [%s:%d]: %s\n", P->I->path, line, msg);
+}
+
 static void p_advance(Parser *P) {
     P->prev = P->cur;
     for (;;) {
@@ -967,18 +975,32 @@ static Node *parse_binary(Parser *P, int min_prec) {
 static Node *finish_arrow(Parser *P, Node *params) {
     int line = P->cur.line;
     p_advance(P); /* consume '=>' */
+    /* Bound nesting: an arrow body is parsed by re-entering parse_expression, so a
+       curried chain `a => b => ... => z` recurses finish_arrow once per level. The
+       parse_unary depth guard resets between levels (it returns before the body is
+       parsed), so cap here. P->depth accumulates because this frame stays live while
+       the body — the next arrow — is parsed. */
+    if (++P->depth > MAX_PARSE_DEPTH) {
+        parser_error_at(P, &P->prev, "arrow functions nested too deeply");
+        P->depth--;
+        free_node(params);
+        return new_node(N_NIL, line);
+    }
     Node *fn;
     if (params->type == N_PARAMS) {
         for (int i = 0; i < params->item_count; i++)
             if (params->items[i]->type != N_IDENT)
-                parser_error_at(P, &P->prev, "arrow-function parameters must be plain names");
-        params->type = N_FN; /* items are already the parameter idents */
+                parser_error_line(P, params->items[i]->line, "arrow-function parameters must be plain names");
+        params->type = N_FN; /* items are already the parameter idents; freed via the returned fn */
         fn = params;
     } else if (params->type == N_IDENT) {
         fn = new_node(N_FN, line);
         node_add(&fn->items, &fn->item_count, params);
     } else {
-        parser_error_at(P, &P->prev, "invalid arrow-function parameters (expected a name or '(name, ...)')");
+        /* `params` (e.g. a grouped `(1 + 2)`) is not linked into the tree, so free it
+           explicitly — free_node(prog) would never reach it otherwise. */
+        parser_error_line(P, params->line, "invalid arrow-function parameters (expected a name or '(name, ...)')");
+        free_node(params);
         fn = new_node(N_FN, line);
     }
     skip_newlines(P);
@@ -987,6 +1009,7 @@ static Node *finish_arrow(Parser *P, Node *params) {
     Node *block = new_node(N_BLOCK, line);
     node_add(&block->items, &block->item_count, ret);
     fn->a = block;
+    P->depth--;
     return fn;
 }
 
@@ -1019,9 +1042,12 @@ static Node *parse_block(Parser *P) {
     skip_newlines(P);
     while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
         node_add(&block->items, &block->item_count, parse_statement(P));
+        /* Stop on the first error: with no panic-mode sync, recovering through a
+           deeply nested body can re-descend and allocate pathologically. */
+        if (P->had_error) break;
         skip_newlines(P);
     }
-    p_consume(P, T_RBRACE, "expected '}'");
+    if (!P->had_error) p_consume(P, T_RBRACE, "expected '}'");
     return block;
 }
 
@@ -1145,9 +1171,10 @@ static Node *parse_match(Parser *P) {
             if (last_if) last_if->c = ifn; else first_if = ifn;
             last_if = ifn;
         }
+        if (P->had_error) break; /* no panic-mode sync: stop before recovery spins */
         skip_newlines(P);
     }
-    p_consume(P, T_RBRACE, "expected '}' at end of match");
+    if (!P->had_error) p_consume(P, T_RBRACE, "expected '}' at end of match");
     if (default_body) { if (last_if) last_if->c = default_body; else first_if = default_body; }
     if (first_if) node_add(&outer->items, &outer->item_count, first_if);
     return outer;
@@ -1182,9 +1209,10 @@ static Node *parse_statement(Parser *P) {
         skip_newlines(P);
         while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
             node_add(&block->items, &block->item_count, parse_statement(P));
+            if (P->had_error) break;
             skip_newlines(P);
         }
-        p_consume(P, T_RBRACE, "expected '}'");
+        if (!P->had_error) p_consume(P, T_RBRACE, "expected '}'");
         return block;
     }
     if (p_match(P, T_RETURN)) {
@@ -1684,6 +1712,13 @@ typedef struct Compiler {
  * ASan C stack in compile_if/compile_stmt; 250 leaves a comfortable margin and is
  * far beyond any real nesting. */
 #define MAX_STMT_DEPTH 250
+/* And for nested FUNCTIONS: compile_function recurses (compile_function -> body
+ * compile_stmt -> compile_expr -> nested compile_function) once per nesting level,
+ * but expr_depth/stmt_depth reset per sub-compiler, so they can't bound this. A deep
+ * curried chain (a => b => ... => 1) or nested fn(){fn(){...}} would overflow the C
+ * stack. The enclosing-compiler chain length IS the nesting depth; cap it well below
+ * the stack ceiling (each level also allows a full expr/stmt budget within it). */
+#define MAX_FN_DEPTH 100
 
 static void compile_expr(Compiler *C, Node *n);
 static void compile_stmt(Compiler *C, Node *n);
@@ -2016,6 +2051,16 @@ static void compile_for(Compiler *C, Node *n) {
 }
 
 static void compile_function(Compiler *enc, Node *fn_node, int line) {
+    /* Bound function-nesting depth (the per-compiler expr/stmt guards reset and
+       cannot): the enclosing chain length is the current nesting level. */
+    int fn_depth = 0;
+    for (Compiler *c = enc; c; c = c->enclosing) fn_depth++;
+    if (fn_depth > MAX_FN_DEPTH) {
+        if (!*enc->had_error)
+            fprintf(stderr, "functions nested too deeply (max %d)\n", MAX_FN_DEPTH);
+        *enc->had_error = true;
+        return;
+    }
     if (fn_node->item_count > 255) {
         *enc->had_error = true; fprintf(stderr, "too many parameters in a function (max 255)\n");
     }
