@@ -631,7 +631,9 @@ typedef enum {
     N_CALL, N_INDEX, N_MEMBER, N_ASSIGN,
     N_LET, N_BLOCK, N_IF, N_WHILE, N_FOR, N_FN, N_RETURN,
     N_BREAK, N_CONTINUE, N_EXPRSTMT, N_PROGRAM, N_IMPORT, N_TRY,
-    N_PARAMS /* transient: a parenthesized `(a, b)` list, only valid before `=>` */
+    N_PARAMS, /* transient: a parenthesized `(a, b)` list, only valid before `=>` */
+    N_MATCH,  /* a = subject; items[] = arms */
+    N_MATCH_ARM /* items[] = pattern exprs (empty = default `_`); a = body block */
 } NodeType;
 
 struct Node {
@@ -757,11 +759,11 @@ static char *copy_lexeme(Token *t) {
 static Node *parse_string_literal(Parser *P, Token *strtok);
 
 static Node *parse_primary(Parser *P) {
-    /* `if` is also an expression: `let label = if c { "a" } else { "b" }`. As a bare
-       statement it is caught earlier by parse_statement and compiled in statement
-       (no-value) form. (match-as-an-expression is not supported yet — its desugaring
-       binds a local, which can't be expression-positioned in this VM.) */
-    if (p_match(P, T_IF)) return parse_if(P, true);
+    /* `if`/`match` are also expressions: `let x = if c { a } else { b }`,
+       `let r = match v { 1: { "one" } _: { "many" } }`. As a bare statement they are
+       caught earlier by parse_statement and compiled in statement (no-value) form. */
+    if (p_match(P, T_IF))    return parse_if(P, true);
+    if (p_match(P, T_MATCH)) return parse_match(P);
     if (p_match(P, T_NIL))   { Node *n = new_node(N_NIL, P->prev.line); return n; }
     if (p_match(P, T_TRUE))  { Node *n = new_node(N_BOOL, P->prev.line); n->literal = bool_val(true); return n; }
     if (p_match(P, T_FALSE)) { Node *n = new_node(N_BOOL, P->prev.line); n->literal = bool_val(false); return n; }
@@ -1132,62 +1134,42 @@ static Node *parse_for(Parser *P) {
 /* match subj { p1, p2: {..}  _: {..} } desugars to a let + if/else == chain. */
 static Node *parse_match(Parser *P) {
     int line = P->prev.line;
-    Node *subj = parse_expression(P);
+    Node *n = new_node(N_MATCH, line);
+    n->a = parse_expression(P);          /* subject */
     skip_newlines(P);
     p_consume(P, T_LBRACE, "expected '{' after the match expression");
 
-    Node *outer = new_node(N_BLOCK, line);
-    Node *letm = new_node(N_LET, line); letm->name = strdup("$m"); letm->a = subj;
-    node_add(&outer->items, &outer->item_count, letm);
-
-    Node *first_if = NULL, *last_if = NULL, *default_body = NULL;
+    bool seen_default = false;
     skip_newlines(P);
     while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
-        int arm_line = P->cur.line; /* diagnostics point at the arm, not 'match' */
+        int arm_line = P->cur.line;      /* diagnostics point at the arm, not 'match' */
         Token arm_tok = P->cur;
-        /* A default arm must be the last arm: reject any arm after '_'. */
-        if (default_body) {
-            parser_error_at(P, &P->cur, "the default '_' arm must be last in a match");
-            return outer;
-        }
+        if (seen_default) { parser_error_at(P, &P->cur, "the default '_' arm must be last in a match"); break; }
+        Node *arm = new_node(N_MATCH_ARM, arm_line);
         bool is_default = false;
-        Node *cond = NULL;
         for (;;) {
             if (p_check(P, T_IDENT) && P->cur.length == 1 && P->cur.start[0] == '_') {
                 p_advance(P); is_default = true;
             } else {
-                Node *pat = parse_expression(P);
-                Node *eq = new_node(N_BINARY, arm_line); eq->op = T_EQEQ;
-                Node *mref = new_node(N_IDENT, arm_line); mref->name = strdup("$m");
-                eq->a = mref; eq->b = pat;
-                if (!cond) cond = eq;
-                else { Node *orn = new_node(N_LOGICAL, arm_line); orn->op = T_OR; orn->a = cond; orn->b = eq; cond = orn; }
+                node_add(&arm->items, &arm->item_count, parse_expression(P)); /* a pattern */
             }
             if (p_match(P, T_COMMA)) { skip_newlines(P); continue; }
             break;
         }
         /* '_' cannot be combined with other patterns: it would silently swallow them. */
-        if (is_default && cond) {
-            parser_error_at(P, &arm_tok, "the '_' pattern cannot be combined with other patterns");
-            return outer;
+        if (is_default && arm->item_count > 0) {
+            parser_error_at(P, &arm_tok, "the '_' pattern cannot be combined with other patterns"); break;
         }
+        if (is_default) seen_default = true;
         p_consume(P, T_COLON, "expected ':' after the match pattern");
         skip_newlines(P);
-        Node *body = parse_block(P);
-        if (is_default) {
-            default_body = body;
-        } else {
-            Node *ifn = new_node(N_IF, arm_line); ifn->a = cond; ifn->b = body;
-            if (last_if) last_if->c = ifn; else first_if = ifn;
-            last_if = ifn;
-        }
-        if (P->had_error) break; /* no panic-mode sync: stop before recovery spins */
+        arm->a = parse_block(P);         /* body (item_count==0 marks the default arm) */
+        node_add(&n->items, &n->item_count, arm);
+        if (P->had_error) break;         /* no panic-mode sync: stop before recovery spins */
         skip_newlines(P);
     }
     if (!P->had_error) p_consume(P, T_RBRACE, "expected '}' at end of match");
-    if (default_body) { if (last_if) last_if->c = default_body; else first_if = default_body; }
-    if (first_if) node_add(&outer->items, &outer->item_count, first_if);
-    return outer;
+    return n;
 }
 
 /* try { ... } catch e { ... } */
@@ -1615,7 +1597,8 @@ typedef enum {
     OP_EQUAL, OP_NOT_EQUAL, OP_LESS, OP_LESS_EQUAL, OP_GREATER, OP_GREATER_EQUAL,
     OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_FLOORDIV, OP_MOD,
     OP_NEGATE, OP_NOT,
-    OP_JUMP, OP_JUMP_IF_FALSE, OP_JUMP_IF_NOT_NIL, OP_JUMP_IF_NIL, OP_LOOP,
+    OP_JUMP, OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE, OP_JUMP_IF_NOT_NIL, OP_JUMP_IF_NIL, OP_LOOP,
+    OP_DUP,
     OP_CALL, OP_CLOSURE, OP_CLOSE_UPVALUE, OP_RETURN,
     OP_BUILD_LIST, OP_BUILD_MAP, OP_RANGE,
     OP_GET_INDEX, OP_SET_INDEX, OP_GET_PROPERTY, OP_SET_PROPERTY,
@@ -1735,6 +1718,7 @@ static void compile_stmt(Compiler *C, Node *n);
 static void compile_as_value(Compiler *C, Node *n);
 static void compile_block_value(Compiler *C, Node *block);
 static void compile_if_expr(Compiler *C, Node *n);
+static void compile_match(Compiler *C, Node *n, bool as_value);
 static void compile_function(Compiler *enc, Node *fn_node, int line);
 
 static Chunk *cur_chunk(Compiler *C) { return &C->proto->chunk; }
@@ -1879,6 +1863,7 @@ static void compile_expr(Compiler *C, Node *n) {
     switch (n->type) {
         case N_NIL: emit_byte(C, OP_NIL, n->line); break;
         case N_IF: compile_if_expr(C, n); break;       /* if as an expression -> branch value */
+        case N_MATCH: compile_match(C, n, true); break; /* match as an expression -> arm value */
         case N_BOOL: emit_byte(C, AS_BOOL(n->literal) ? OP_TRUE : OP_FALSE, n->line); break;
         case N_INT: case N_FLOAT: case N_STR: emit_const(C, n->literal, n->line); break;
         case N_IDENT: named_get(C, n->name, n->line); break;
@@ -2027,7 +2012,7 @@ static void compile_block_value(Compiler *C, Node *block) {
        base, not the live top), so disallow them here — use a statement `if` instead. */
     if (C->local_count > base) {
         *C->had_error = true;
-        fprintf(stderr, "an if-expression branch cannot declare local variables (use a statement 'if')\n");
+        fprintf(stderr, "an if/match expression branch cannot declare local variables (use the statement form)\n");
     }
     C->local_count = base;
     C->scope_depth--;
@@ -2044,10 +2029,53 @@ static void compile_if_expr(Compiler *C, Node *n) {
     else emit_byte(C, OP_NIL, n->line);          /* no else -> nil */
     patch_jump(C, endJ);
 }
+/* Compile a `match`. The subject sits on the stack as a TEMPORARY (no named local, so
+ * it works correctly even with other temporaries beneath it); each pattern is tested
+ * with OP_DUP + OP_EQUAL. As a statement, arm bodies run as statements (no value); as
+ * an expression, each arm yields a value and an unmatched subject yields nil. */
+static void compile_match(Compiler *C, Node *n, bool as_value) {
+    compile_expr(C, n->a);                                   /* subject -> temporary */
+    int *end_jumps = n->item_count > 0 ? xmalloc(sizeof(int) * (size_t)n->item_count) : NULL;
+    int end_count = 0;
+    bool has_default = false;
+    for (int ai = 0; ai < n->item_count; ai++) {
+        Node *arm = n->items[ai];
+        if (arm->item_count == 0) {                         /* default `_` arm (last) */
+            has_default = true;
+            emit_byte(C, OP_POP, arm->line);                /* drop the subject */
+            if (as_value) compile_block_value(C, arm->a); else compile_stmt(C, arm->a);
+            end_jumps[end_count++] = emit_jump(C, OP_JUMP, arm->line);
+            break;
+        }
+        int *body_jumps = xmalloc(sizeof(int) * (size_t)arm->item_count);
+        for (int pi = 0; pi < arm->item_count; pi++) {
+            emit_byte(C, OP_DUP, arm->line);                /* copy the subject */
+            compile_expr(C, arm->items[pi]);                /* pattern value */
+            emit_byte(C, OP_EQUAL, arm->line);              /* subject == pattern */
+            body_jumps[pi] = emit_jump(C, OP_JUMP_IF_TRUE, arm->line);
+            emit_byte(C, OP_POP, arm->line);                /* pop the false result, try next */
+        }
+        int skip = emit_jump(C, OP_JUMP, arm->line);        /* nothing matched -> next arm */
+        for (int pi = 0; pi < arm->item_count; pi++) patch_jump(C, body_jumps[pi]); /* body: */
+        free(body_jumps);
+        emit_byte(C, OP_POP, arm->line);                    /* pop the true result */
+        emit_byte(C, OP_POP, arm->line);                    /* pop the subject */
+        if (as_value) compile_block_value(C, arm->a); else compile_stmt(C, arm->a);
+        end_jumps[end_count++] = emit_jump(C, OP_JUMP, arm->line);
+        patch_jump(C, skip);
+    }
+    if (!has_default) {
+        emit_byte(C, OP_POP, n->line);                      /* no arm matched -> drop subject */
+        if (as_value) emit_byte(C, OP_NIL, n->line);
+    }
+    for (int i = 0; i < end_count; i++) patch_jump(C, end_jumps[i]);
+    free(end_jumps);
+}
 static void compile_as_value(Compiler *C, Node *n) {
     switch (n->type) {
         case N_EXPRSTMT: compile_expr(C, n->a); break;      /* expression statement -> its value */
         case N_IF:       compile_if_expr(C, n); break;
+        case N_MATCH:    compile_match(C, n, true); break;
         case N_BLOCK:    compile_block_value(C, n); break;
         case N_LET: case N_FN: case N_WHILE: case N_FOR: case N_RETURN:
         case N_BREAK: case N_CONTINUE: case N_IMPORT: case N_TRY:
@@ -2184,6 +2212,7 @@ static void compile_stmt(Compiler *C, Node *n) {
             end_scope(C, n->line);
             break;
         case N_IF: compile_if(C, n); break;
+        case N_MATCH: compile_match(C, n, false); break; /* statement match: arm bodies run, no value */
         case N_WHILE: compile_while(C, n); break;
         case N_FOR: compile_for(C, n); break;
         case N_RETURN:
@@ -2791,6 +2820,8 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_NOT: vm_push(vm, bool_val(!is_truthy(vm_pop(vm)))); break;
             case OP_JUMP: { uint16_t off = READ_U16(); frame->ip += off; break; }
             case OP_JUMP_IF_FALSE: { uint16_t off = READ_U16(); if (!is_truthy(vm_peek(vm, 0))) frame->ip += off; break; }
+            case OP_JUMP_IF_TRUE: { uint16_t off = READ_U16(); if (is_truthy(vm_peek(vm, 0))) frame->ip += off; break; }
+            case OP_DUP: vm_push(vm, vm_peek(vm, 0)); break;
             case OP_JUMP_IF_NOT_NIL: { uint16_t off = READ_U16(); if (!IS_NIL(vm_peek(vm, 0))) frame->ip += off; break; }
             case OP_JUMP_IF_NIL: { uint16_t off = READ_U16(); if (IS_NIL(vm_peek(vm, 0))) frame->ip += off; break; }
             case OP_LOOP: { uint16_t off = READ_U16(); frame->ip -= off; break; }

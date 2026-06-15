@@ -220,27 +220,30 @@ for i in range(0, 10) {
 `for ... in` iterates over lists, maps (keys), and strings. `range(stop)`,
 `range(start, stop)` and `range(start, stop, step)` produce lists of ints.
 
-### `if` as an expression
+### `if` and `match` as expressions
 
-An `if` used in expression position evaluates to the value of the taken branch —
-no separate ternary operator needed. A branch's value is the last expression in its
-block; an `if` with no `else` whose condition is false evaluates to `nil`.
+`if` and `match` used in expression position evaluate to the value of the taken
+branch / matched arm — no separate ternary operator needed. A branch's value is the
+last expression in its block; an `if` with no `else` (false condition) or a `match`
+with no matching arm evaluates to `nil`.
 
 ```loqi
 let label = if score >= 90 { "A" } else if score >= 80 { "B" } else { "C" }
-let clamped = if n < 0 { 0 } else { n }
+let kind  = match n { 0: { "zero" } 1, 2, 3: { "small" } _: { "big" } }
 print(map(xs, x => if x % 2 == 0 { "even" } else { "odd" }))
 ```
 
-It composes anywhere a value is expected — call arguments, list elements, arrow
-bodies, nested `if`s. An expression `if` wants `} else` on the same line, and its
-branches can't declare local variables (`let`); for those, use a statement `if`.
+They compose anywhere a value is expected — call arguments, list elements, arrow
+bodies, nested in each other. A `match` evaluates its subject exactly once. Two small
+rules (the VM addresses locals from the frame base): an expression `if` wants `}
+else` on the same line, and an expression `if`/`match` branch can't declare local
+variables (`let`) — use the statement form for that.
 
 ### Pattern matching
 
 `match` compares a value against patterns and runs the first arm that matches.
 Patterns are values; `_` is the default. Comma-separate patterns to match any of
-them. (Each arm is a block.)
+them. Each arm is a block, and the subject is evaluated exactly once.
 
 ```loqi
 fn category(grade) {
@@ -250,6 +253,9 @@ fn category(grade) {
     _:        { return "needs review" }
   }
 }
+
+# match is also an expression (see above) — the matched arm's value is the result:
+let category = match grade { "A", "B": { "excellent" } _: { "other" } }
 ```
 
 ### Error handling: `try` / `catch`

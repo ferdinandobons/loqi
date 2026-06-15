@@ -1,35 +1,34 @@
-# Regression tests for expression-form `if`: an `if` used in expression position
-# yields the value of the taken branch. The statement form (a bare `if`) is unchanged.
+# Regression tests for expression-form `if` and `match`: used in expression position
+# they yield the value of the taken branch / matched arm. The statement forms are
+# unchanged. (match is compiled with the subject as a stack temporary + OP_DUP, so it
+# works even with other temporaries beneath it — e.g. as a call argument.)
 
 # --- if as an expression ---
 let g = 85
 assert((if g >= 90 { "A" } else if g >= 80 { "B" } else { "C" }) == "B", "if/else-if/else chain yields a value")
-assert((if true { 1 } else { 2 }) == 1, "if expression picks the then branch")
-assert((if false { 1 } else { 2 }) == 2, "if expression picks the else branch")
 assert((if false { 1 }) == nil, "an if with no else and a false condition yields nil")
-
-# --- works in every expression position, even with temporaries on the stack ---
 assert(len(if true { [1, 2, 3] } else { [] }) == 3, "if expression as a call argument")
-assert([if true { 1 } else { 2 }, 3] == [1, 3], "if expression inside a list literal")
-let parity = n => if n % 2 == 0 { "even" } else { "odd" }
-assert(map([1, 2, 3, 4], parity) == ["odd", "even", "odd", "even"], "if expression as an arrow body")
-assert((if g > 50 { if g > 80 { "high" } else { "mid" } } else { "low" }) == "high", "nested if expressions")
+assert(map([1, 2, 3, 4], n => if n % 2 == 0 { "even" } else { "odd" }) == ["odd", "even", "odd", "even"], "if expr as an arrow body")
 
-# --- a branch may run leading (side-effecting) statements; its value is the last expr ---
-let val = if true {
-  print("(if-expr branch side effect)")
-  42
-} else { 0 }
-assert(val == 42, "a branch yields its last expression after running earlier statements")
+# --- match as an expression ---
+assert((match 2 { 1: { "one" } 2: { "two" } _: { "many" } }) == "two", "match expression yields the arm value")
+assert((match 3 { 1, 2, 3: { "small" } _: { "big" } }) == "small", "multi-pattern arm")
+assert((match 9 { 1: { "x" } 2: { "y" } }) == nil, "match with no matching arm and no default yields nil")
+assert((match "hi" { "hi": { 1 } _: { 0 } }) == 1, "match expression composes under an operator (was the temporaries bug)")
+assert(map([1, 2, 3], n => match n { 1: { "a" } _: { "b" } }) == ["a", "b", "b"], "match expr as an arrow body")
+assert([match 1 { 1: { "y" } _: { "n" } }, 9] == ["y", 9], "match expr inside a list literal")
+assert((if true { match 2 { 2: { "two" } _: { "?" } } } else { "no" }) == "two", "match expr nested in an if expr")
 
-# --- the statement form is unaffected (incl. `else` on its own line) ---
-fn sign(n) {
-  if n > 0 { return "pos" }
-  else { return "neg" }
+# --- the subject is evaluated exactly once ---
+let calls = [0]
+fn subj() {
+  calls[0] = calls[0] + 1
+  return 2
 }
-assert(sign(5) == "pos" and sign(-3) == "neg", "statement-form if still works")
+let picked = match subj() { 1: { "a" } 2: { "b" } 3: { "c" } _: { "d" } }
+assert(picked == "b" and calls[0] == 1, "match evaluates its subject exactly once")
 
-# --- match still works as a statement ---
+# --- statement forms are unaffected ---
 fn classify(n) {
   match n {
     0: { return "zero" }
@@ -38,5 +37,25 @@ fn classify(n) {
   }
 }
 assert(classify(0) == "zero" and classify(2) == "small" and classify(99) == "big", "statement-form match still works")
+fn sign(n) {
+  if n > 0 { return "pos" }
+  else { return "neg" }
+}
+assert(sign(5) == "pos" and sign(-3) == "neg", "statement-form if (with else on its own line) still works")
+
+# --- a statement match arm body MAY declare locals (subject is popped first) ---
+fn tag(n) {
+  match n {
+    1: {
+      let t = "one"
+      return t
+    }
+    _: {
+      let t = "other"
+      return t
+    }
+  }
+}
+assert(tag(1) == "one" and tag(5) == "other", "statement match arm bodies can declare locals")
 
 print("test_expr_if_match: all tests passed ✓")

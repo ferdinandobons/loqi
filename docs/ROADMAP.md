@@ -30,7 +30,7 @@ imply for the next step.
 | Lang | raw strings (backticks) | ✅ done |
 | Lang | null-safety `??` / `?.`, ranges `a..b`, pipe `\|>` | ✅ done |
 | Lang | arrow functions `x => e`, `(a, b) => e`, `() => e` | ✅ done |
-| Lang | `if` as an expression (`let x = if c { a } else { b }`) | ✅ done |
+| Lang | `if` & `match` as expressions (`let x = if c { a } else { b }`) | ✅ done |
 | AI | `ai(prompt, options)` (model/system/temperature/max_tokens) | ✅ done |
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `ai_json(prompt, schema)` — schema-validated output + retry | ✅ done |
