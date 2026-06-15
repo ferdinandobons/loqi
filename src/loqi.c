@@ -707,6 +707,7 @@ static Node *parse_primary(Parser *P) {
         if (!p_check(P, T_RBRACKET)) {
             do {
                 skip_newlines(P);
+                if (p_check(P, T_RBRACKET)) break; /* allow a trailing comma */
                 node_add(&n->items, &n->item_count, parse_expression(P));
                 skip_newlines(P);
             } while (p_match(P, T_COMMA));
@@ -721,6 +722,7 @@ static Node *parse_primary(Parser *P) {
         if (!p_check(P, T_RBRACE)) {
             do {
                 skip_newlines(P);
+                if (p_check(P, T_RBRACE)) break; /* allow a trailing comma */
                 Node *key;
                 if (p_check(P, T_IDENT)) {
                     p_advance(P);
@@ -747,6 +749,7 @@ static Node *parse_primary(Parser *P) {
         p_consume(P, T_LPAREN, "expected '(' after 'fn'");
         if (!p_check(P, T_RPAREN)) {
             do {
+                if (p_check(P, T_RPAREN)) break; /* allow a trailing comma */
                 p_consume(P, T_IDENT, "expected parameter name");
                 Node *param = new_node(N_IDENT, P->prev.line);
                 param->name = copy_lexeme(&P->prev);
@@ -773,6 +776,7 @@ static Node *parse_postfix(Parser *P) {
             if (!p_check(P, T_RPAREN)) {
                 do {
                     skip_newlines(P);
+                    if (p_check(P, T_RPAREN)) break; /* allow a trailing comma */
                     node_add(&call->items, &call->item_count, parse_expression(P));
                     skip_newlines(P);
                 } while (p_match(P, T_COMMA));
@@ -890,6 +894,7 @@ static Node *parse_fn_decl(Parser *P) {
     p_consume(P, T_LPAREN, "expected '(' after the name");
     if (!p_check(P, T_RPAREN)) {
         do {
+            if (p_check(P, T_RPAREN)) break; /* allow a trailing comma */
             p_consume(P, T_IDENT, "expected parameter name");
             Node *param = new_node(N_IDENT, P->prev.line);
             param->name = copy_lexeme(&P->prev);

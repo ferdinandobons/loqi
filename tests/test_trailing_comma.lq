@@ -1,0 +1,32 @@
+# Trailing commas are allowed in lists, maps, calls, and parameter lists.
+
+# lists
+assert([1, 2, 3,] == [1, 2, 3], "list trailing comma")
+assert([1,] == [1], "single-element list trailing comma")
+assert([] == [], "empty list still ok")
+
+# multi-line list with a trailing comma
+let xs = [
+  10,
+  20,
+  30,
+]
+assert(xs == [10, 20, 30], "multi-line list trailing comma")
+
+# maps
+let m = { a: 1, b: 2, }
+assert(m.a == 1 and m.b == 2, "map trailing comma")
+let e = {}
+assert(len(e) == 0, "empty map still ok")
+
+# call arguments
+assert(max(3, 1, 2,) == 3, "call trailing comma")
+assert(len([1, 2,],) == 2, "call + list both trailing")
+
+# function parameters (declared and anonymous)
+fn add3(a, b, c,) { return a + b + c }
+assert(add3(1, 2, 3) == 6, "declared fn trailing-comma params")
+let mul = fn(x, y,) { return x * y }
+assert(mul(4, 5) == 20, "anonymous fn trailing-comma params")
+
+print("test_trailing_comma: all tests passed ✓")
