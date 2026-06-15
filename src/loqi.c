@@ -617,10 +617,19 @@ static Token lex_scan(Lexer *L) {
         L->line++;
         /* Implicit line continuation: swallow this newline when the line ends on a
            token a statement can't end on (a + at EOL, an open paren, a trailing
-           comma, ...), or when the next non-blank content begins with `|>`. */
+           comma, ...), or when the next non-blank, non-comment content begins with
+           `|>` (possibly across blank/comment lines), so a long pipeline can break
+           before each `|>`. Only the `|>` case commits the look-ahead, so a plain
+           blank line still terminates the statement and keeps its line number. */
         const char *p = L->cur;
-        while (*p == ' ' || *p == '\t' || *p == '\r') p++;
-        if (p[0] == '|' && p[1] == '>') { L->cur = p; continue; }
+        int skipped = 0;
+        for (;;) {
+            while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+            if (*p == '#') while (*p && *p != '\n') p++;     /* skip a comment */
+            if (*p == '\n') { p++; skipped++; continue; }    /* skip a blank/comment line */
+            break;
+        }
+        if (p[0] == '|' && p[1] == '>') { L->cur = p; L->line += skipped; continue; }
         if (tok_continues_line(L->prev)) continue;
         return make_token(L, T_NEWLINE);
     }

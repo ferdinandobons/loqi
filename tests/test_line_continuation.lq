@@ -39,6 +39,15 @@ let e = [1, 2, 3, 4] |>
   filter(fn(x) { return x > 2 })
 assert(len(d) == 2 and len(e) == 2, "pipelines break across lines either way")
 
+# a leading-|> stage may be preceded by blank and comment lines (read as one chain)
+let g = [1, 2, 3]
+
+  # double the evens-or-whatever, then sum
+  |> map(fn(x) { return x * 2 })
+
+  |> sum()
+assert(g == 12, "blank and comment lines before |> still continue the pipeline")
+
 # arrow-function body on the next line
 let sq = (n) =>
   n * n
