@@ -332,6 +332,7 @@ typedef enum {
     T_PLUS, T_MINUS, T_STAR, T_SLASH, T_SLASHSLASH, T_PERCENT,
     T_EQ, T_EQEQ, T_BANGEQ, T_LT, T_LTEQ, T_GT, T_GTEQ,
     T_QQ, T_QDOT, /* ?? null-coalescing, ?. optional chaining */
+    T_PIPE,       /* |> pipeline */
     T_NEWLINE, T_EOF, T_ERROR
 } TokType;
 
@@ -562,7 +563,15 @@ static Token lex_next(Lexer *L) {
     if (is_at_end(L)) return make_token(L, T_EOF);
 
     char c = advance_ch(L);
-    if (c == '\n') { Token t = make_token(L, T_NEWLINE); L->line++; return t; }
+    if (c == '\n') {
+        L->line++;
+        /* Line continuation: if the next non-blank content begins with `|>`,
+           swallow this newline so a pipeline can break before each `|>`. */
+        const char *p = L->cur;
+        while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+        if (p[0] == '|' && p[1] == '>') { L->cur = p; return lex_next(L); }
+        return make_token(L, T_NEWLINE);
+    }
     if (isdigit((unsigned char)c)) { L->cur--; return lex_number(L); }
     if (isalpha((unsigned char)c) || c == '_') {
         while (isalnum((unsigned char)peek_ch(L)) || peek_ch(L) == '_') advance_ch(L);
@@ -594,6 +603,9 @@ static Token lex_next(Lexer *L) {
             if (match_ch(L, '?')) return make_token(L, T_QQ);
             if (match_ch(L, '.')) return make_token(L, T_QDOT);
             return error_token(L, "unexpected character '?'");
+        case '|':
+            if (match_ch(L, '>')) return make_token(L, T_PIPE);
+            return error_token(L, "unexpected character '|' (did you mean 'or' or '|>'?)");
         case '"': return lex_string(L);
         case '`': return lex_raw_string(L);
     }
@@ -858,7 +870,8 @@ static int bin_prec(TokType t) {
         case T_EQEQ: case T_BANGEQ: return 4;
         case T_AND: return 3;
         case T_OR:  return 2;
-        case T_QQ:  return 1; /* null-coalescing, loosest binary */
+        case T_QQ:  return 1; /* null-coalescing */
+        case T_PIPE: return 1; /* |> pipeline, loosest */
         default: return -1;
     }
 }
@@ -869,6 +882,26 @@ static Node *parse_binary(Parser *P, int min_prec) {
         int prec = bin_prec(op);
         if (prec < min_prec) break;
         p_advance(P);
+        if (op == T_PIPE) {
+            /* x |> f(a) == f(x, a); x |> f == f(x). Threads the left value in as
+               the FIRST argument of the call on the right. */
+            Node *rhs = parse_unary(P); /* the call (or bare callee) */
+            Node *call;
+            if (rhs->type == N_CALL) {
+                call = rhs; /* prepend `left` to the existing args */
+                Node **ni = xmalloc(sizeof(Node *) * (size_t)(call->item_count + 1));
+                ni[0] = left;
+                for (int k = 0; k < call->item_count; k++) ni[k + 1] = call->items[k];
+                free(call->items);
+                call->items = ni; call->item_count++;
+            } else {
+                call = new_node(N_CALL, P->prev.line); /* bare callee: f(x) */
+                call->a = rhs;
+                node_add(&call->items, &call->item_count, left);
+            }
+            left = call;
+            continue;
+        }
         Node *right = parse_binary(P, prec + 1); /* left-assoc */
         Node *n = new_node((op == T_AND || op == T_OR || op == T_QQ) ? N_LOGICAL : N_BINARY, P->prev.line);
         n->op = op; n->a = left; n->b = right;

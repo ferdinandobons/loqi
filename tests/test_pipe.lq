@@ -1,0 +1,21 @@
+# Pipeline operator: x |> f(a) == f(x, a); x |> f == f(x)
+assert(5 |> str == "5", "pipe to a bare callee")
+assert([3, 1, 2] |> sort == [1, 2, 3], "pipe to sort")
+assert([1, 2, 3, 4] |> sum == 10, "pipe to sum")
+assert([1, 2, 3, 4] |> filter(fn(x) { return x % 2 == 0 }) == [2, 4], "pipe with extra args")
+
+# the data-pipeline pattern, broken across lines (|> at line start)
+let r = [1, 2, 3, 4, 5]
+  |> filter(fn(x) { return x % 2 == 1 })
+  |> map(fn(x) { return x * x })
+  |> sum
+assert(r == 35, "multi-line pipeline (1 + 9 + 25)")
+
+# left-associative; result usable in larger expressions
+assert(([1, 2, 3] |> sum) + 100 == 106, "pipe result in arithmetic")
+assert([5, 3, 8, 1] |> sort |> reverse == [8, 5, 3, 1], "two piped stages")
+
+# a single-line pipeline too
+assert([1, 2, 3, 4, 5, 6] |> filter(fn(x) { return x > 3 }) |> len == 3, "single-line chain")
+
+print("test_pipe: all tests passed ✓")

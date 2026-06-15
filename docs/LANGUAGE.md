@@ -71,6 +71,7 @@ Variables are block-scoped. An inner scope can shadow an outer one.
 | Logical     | `and  or  not`                         | short-circuit; return operands |
 | Null-safety | `?.`  `??`                             | optional chaining; nil-coalescing |
 | Range       | `a..b`                                 | inclusive int range → list     |
+| Pipeline    | `x \|> f(a)`                            | `f(x, a)` — left-threads `x`    |
 | Unary       | `-x`, `not x`                          |                                |
 
 Notes:
@@ -81,6 +82,16 @@ Notes:
 - `a..b` is an **inclusive** integer range that builds a list — `1..3` is
   `[1, 2, 3]`; `5..1` is `[]`. Great in `for`: `for i in 1..n { ... }`. It binds
   looser than arithmetic (`0..n-1` is `0..(n-1)`).
+- `x |> f(a)` is the **pipeline** operator: it threads `x` in as the first
+  argument, so `x |> f(a)` is `f(x, a)` and `x |> f` is `f(x)`. Chains read
+  top-to-bottom and may break before each `|>`:
+
+  ```loqi
+  let result = [1, 2, 3, 4, 5]
+    |> filter(fn(x) { return x % 2 == 1 })
+    |> map(fn(x) { return x * x })
+    |> sum                                  # 1 + 9 + 25 = 35
+  ```
 
 ### Null-safety: `?.` and `??`
 
