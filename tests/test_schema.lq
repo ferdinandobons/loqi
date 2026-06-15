@@ -49,6 +49,21 @@ assert(json.validate({ user: { id: 1 } }, nested), "nested object valid")
 assert(not json.validate({ user: { id: "x" } }, nested), "nested object field type error")
 assert(not json.validate({ user: {} }, nested), "nested missing required field")
 
+# --- a malformed schema is an author error: it raises consistently (deterministic,
+#     never data-dependent), rather than silently dropping the constraint or crashing ---
+fn schema_raises(value, schema) {
+  let raised = false
+  try { json.validate(value, schema) } catch e { raised = true }
+  return raised
+}
+assert(schema_raises("x", { type: "string", enum: "red" }), "non-list enum raises")
+assert(schema_raises({}, { type: "object", required: "name" }), "non-list required raises")
+assert(schema_raises("x", { type: 42 }), "non-string type raises")
+assert(schema_raises([], { type: "list", items: "bad" }), "non-map items raises even for an empty list")
+assert(schema_raises([1], { type: "list", items: "bad" }), "non-map items raises for a non-empty list")
+assert(schema_raises({ a: 1 }, { type: "object", fields: "bad" }), "non-map fields raises")
+assert(schema_raises(1, "not a schema"), "a non-map schema raises")
+
 # --- ai_json argument handling (the network path needs a key; tested live elsewhere) ---
 let bad = false
 try { ai_json("p", 42) } catch e { bad = true }

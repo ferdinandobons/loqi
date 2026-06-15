@@ -329,7 +329,9 @@ Schema shapes (see `json.validate`): primitive `type` (`string`/`str`, `int`,
 ## `json.validate(value, schema) → bool`
 Checks any value against a schema (the same one `ai_json` uses) — handy for
 validating model output, API responses, or config. Listed `fields` that are present
-must match; `required` fields must exist; extra fields are allowed.
+must match; `required` fields must exist; extra fields are allowed. A *malformed*
+schema (e.g. `required` that isn't a list, `type` that isn't a string) raises a
+clear error rather than silently passing — so a schema typo never hides a bug.
 ```loqi
 let s = { type: "object", fields: { id: { type: "int" } }, required: ["id"] }
 print(json.validate({ id: 7, extra: "ok" }, s))   # true

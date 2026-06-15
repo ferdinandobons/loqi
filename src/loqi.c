@@ -3642,14 +3642,19 @@ static bool schema_check(Interp *I, Value v, Value schema, char *eb, size_t cap,
     if (!IS_MAP(schema)) runtime_error(I, 0, "validate(): schema must be a map, got %s", type_name(schema));
     if (depth > MAX_SCHEMA_DEPTH) { scherr(eb, cap, el, path, "schema/value nested too deep"); return false; }
     ObjMap *s = AS_MAP(schema);
+    /* A malformed schema is an author bug — raise loudly and deterministically
+       (independent of the data) rather than silently dropping the constraint or
+       crashing only on some inputs. */
     Value *tv = map_get(s, "type");
-    const char *t = (tv && IS_STRING(*tv)) ? AS_STRING(*tv)->chars : "any";
+    if (tv && !IS_STRING(*tv)) runtime_error(I, 0, "validate(): schema 'type' must be a string, got %s", type_name(*tv));
+    const char *t = tv ? AS_STRING(*tv)->chars : "any"; /* absent type defaults to any */
     if (!schema_type_ok(t, v)) {
         char m[128]; snprintf(m, sizeof m, "expected %s, got %s", t, type_name(v));
         scherr(eb, cap, el, path, m); return false;
     }
     Value *ev = map_get(s, "enum");
-    if (ev && IS_LIST(*ev)) {
+    if (ev) {
+        if (!IS_LIST(*ev)) runtime_error(I, 0, "validate(): schema 'enum' must be a list, got %s", type_name(*ev));
         bool found = false;
         ObjList *e = AS_LIST(*ev);
         for (int i = 0; i < e->count; i++) if (values_equal(v, e->items[i])) { found = true; break; }
@@ -3659,6 +3664,7 @@ static bool schema_check(Interp *I, Value v, Value schema, char *eb, size_t cap,
     if (IS_LIST(v) && (!strcmp(t, "list") || !strcmp(t, "array"))) {
         Value *items = map_get(s, "items");
         if (items) {
+            if (!IS_MAP(*items)) runtime_error(I, 0, "validate(): schema 'items' must be a map, got %s", type_name(*items));
             ObjList *l = AS_LIST(v);
             for (int i = 0; i < l->count; i++) {
                 char sub[256]; snprintf(sub, sizeof sub, "%s[%d]", path, i);
@@ -3668,7 +3674,8 @@ static bool schema_check(Interp *I, Value v, Value schema, char *eb, size_t cap,
     } else if (IS_MAP(v) && (!strcmp(t, "object") || !strcmp(t, "map"))) {
         ObjMap *mv = AS_MAP(v);
         Value *required = map_get(s, "required");
-        if (required && IS_LIST(*required)) {
+        if (required) {
+            if (!IS_LIST(*required)) runtime_error(I, 0, "validate(): schema 'required' must be a list, got %s", type_name(*required));
             ObjList *rq = AS_LIST(*required);
             for (int i = 0; i < rq->count; i++) {
                 if (!IS_STRING(rq->items[i])) continue;
@@ -3680,7 +3687,8 @@ static bool schema_check(Interp *I, Value v, Value schema, char *eb, size_t cap,
             }
         }
         Value *fields = map_get(s, "fields");
-        if (fields && IS_MAP(*fields)) {
+        if (fields) {
+            if (!IS_MAP(*fields)) runtime_error(I, 0, "validate(): schema 'fields' must be a map, got %s", type_name(*fields));
             ObjMap *fm = AS_MAP(*fields);
             for (int i = 0; i < fm->count; i++) { /* ObjMap is dense: entries[0..count) */
                 char *k = fm->entries[i].key;
