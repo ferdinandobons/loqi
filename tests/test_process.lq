@@ -1,6 +1,6 @@
 # run(): execute a shell command, capture stdout and exit code.
 let r = run("echo hello")
-assert(has(r, "out") and has(r, "code"), "run returns { out, code }")
+assert(has(r, "out") and has(r, "code"), "run returns out and code keys")
 assert(trim(r.out) == "hello", "run captures stdout")
 assert(r.code == 0, "run captures a zero exit code")
 assert(run("exit 7").code == 7, "run captures a non-zero exit code")
