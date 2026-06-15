@@ -331,6 +331,7 @@ typedef enum {
     T_COMMA, T_DOT, T_COLON,
     T_PLUS, T_MINUS, T_STAR, T_SLASH, T_SLASHSLASH, T_PERCENT,
     T_EQ, T_EQEQ, T_BANGEQ, T_LT, T_LTEQ, T_GT, T_GTEQ,
+    T_QQ, T_QDOT, /* ?? null-coalescing, ?. optional chaining */
     T_NEWLINE, T_EOF, T_ERROR
 } TokType;
 
@@ -589,6 +590,10 @@ static Token lex_next(Lexer *L) {
                                           : error_token(L, "unexpected character '!' (use 'not')");
         case '<': return make_token(L, match_ch(L, '=') ? T_LTEQ : T_LT);
         case '>': return make_token(L, match_ch(L, '=') ? T_GTEQ : T_GT);
+        case '?':
+            if (match_ch(L, '?')) return make_token(L, T_QQ);
+            if (match_ch(L, '.')) return make_token(L, T_QDOT);
+            return error_token(L, "unexpected character '?'");
         case '"': return lex_string(L);
         case '`': return lex_raw_string(L);
     }
@@ -811,6 +816,13 @@ static Node *parse_postfix(Parser *P) {
             mem->a = expr;
             mem->name = copy_lexeme(&P->prev);
             expr = mem;
+        } else if (p_match(P, T_QDOT)) {
+            p_consume(P, T_IDENT, "expected attribute name after '?.'");
+            Node *mem = new_node(N_MEMBER, P->prev.line);
+            mem->a = expr;
+            mem->name = copy_lexeme(&P->prev);
+            mem->op = T_QDOT; /* optional chaining: nil if the object is nil */
+            expr = mem;
         } else break;
     }
     return expr;
@@ -845,6 +857,7 @@ static int bin_prec(TokType t) {
         case T_EQEQ: case T_BANGEQ: return 4;
         case T_AND: return 3;
         case T_OR:  return 2;
+        case T_QQ:  return 1; /* null-coalescing, loosest binary */
         default: return -1;
     }
 }
@@ -856,7 +869,7 @@ static Node *parse_binary(Parser *P, int min_prec) {
         if (prec < min_prec) break;
         p_advance(P);
         Node *right = parse_binary(P, prec + 1); /* left-assoc */
-        Node *n = new_node((op == T_AND || op == T_OR) ? N_LOGICAL : N_BINARY, P->prev.line);
+        Node *n = new_node((op == T_AND || op == T_OR || op == T_QQ) ? N_LOGICAL : N_BINARY, P->prev.line);
         n->op = op; n->a = left; n->b = right;
         left = n;
     }
@@ -1439,7 +1452,7 @@ typedef enum {
     OP_EQUAL, OP_NOT_EQUAL, OP_LESS, OP_LESS_EQUAL, OP_GREATER, OP_GREATER_EQUAL,
     OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_FLOORDIV, OP_MOD,
     OP_NEGATE, OP_NOT,
-    OP_JUMP, OP_JUMP_IF_FALSE, OP_LOOP,
+    OP_JUMP, OP_JUMP_IF_FALSE, OP_JUMP_IF_NOT_NIL, OP_JUMP_IF_NIL, OP_LOOP,
     OP_CALL, OP_CLOSURE, OP_CLOSE_UPVALUE, OP_RETURN,
     OP_BUILD_LIST, OP_BUILD_MAP,
     OP_GET_INDEX, OP_SET_INDEX, OP_GET_PROPERTY, OP_SET_PROPERTY,
@@ -1711,7 +1724,12 @@ static void compile_expr(Compiler *C, Node *n) {
         }
         case N_LOGICAL: {
             compile_expr(C, n->a);
-            if (n->op == T_AND) {
+            if (n->op == T_QQ) { /* a ?? b : a if a is not nil, else b */
+                int notNil = emit_jump(C, OP_JUMP_IF_NOT_NIL, n->line);
+                emit_byte(C, OP_POP, n->line);  /* discard the nil */
+                compile_expr(C, n->b);
+                patch_jump(C, notNil);          /* keep a (non-nil) */
+            } else if (n->op == T_AND) {
                 int end = emit_jump(C, OP_JUMP_IF_FALSE, n->line);
                 emit_byte(C, OP_POP, n->line);
                 compile_expr(C, n->b);
@@ -1739,7 +1757,13 @@ static void compile_expr(Compiler *C, Node *n) {
             break;
         case N_MEMBER:
             compile_expr(C, n->a);
-            emit_byte(C, OP_GET_PROPERTY, n->line); emit_u16(C, name_const(C, n->name), n->line);
+            if (n->op == T_QDOT) { /* a?.b : nil if a is nil, else a.b */
+                int end = emit_jump(C, OP_JUMP_IF_NIL, n->line);  /* a nil -> keep nil, skip */
+                emit_byte(C, OP_GET_PROPERTY, n->line); emit_u16(C, name_const(C, n->name), n->line);
+                patch_jump(C, end);
+            } else {
+                emit_byte(C, OP_GET_PROPERTY, n->line); emit_u16(C, name_const(C, n->name), n->line);
+            }
             break;
         case N_ASSIGN: compile_assign(C, n); break;
         case N_FN: compile_function(C, n, n->line); break;
@@ -2452,6 +2476,8 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_NOT: vm_push(vm, bool_val(!is_truthy(vm_pop(vm)))); break;
             case OP_JUMP: { uint16_t off = READ_U16(); frame->ip += off; break; }
             case OP_JUMP_IF_FALSE: { uint16_t off = READ_U16(); if (!is_truthy(vm_peek(vm, 0))) frame->ip += off; break; }
+            case OP_JUMP_IF_NOT_NIL: { uint16_t off = READ_U16(); if (!IS_NIL(vm_peek(vm, 0))) frame->ip += off; break; }
+            case OP_JUMP_IF_NIL: { uint16_t off = READ_U16(); if (IS_NIL(vm_peek(vm, 0))) frame->ip += off; break; }
             case OP_LOOP: { uint16_t off = READ_U16(); frame->ip -= off; break; }
             case OP_CALL: {
                 int argc = READ_BYTE();

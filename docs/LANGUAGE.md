@@ -69,6 +69,7 @@ Variables are block-scoped. An inner scope can shadow an outer one.
 | Arithmetic  | `+  -  *  /  //  %`                     | `/` is float division; `//` floors |
 | Comparison  | `==  !=  <  <=  >  >=`                  | numeric and value equality     |
 | Logical     | `and  or  not`                         | short-circuit; return operands |
+| Null-safety | `?.`  `??`                             | optional chaining; nil-coalescing |
 | Unary       | `-x`, `not x`                          |                                |
 
 Notes:
@@ -76,6 +77,23 @@ Notes:
 - `+` also concatenates strings (`"a" + "b"`) and lists (`[1] + [2]`).
 - `and`/`or` short-circuit and return the deciding operand, so
   `let name = input or "anon"` works as a default.
+
+### Null-safety: `?.` and `??`
+
+Loqi targets the "billion-dollar mistake" with two operators:
+
+- `a?.b` — **optional chaining**: evaluates to `nil` if `a` is `nil`, otherwise
+  `a.b`. Chains short-circuit: `user?.address?.city` is `nil` if any link is nil.
+- `x ?? y` — **null-coalescing**: `x` if it is not `nil`, otherwise `y`. Unlike
+  `or`, it only replaces `nil` — `false ?? 1` is `false`, `0 ?? 1` is `0`.
+
+```loqi
+fn display_name(user) {
+  return user?.name ?? "guest"      # nil-safe: no crash if user or name is missing
+}
+display_name(nil)              # "guest"
+display_name({ name: "Ada" })  # "Ada"
+```
 - Integer arithmetic stays `int`; mixing with a `float` produces a `float`.
 - `5 / 2` is `2.5`; `5 // 2` is `2`; `-7 // 2` is `-4` (floor).
 

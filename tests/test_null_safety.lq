@@ -1,0 +1,25 @@
+# Null-safety: optional chaining ?. and null-coalescing ??
+
+# ?? — replaces nil, but NOT other falsy values (unlike `or`)
+assert((nil ?? 5) == 5, "?? replaces nil")
+assert((3 ?? 5) == 3, "?? keeps a non-nil value")
+assert((false ?? 9) == false, "?? does NOT replace false")
+assert((0 ?? 9) == 0, "?? does NOT replace 0")
+assert(("" ?? "x") == "", "?? does NOT replace empty string")
+assert((nil ?? nil ?? 7) == 7, "?? chains")
+
+# ?. — optional chaining: nil if the left side is nil
+assert(nil?.x == nil, "nil?.x is nil")
+let m = { a: 1, inner: { v: 5 } }
+assert(m?.a == 1, "?. reads a present field")
+assert(m?.inner?.v == 5, "?. chains into nested maps")
+assert(m?.missing?.deep == nil, "?. short-circuits on a missing link")
+assert(nil?.a?.b?.c == nil, "long ?. chain starting from nil")
+
+# the canonical null-safe pattern
+fn name_of(user) { return user?.name ?? "guest" }
+assert(name_of(nil) == "guest", "default when the whole thing is nil")
+assert(name_of({ name: "Ada" }) == "Ada", "present value wins")
+assert(name_of({ age: 9 }) == "guest", "default when the field is missing")
+
+print("test_null_safety: all tests passed ✓")
