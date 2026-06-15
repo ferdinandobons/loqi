@@ -31,6 +31,7 @@ imply for the next step.
 | Lang | null-safety `??` / `?.`, ranges `a..b`, pipe `\|>` | ✅ done |
 | Lang | arrow functions `x => e`, `(a, b) => e`, `() => e` | ✅ done |
 | Lang | `if` & `match` as expressions (`let x = if c { a } else { b }`) | ✅ done |
+| Lang | `const` immutable bindings | ✅ done |
 | AI | `ai(prompt, options)` (model/system/temperature/max_tokens) | ✅ done |
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `ai_json(prompt, schema)`, schema-validated output + retry | ✅ done |
@@ -203,6 +204,6 @@ output, regex, RAG, expression-form if/match, and the rest all shipped):
 - `embed()` (embeddings API, needs a non-Anthropic provider/key).
 - `ai` retry/backoff on 429/5xx; token counting.
 - `loqi fmt`, `loqi test`, an LSP for editor support.
-- Optional type annotations; `const`; block expressions that declare locals.
+- Optional type annotations; block expressions that declare locals.
 - Computed-goto dispatch and NaN-boxed values (raw VM speed).
 - `loqi build`: AOT-compile a program to a native binary via emitted C.

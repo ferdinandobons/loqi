@@ -1,0 +1,2 @@
+# A const without an initializer is a compile error.
+const w

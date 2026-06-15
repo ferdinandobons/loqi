@@ -1,0 +1,32 @@
+# const: immutable bindings. Reassigning a const is a COMPILE error (so those cases
+# live in tests/errors/); here we check that valid const usage works end to end.
+
+# a const global is a normal readable value
+const PI = 3.14159
+assert(PI == 3.14159, "const global reads")
+fn area(r) { return PI * r * r }
+assert(area(2) > 12.56 and area(2) < 12.57, "a function sees a const global")
+
+# a const local works and can be captured by a closure
+fn make() {
+  const step = 10
+  let n = 0
+  fn bump() {
+    n = n + step
+    return n
+  }
+  return bump
+}
+let b = make()
+assert(b() == 10 and b() == 20, "a closure captures a const local")
+
+# shadowing a const in an inner scope creates a NEW (non-const) binding
+const x = 1
+fn shadow() {
+  let x = 2
+  x = 3
+  return x
+}
+assert(shadow() == 3 and x == 1, "an inner let shadows an outer const without touching it")
+
+print("test_const: all tests passed ✓")

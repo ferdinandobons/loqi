@@ -60,6 +60,15 @@ n = n + 1          # ok
 m = 5              # error: 'm' not declared (use 'let')
 ```
 
+Use `const` for an immutable binding: it must have an initializer, and assigning to
+it is a compile-time error (even from inside a closure that captured it). Shadowing
+it with a new `let`/`const` in an inner scope is fine, that is a different binding.
+
+```loqi
+const PI = 3.14159
+PI = 3             # error: cannot assign to constant 'PI'
+```
+
 Variables are block-scoped. An inner scope can shadow an outer one.
 
 ## Operators

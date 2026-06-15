@@ -336,7 +336,7 @@ typedef enum {
     /* literals */
     T_INT, T_FLOAT, T_STRING, T_RAWSTRING, T_IDENT,
     /* keywords */
-    T_LET, T_FN, T_RETURN, T_IF, T_ELSE, T_WHILE, T_FOR, T_IN,
+    T_LET, T_CONST, T_FN, T_RETURN, T_IF, T_ELSE, T_WHILE, T_FOR, T_IN,
     T_TRUE, T_FALSE, T_NIL, T_AND, T_OR, T_NOT, T_BREAK, T_CONTINUE, T_IMPORT,
     T_MATCH, T_TRY, T_CATCH,
     /* punctuation / operators */
@@ -438,6 +438,7 @@ static TokType keyword_type(const char *s, int len) {
             if (!memcmp(s, "break", 5)) return T_BREAK;
             if (!memcmp(s, "match", 5)) return T_MATCH;
             if (!memcmp(s, "catch", 5)) return T_CATCH;
+            if (!memcmp(s, "const", 5)) return T_CONST;
             break;
         case 6:
             if (!memcmp(s, "return", 6)) return T_RETURN;
@@ -1067,13 +1068,17 @@ static Node *parse_block(Parser *P) {
     return block;
 }
 
-static Node *parse_let(Parser *P) {
+static Node *parse_let(Parser *P, bool is_const) {
     int line = P->prev.line;
-    p_consume(P, T_IDENT, "expected variable name after 'let'");
+    p_consume(P, T_IDENT, is_const ? "expected a name after 'const'" : "expected variable name after 'let'");
     Node *n = new_node(N_LET, line);
     n->name = copy_lexeme(&P->prev);
+    if (is_const) n->op = T_CONST; /* mark an immutable binding */
     if (p_match(P, T_EQ)) n->a = parse_expression(P);
-    else n->a = NULL; /* declared nil */
+    else {
+        if (is_const) parser_error_at(P, &P->prev, "'const' requires an initializer");
+        n->a = NULL; /* `let x` declares nil */
+    }
     end_statement(P);
     return n;
 }
@@ -1196,7 +1201,8 @@ static Node *parse_try(Parser *P) {
 
 static Node *parse_statement(Parser *P) {
     skip_newlines(P);
-    if (p_match(P, T_LET))    return parse_let(P);
+    if (p_match(P, T_LET))    return parse_let(P, false);
+    if (p_match(P, T_CONST))  return parse_let(P, true);
     if (p_match(P, T_FN))     return parse_fn_decl(P);
     if (p_match(P, T_IF))     return parse_if(P, false);
     if (p_match(P, T_WHILE))  return parse_while(P);
@@ -1671,8 +1677,8 @@ static ObjUpvalue *new_upvalue(Interp *I, Value *slot) {
  * ========================================================================= */
 #define MAX_LOCALS 256
 
-typedef struct { const char *name; int name_len; int depth; bool is_captured; } CompLocal;
-typedef struct { uint8_t index; bool is_local; } CompUpvalue;
+typedef struct { const char *name; int name_len; int depth; bool is_captured; bool is_const; } CompLocal;
+typedef struct { uint8_t index; bool is_local; bool is_const; } CompUpvalue;
 
 #define MAX_BREAKS_PER_LOOP 256
 
@@ -1697,6 +1703,7 @@ typedef struct Compiler {
     int try_depth; /* number of try handlers currently open in this function */
     int expr_depth; /* compile_expr recursion depth, to bound deep flat chains */
     int stmt_depth; /* compile_stmt recursion depth, to bound deep nested blocks/if */
+    Table *const_globals; /* names declared `const` at module scope (shared from the root) */
     bool *had_error; /* shared flag across nested compilers */
 } Compiler;
 /* Cap expression-tree depth at compile time: the iterative binary/pipe/index parse
@@ -1722,6 +1729,7 @@ typedef struct Compiler {
 
 static void compile_expr(Compiler *C, Node *n);
 static void compile_stmt(Compiler *C, Node *n);
+static void table_free(Table *t); /* defined later; used to free the const-globals set */
 static void compile_as_value(Compiler *C, Node *n);
 static void compile_block_value(Compiler *C, Node *block);
 static void compile_if_expr(Compiler *C, Node *n);
@@ -1766,11 +1774,12 @@ static void emit_loop(Compiler *C, int loop_start, int line) {
 static void init_compiler(Compiler *C, Interp *I, Compiler *enclosing, const char *name, bool *had_error) {
     C->enclosing = enclosing; C->I = I; C->local_count = 0; C->scope_depth = 0;
     C->loop = NULL; C->try_depth = 0; C->expr_depth = 0; C->stmt_depth = 0; C->had_error = had_error;
+    C->const_globals = enclosing ? enclosing->const_globals : NULL; /* root sets the real table */
     C->proto = new_proto(I);
     if (name) C->proto->name = xstrdup(name);
     /* slot 0 holds the executing closure itself */
     CompLocal *l = &C->locals[C->local_count++];
-    l->name = ""; l->name_len = 0; l->depth = 0; l->is_captured = false;
+    l->name = ""; l->name_len = 0; l->depth = 0; l->is_captured = false; l->is_const = false;
 }
 
 static void begin_scope(Compiler *C) { C->scope_depth++; }
@@ -1784,7 +1793,7 @@ static void end_scope(Compiler *C, int line) {
 static int add_local(Compiler *C, const char *name, int len) {
     if (C->local_count >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "too many local variables\n"); return -1; }
     CompLocal *l = &C->locals[C->local_count++];
-    l->name = name; l->name_len = len; l->depth = -1; l->is_captured = false;
+    l->name = name; l->name_len = len; l->depth = -1; l->is_captured = false; l->is_const = false;
     return C->local_count - 1;
 }
 static void mark_initialized(Compiler *C) {
@@ -1798,12 +1807,12 @@ static int resolve_local(Compiler *C, const char *name, int len) {
     }
     return -1;
 }
-static int add_upvalue(Compiler *C, uint8_t index, bool is_local) {
+static int add_upvalue(Compiler *C, uint8_t index, bool is_local, bool is_const) {
     int n = C->proto->upvalue_count;
     for (int i = 0; i < n; i++)
         if (C->upvalues[i].index == index && C->upvalues[i].is_local == is_local) return i;
     if (n >= MAX_LOCALS) { *C->had_error = true; fprintf(stderr, "too many upvalues\n"); return 0; }
-    C->upvalues[n].index = index; C->upvalues[n].is_local = is_local;
+    C->upvalues[n].index = index; C->upvalues[n].is_local = is_local; C->upvalues[n].is_const = is_const;
     return C->proto->upvalue_count++;
 }
 static int resolve_upvalue(Compiler *C, const char *name, int len) {
@@ -1811,10 +1820,10 @@ static int resolve_upvalue(Compiler *C, const char *name, int len) {
     int local = resolve_local(C->enclosing, name, len);
     if (local != -1) {
         C->enclosing->locals[local].is_captured = true;
-        return add_upvalue(C, (uint8_t)local, true);
+        return add_upvalue(C, (uint8_t)local, true, C->enclosing->locals[local].is_const);
     }
     int up = resolve_upvalue(C->enclosing, name, len);
-    if (up != -1) return add_upvalue(C, (uint8_t)up, false);
+    if (up != -1) return add_upvalue(C, (uint8_t)up, false, C->enclosing->upvalues[up].is_const);
     return -1;
 }
 
@@ -1826,12 +1835,24 @@ static void named_get(Compiler *C, const char *name, int line) {
     if (up != -1) { emit_byte(C, OP_GET_UPVALUE, line); emit_byte(C, (uint8_t)up, line); return; }
     emit_byte(C, OP_GET_GLOBAL, line); emit_u16(C, name_const(C, name), line);
 }
+static void const_reassign_error(Compiler *C, const char *name) {
+    *C->had_error = true;
+    fprintf(stderr, "cannot assign to constant '%s' (declared with 'const')\n", name);
+}
 static void named_set(Compiler *C, const char *name, int line) {
     int len = (int)strlen(name);
     int slot = resolve_local(C, name, len);
-    if (slot != -1) { emit_byte(C, OP_SET_LOCAL, line); emit_byte(C, (uint8_t)slot, line); return; }
+    if (slot != -1) {
+        if (C->locals[slot].is_const) const_reassign_error(C, name);
+        emit_byte(C, OP_SET_LOCAL, line); emit_byte(C, (uint8_t)slot, line); return;
+    }
     int up = resolve_upvalue(C, name, len);
-    if (up != -1) { emit_byte(C, OP_SET_UPVALUE, line); emit_byte(C, (uint8_t)up, line); return; }
+    if (up != -1) {
+        if (C->upvalues[up].is_const) const_reassign_error(C, name);
+        emit_byte(C, OP_SET_UPVALUE, line); emit_byte(C, (uint8_t)up, line); return;
+    }
+    if (C->const_globals && table_get(C->const_globals, name, hash_string(name, (size_t)len)))
+        const_reassign_error(C, name);
     emit_byte(C, OP_SET_GLOBAL, line); emit_u16(C, name_const(C, name), line);
 }
 
@@ -2195,14 +2216,20 @@ static void compile_stmt(Compiler *C, Node *n) {
         return;
     }
     switch (n->type) {
-        case N_LET:
+        case N_LET: {
+            bool is_const = (n->op == T_CONST);
             if (n->a) compile_expr(C, n->a); else emit_byte(C, OP_NIL, n->line);
             if (C->scope_depth == 0) {
+                if (is_const && C->const_globals)
+                    table_set(C->const_globals, n->name, hash_string(n->name, strlen(n->name)), NIL_VAL);
                 emit_byte(C, OP_DEFINE_GLOBAL, n->line); emit_u16(C, name_const(C, n->name), n->line);
             } else {
-                add_local(C, n->name, (int)strlen(n->name)); mark_initialized(C);
+                add_local(C, n->name, (int)strlen(n->name));
+                if (is_const) C->locals[C->local_count - 1].is_const = true;
+                mark_initialized(C);
             }
             break;
+        }
         case N_FN:
             if (C->scope_depth == 0) {
                 compile_function(C, n, n->line);
@@ -2263,9 +2290,12 @@ static ObjProto *compile_script(Interp *I, Node *program) {
     bool had_error = false;
     Compiler C;
     init_compiler(&C, I, NULL, NULL, &had_error);
+    Table const_globals; table_init(&const_globals); /* `const` names at module scope */
+    C.const_globals = &const_globals;
     for (int i = 0; i < program->item_count; i++) compile_stmt(&C, program->items[i]);
     emit_byte(&C, OP_NIL, 1);
     emit_byte(&C, OP_RETURN, 1);
+    table_free(&const_globals);
     if (had_error) return NULL;
     return C.proto;
 }

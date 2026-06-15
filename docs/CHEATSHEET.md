@@ -9,6 +9,7 @@ newline ends a statement; `;` also separates). Blocks use `{ }`.
 ```loqi
 let name = "world"      # declare with let
 name = "hi"            # reassign with = (assigning an undeclared name is an error)
+const PI = 3.14159     # immutable: reassigning it is a compile error
 let a = 1; let b = 2   # ; separates statements on one line
 ```
 
