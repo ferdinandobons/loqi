@@ -111,6 +111,7 @@ struct ObjProto {
     Chunk chunk;
     char *name;            /* for diagnostics; NULL for the top-level script */
     Table *module_globals; /* the globals table of the module this proto belongs to */
+    const char *source;    /* borrowed: the module's source text (kept alive in I->sources) */
 };
 
 /* A captured variable that may outlive the stack frame that created it. */
@@ -185,6 +186,10 @@ struct Interp {
     bool has_error;
     char err_msg[512];
     char err_trace[1024]; /* call-stack backtrace for an uncaught runtime error */
+    char err_source[320]; /* the offending source line for an uncaught error */
+    const char *current_source; /* source being compiled now (-> proto->source) */
+    char **sources;       /* every source text, kept alive for diagnostics */
+    int source_count, source_cap;
     int import_depth;  /* number of files currently being loaded (import stack height) */
     const char *import_stack[64]; /* paths currently loading, for cycle detection */
     /* mark-sweep garbage collector */
@@ -1452,6 +1457,7 @@ static ObjProto *new_proto(Interp *I) {
     ObjProto *p = (ObjProto *)alloc_obj(I, sizeof(ObjProto), OBJ_PROTO);
     p->arity = 0; p->upvalue_count = 0; p->name = NULL;
     p->module_globals = I->globals; /* globals of the module being compiled */
+    p->source = I->current_source;  /* for source-line diagnostics */
     chunk_init(&p->chunk);
     return p;
 }
@@ -1998,12 +2004,24 @@ static int vm_current_line(Interp *I) {
     return (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
 }
 
+/* Copy source line `line` of `src` into buf as "  N | <text>" (empty if absent). */
+static void capture_source_line(char *buf, size_t bufsz, const char *src, int line) {
+    buf[0] = '\0';
+    if (!src || line <= 0) return;
+    const char *p = src;
+    for (int l = 1; l < line && *p; ) { if (*p++ == '\n') l++; }
+    const char *end = p;
+    while (*end && *end != '\n') end++;
+    snprintf(buf, bufsz, "  %d | %.*s", line, (int)(end - p), p);
+}
+
 /* Build a human-readable backtrace of the live call stack at error time, newest
  * frame first. Captured before the longjmp so the frames are still intact; the
  * top-level reporter prints it under the error message for an uncaught error. */
 #define MAX_TRACE_FRAMES 16
 static void build_backtrace(Interp *I) {
     I->err_trace[0] = '\0';
+    I->err_source[0] = '\0';
     VM *vm = I->vm;
     if (!vm || vm->frame_count <= 0) return;
     size_t off = 0;
@@ -2013,6 +2031,8 @@ static void build_backtrace(Interp *I) {
         Chunk *ch = &fr->closure->proto->chunk;
         int idx = (int)(fr->ip - ch->code) - 1;
         int line = (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
+        if (i == vm->frame_count - 1) /* the innermost frame: where the error is */
+            capture_source_line(I->err_source, sizeof(I->err_source), fr->closure->proto->source, line);
         const char *name = (i == 0) ? "<script>"
                          : (fr->closure->proto->name ? fr->closure->proto->name : "<anonymous>");
         int w = snprintf(I->err_trace + off, sizeof(I->err_trace) - off,
@@ -4212,6 +4232,15 @@ static char *read_file(const char *path) {
 
 /* Compile and run a source string (or a file when src == NULL). The error
  * landing pad (I->err_jmp) is saved/restored so nested imports nest safely. */
+/* Keep a source text alive for the program's lifetime so proto->source (used for
+   source-line diagnostics) never dangles after a module's run_source returns. */
+static void keep_source(Interp *I, char *s) {
+    if (I->source_count + 1 > I->source_cap) {
+        I->source_cap = I->source_cap < 8 ? 8 : I->source_cap * 2;
+        I->sources = xrealloc(I->sources, sizeof(char *) * (size_t)I->source_cap);
+    }
+    I->sources[I->source_count++] = s;
+}
 static int run_source(Interp *I, const char *src, const char *path) {
     /* Bound import recursion: a nested import re-enters run_source on the C
        stack, so an unguarded cycle would overflow it. Both guards return error
@@ -4240,6 +4269,11 @@ static int run_source(Interp *I, const char *src, const char *path) {
         if (!owned) { I->import_depth--; return 74; }
         src = owned;
     }
+    /* keep a copy of the source alive for source-line diagnostics (proto->source) */
+    char *kept_source = strdup(src);
+    keep_source(I, kept_source);
+    const char *prev_source = I->current_source;
+    I->current_source = kept_source;
     const char *prev_path = I->path;
     I->path = path;
 
@@ -4248,10 +4282,10 @@ static int run_source(Interp *I, const char *src, const char *path) {
     lex_init(&P.lex, I, src);
     p_advance(&P);
     Node *prog = parse_program(&P);
-    if (P.had_error) { free(owned); I->path = prev_path; I->import_depth--; return 65; }
+    if (P.had_error) { free(owned); I->path = prev_path; I->current_source = prev_source; I->import_depth--; return 65; }
 
     ObjProto *script = compile_script(I, prog);
-    if (!script) { free(owned); I->path = prev_path; I->import_depth--; return 65; }
+    if (!script) { free(owned); I->path = prev_path; I->current_source = prev_source; I->import_depth--; return 65; }
 
     /* save the enclosing error landing pad + VM for safe nesting (imports) */
     jmp_buf saved; memcpy(saved, I->err_jmp, sizeof(jmp_buf));
@@ -4272,6 +4306,7 @@ static int run_source(Interp *I, const char *src, const char *path) {
            reporter in that case. */
         if (prev_vm == NULL) {
             fprintf(stderr, "%s\n", I->err_msg);
+            if (I->err_source[0]) fprintf(stderr, "%s\n", I->err_source);
             if (I->err_trace[0]) fputs(I->err_trace, stderr);
         }
         rc = 70;
@@ -4286,6 +4321,7 @@ static int run_source(Interp *I, const char *src, const char *path) {
     I->vm = prev_vm;
     memcpy(I->err_jmp, saved, sizeof(jmp_buf)); /* restore enclosing landing pad */
     I->path = prev_path;
+    I->current_source = prev_source;
     I->import_depth--;
     return rc;
 }
@@ -4342,6 +4378,9 @@ static void interp_init(Interp *I) {
     I->has_error = false;
     I->err_msg[0] = '\0';
     I->err_trace[0] = '\0';
+    I->err_source[0] = '\0';
+    I->current_source = NULL;
+    I->sources = NULL; I->source_count = 0; I->source_cap = 0;
     I->import_depth = 0;
     I->obj_count = 0;
     I->next_gc = 1u << 14;   /* ~16k objects before the first collection */

@@ -220,11 +220,12 @@ try { risky() } catch { print("handled") }
 `return` works from inside a `try`. (Avoid `break`/`continue` that jump out of a
 `try` block before it finishes — that edge case isn't supported yet.)
 
-An **uncaught** error prints the message and a backtrace of the call stack, so
-you see exactly where it came from:
+An **uncaught** error prints the message, the offending source line, and a
+backtrace of the call stack, so you see exactly where it came from:
 
 ```
 runtime error [app.lq:4]: index 3 out of bounds (len 0)
+  4 |   return items[3]
   at deepest (app.lq:4)
   at middle (app.lq:6)
   at outer (app.lq:7)

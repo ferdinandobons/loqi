@@ -36,7 +36,8 @@ imply for the next step.
 | Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
 | Diagnostics | backtrace on uncaught errors | ✅ done |
 | Stdlib | filesystem (ls/exists/mkdir/rm) + `path` ops | ✅ done |
-| Diagnostics | source-line snippet + caret (needs column tracking) | 🔜 next |
+| Diagnostics | source-line snippet on uncaught errors | ✅ done |
+| Diagnostics | caret under the column (needs column tracking) | 🔜 next |
 | Core | module cache (single-evaluation) | 📋 planned |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |
 | Speed | AOT: emit C and compile (`loqi build`) | 🔬 exploring |
