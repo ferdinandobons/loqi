@@ -325,6 +325,12 @@ Tunable via the environment:
 
 Tip: combine with `head` to bound a run, e.g. `head -100 big.txt | loqi extract.lq`.
 
+**Runtime requirements.** `ai`, `ai_json`, `ai_all` and `http.*` shell out to `curl`,
+so `curl` must be on `PATH`; if it is missing, the first call fails with a clear
+install hint rather than a confusing error. The request body and the API key go into
+two `0600` temp files created under `$TMPDIR` (or `/tmp` when `$TMPDIR` is unset) and
+removed after the call: the key never appears in `argv` or on the process list.
+
 ## `ai_all(prompts) → list` / `ai_all(prompts, options) → list`
 Runs many model calls **concurrently** and returns the answers in input order,
 the same `options` (incl. `json`) apply to every prompt. This is how you fan out

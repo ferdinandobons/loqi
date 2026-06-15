@@ -4127,9 +4127,40 @@ static char *run_capture(const char *cmd, size_t *out_len, int *out_status) {
     return buf;
 }
 
+/* True if an executable named `curl` is found on $PATH. The AI/HTTP natives shell
+   out to curl, so this lets them fail with a clear install hint instead of a
+   confusing "curl returned an error" when curl is simply not installed (common in
+   minimal containers). Empty PATH elements (which POSIX reads as the cwd) are
+   skipped on purpose: we only ever want a system curl, never one in the cwd. */
+static bool curl_on_path(void) {
+    const char *path = getenv("PATH");
+    if (!path || !*path) path = "/usr/bin:/bin:/usr/local/bin";
+    for (const char *p = path; *p; ) {
+        const char *colon = strchr(p, ':');
+        size_t dl = colon ? (size_t)(colon - p) : strlen(p);
+        if (dl > 0 && dl + 6 < PATH_MAX) { /* "/curl" + NUL = 6 bytes */
+            char buf[PATH_MAX];
+            memcpy(buf, p, dl);
+            memcpy(buf + dl, "/curl", 6); /* copies the trailing NUL too */
+            if (access(buf, X_OK) == 0) return true;
+        }
+        if (!colon) break;
+        p = colon + 1;
+    }
+    return false;
+}
+
+/* Raise a clear, actionable error (naming the caller) when curl is missing, before
+   any scratch is allocated, so there is no malloc-before-longjmp leak. */
+static void require_curl(Interp *I, const char *who) {
+    if (!curl_on_path())
+        runtime_error(I, 0, "%s: 'curl' was not found on PATH; install it (e.g. 'apt install curl' or 'apk add curl')", who);
+}
+
 /* ---- HTTP ---- */
 static Value nat_http_get(Interp *I, int argc, Value *argv) {
     if (!IS_STRING(argv[0])) runtime_error(I, 0, "http.get() requires a url (str)");
+    require_curl(I, "http.get()");
     char *qurl = shell_quote(AS_STRING(argv[0])->chars);
     size_t clen = strlen(qurl) + 64;
     char *cmd = xmalloc(clen);
@@ -4146,6 +4177,7 @@ static Value nat_http_get(Interp *I, int argc, Value *argv) {
 static Value nat_http_post(Interp *I, int argc, Value *argv) {
     if (argc < 2 || !IS_STRING(argv[0]) || !IS_STRING(argv[1]))
         runtime_error(I, 0, "http.post() requires (url: str, body: str)");
+    require_curl(I, "http.post()");
     const char *ctype = (argc >= 3 && IS_STRING(argv[2])) ? AS_STRING(argv[2])->chars : "application/json";
     char hdr[256];
     snprintf(hdr, sizeof(hdr), "Content-Type: %.200s", ctype);
@@ -4592,11 +4624,30 @@ static char *ai_run_with_retry(const char *cmd, size_t *out_len, int *out_status
     }
 }
 
+/* Capacity of an mkstemp template path. Covers any real temp dir ($TMPDIR on
+   macOS is well under this); a pathologically long $TMPDIR raises rather than
+   silently truncating into a wrong path. Callers size body_tmpl/cfg_tmpl to this. */
+#define AI_TMPL_CAP 256
+
+/* Build an mkstemp template "<dir>/<stem>XXXXXX" into buf[AI_TMPL_CAP], where <dir>
+   is $TMPDIR (trailing slashes stripped) or "/tmp" when $TMPDIR is unset/empty.
+   Returns false if it would not fit (pathological $TMPDIR) so the caller raises
+   cleanly instead of mkstemp'ing a truncated path. The key-bearing config file
+   lands under this dir, so honoring $TMPDIR is what makes containers/CI correct. */
+static bool ai_make_tmpl(char *buf, const char *stem) {
+    const char *dir = getenv("TMPDIR");
+    if (!dir || !*dir) dir = "/tmp";
+    size_t dl = strlen(dir);
+    while (dl > 1 && dir[dl - 1] == '/') dl--; /* strip trailing '/' (but keep "/") */
+    int need = snprintf(buf, AI_TMPL_CAP, "%.*s/%sXXXXXX", (int)dl, dir, stem);
+    return need > 0 && need < AI_TMPL_CAP;
+}
+
 /* Build the request body + 0600 curl config temp files for one prompt and return
-   the curl command (malloc'd, caller frees). Fills body_tmpl/cfg_tmpl (>= 32
-   bytes; caller unlinks them). Runs on the MAIN thread only, it allocates Loqi
-   objects (json_stringify) and so must not run on a worker. The API key goes
-   only into the 0600 config file, never argv. */
+   the curl command (malloc'd, caller frees). Fills body_tmpl/cfg_tmpl (each
+   AI_TMPL_CAP bytes; caller unlinks them). Runs on the MAIN thread only, it
+   allocates Loqi objects (json_stringify) and so must not run on a worker. The API
+   key goes only into the 0600 config file, never argv. */
 static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key,
                               char *body_tmpl, char *cfg_tmpl) {
     ObjMap *body = new_map(I);
@@ -4621,14 +4672,14 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
     char *jbuf = xmalloc(16); size_t jl = 0, jc = 16; jbuf[0] = '\0';
     json_stringify_value(I, &jbuf, &jl, &jc, obj_val((Obj *)body), 0);
 
-    strcpy(body_tmpl, "/tmp/loqi_ai_XXXXXX");
+    if (!ai_make_tmpl(body_tmpl, "loqi_ai_")) { free(jbuf); return fail_msg(I, "ai(): $TMPDIR path is too long"); }
     int fd = mkstemp(body_tmpl); /* creates the file 0600 */
     if (fd < 0) { free(jbuf); return fail_msg(I, "ai(): could not create temp file"); }
     if (write(fd, jbuf, jl) < 0) { close(fd); unlink(body_tmpl); free(jbuf); return fail_msg(I, "ai(): temp write failed"); }
     close(fd);
     free(jbuf);
 
-    strcpy(cfg_tmpl, "/tmp/loqi_aicfg_XXXXXX");
+    if (!ai_make_tmpl(cfg_tmpl, "loqi_aicfg_")) { unlink(body_tmpl); return fail_msg(I, "ai(): $TMPDIR path is too long"); }
     int cfd = mkstemp(cfg_tmpl);
     if (cfd < 0) { unlink(body_tmpl); return fail_msg(I, "ai(): could not create config file"); }
     FILE *cf = fdopen(cfd, "w");
@@ -4773,7 +4824,8 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     const char *key = getenv("ANTHROPIC_API_KEY");
     if (!key || !*key)
         runtime_error(I, 0, "ai(): set the ANTHROPIC_API_KEY environment variable");
-    char body_tmpl[32], cfg_tmpl[32];
+    require_curl(I, "ai()");
+    char body_tmpl[AI_TMPL_CAP], cfg_tmpl[AI_TMPL_CAP];
     char *cmd = ai_build_request(I, argv[0], o, key, body_tmpl, cfg_tmpl);
     if (!cmd) raise_error(I); /* build cleaned up its own temp files; raise the message */
     size_t rlen; int status; long http; int attempts;
@@ -4785,7 +4837,7 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
 /* One model call returning a parsed JSON value (want_json forced). ai_json validates
    against a schema, so it always returns the data itself, never a usage wrapper. */
 static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key) {
-    char body_tmpl[32], cfg_tmpl[32];
+    char body_tmpl[AI_TMPL_CAP], cfg_tmpl[AI_TMPL_CAP];
     char *cmd = ai_build_request(I, prompt, o, key, body_tmpl, cfg_tmpl);
     if (!cmd) raise_error(I);
     size_t rlen; int status; long http; int attempts;
@@ -4805,6 +4857,7 @@ static Value nat_ai_json(Interp *I, int argc, Value *argv) {
     ai_charge(I, 1);
     const char *key = getenv("ANTHROPIC_API_KEY");
     if (!key || !*key) runtime_error(I, 0, "ai_json(): set the ANTHROPIC_API_KEY environment variable");
+    require_curl(I, "ai_json()");
     AiOpts o = ai_parse_opts(I, argc, argv, 2);
     o.want_json = true;
     if (!o.system) o.system = "Respond with a single valid JSON value and nothing else. Do not wrap it in markdown code fences.";
@@ -5023,11 +5076,12 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
         for (int i = 0; i < n; i++) { ai_dry_log(prompts->items[i]); list_push(out, cstring_val(I, "")); }
         return obj_val((Obj *)out);
     }
+    require_curl(I, "ai_all()");
     ai_charge(I, n);
 
     RunJob *jobs = xmalloc(sizeof(RunJob) * (size_t)n);
-    char (*body_tmpls)[32] = xmalloc(sizeof(char[32]) * (size_t)n);
-    char (*cfg_tmpls)[32]  = xmalloc(sizeof(char[32]) * (size_t)n);
+    char (*body_tmpls)[AI_TMPL_CAP] = xmalloc(sizeof(char[AI_TMPL_CAP]) * (size_t)n);
+    char (*cfg_tmpls)[AI_TMPL_CAP]  = xmalloc(sizeof(char[AI_TMPL_CAP]) * (size_t)n);
     for (int i = 0; i < n; i++) {
         jobs[i].cmd = ai_build_request(I, prompts->items[i], o, key, body_tmpls[i], cfg_tmpls[i]);
         if (!jobs[i].cmd) {

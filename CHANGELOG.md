@@ -37,6 +37,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Linux support**: builds and CI green on macOS arm64 AND Linux (glibc), in addition
   to the existing memory-safety gates (ASan/UBSan/leaks clean). Runtime deps: `curl` and
   `ANTHROPIC_API_KEY`.
+- **Container/CI correctness for the model call**: the key-bearing 0600 curl config file
+  is now created under `$TMPDIR` (falling back to `/tmp` when unset), so Loqi behaves on
+  hosts where `/tmp` is read-only or namespaced. A missing `curl` on `PATH` now fails the
+  first `ai`/`ai_json`/`ai_all`/`http` call with a clear install hint
+  (`apt install curl` / `apk add curl`) instead of a confusing "curl returned an error".
 
 ### Removed
 - **`docs/WHY-LOQI.md`** (the old "AI-first programming language" manifesto, wrong

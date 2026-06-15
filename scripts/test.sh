@@ -286,6 +286,56 @@ else
   fail=$((fail+1))
 fi
 
+# curl-presence guardrail: with a PATH that has no curl, the first ai()/http call
+# must fail with a clear install hint, not a confusing "curl returned an error".
+# ($LOQI has a slash, so it is run directly, not via PATH; /bin/sh used by popen is
+# an absolute path, so an empty-of-curl PATH only hides curl, nothing else.)
+nocurl_dir="$(mktemp -d)"
+nocurl_out="$(PATH="$nocurl_dir" ANTHROPIC_API_KEY=dummy "$LOQI" -e 'print(ai("hi"))' 2>&1)"
+nocurl_rc=$?
+rm -rf "$nocurl_dir"
+if [ "$nocurl_rc" -ge 64 ] && [ "$nocurl_rc" -lt 128 ] \
+   && printf '%s' "$nocurl_out" | grep -q "curl" \
+   && printf '%s' "$nocurl_out" | grep -q "not found on PATH"; then
+  echo "  ✓ (no-curl) a missing curl yields a clear install hint, not a confusing failure"
+  pass=$((pass+1))
+else
+  echo "  ✗ (no-curl) expected a curl-not-found install hint, rc=$nocurl_rc:"
+  printf '%s\n' "$nocurl_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
+# $TMPDIR honored: the key-bearing curl config temp file must be created under
+# $TMPDIR (container/CI correctness), not a hardcoded /tmp. A stub curl asserts the
+# -K config path it receives lives under the custom TMPDIR, then returns a fixed body.
+tmp_custom="$(mktemp -d)"
+tmp_stub="$(mktemp -d)"
+cat > "$tmp_stub/curl" <<STUB
+#!/bin/sh
+cfg=""
+while [ \$# -gt 0 ]; do
+  if [ "\$1" = "-K" ]; then cfg="\$2"; fi
+  shift
+done
+case "\$cfg" in
+  "$tmp_custom"/*) ;;
+  *) echo "BAD_TMPDIR:\$cfg" >&2; exit 3 ;;
+esac
+printf '%s' '{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}'
+printf '\n__LQHTTP:200__'
+STUB
+chmod +x "$tmp_stub/curl"
+tmpdir_out="$(PATH="$tmp_stub:$PATH" TMPDIR="$tmp_custom" ANTHROPIC_API_KEY=dummy "$LOQI" -e 'print(ai("hi"))' 2>&1)"
+tmpdir_rc=$?
+rm -rf "$tmp_stub" "$tmp_custom"
+if [ "$tmpdir_rc" -eq 0 ] && [ "$tmpdir_out" = "ok" ]; then
+  echo "  ✓ (tmpdir) the key-bearing curl config temp file is created under \$TMPDIR"
+  pass=$((pass+1))
+else
+  echo "  ✗ (tmpdir) expected the config temp file under \$TMPDIR, rc=$tmpdir_rc out=[$tmpdir_out]"
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
