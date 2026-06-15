@@ -743,6 +743,8 @@ static void end_statement(Parser *P) {
 static Node *parse_expression(Parser *P);
 static Node *parse_statement(Parser *P);
 static Node *parse_block(Parser *P);
+static Node *parse_if(Parser *P, bool as_expr);
+static Node *parse_match(Parser *P);
 
 static char *copy_lexeme(Token *t) {
     char *s = xmalloc((size_t)t->length + 1);
@@ -755,6 +757,11 @@ static char *copy_lexeme(Token *t) {
 static Node *parse_string_literal(Parser *P, Token *strtok);
 
 static Node *parse_primary(Parser *P) {
+    /* `if` is also an expression: `let label = if c { "a" } else { "b" }`. As a bare
+       statement it is caught earlier by parse_statement and compiled in statement
+       (no-value) form. (match-as-an-expression is not supported yet — its desugaring
+       binds a local, which can't be expression-positioned in this VM.) */
+    if (p_match(P, T_IF)) return parse_if(P, true);
     if (p_match(P, T_NIL))   { Node *n = new_node(N_NIL, P->prev.line); return n; }
     if (p_match(P, T_TRUE))  { Node *n = new_node(N_BOOL, P->prev.line); n->literal = bool_val(true); return n; }
     if (p_match(P, T_FALSE)) { Node *n = new_node(N_BOOL, P->prev.line); n->literal = bool_val(false); return n; }
@@ -1083,16 +1090,19 @@ static Node *parse_fn_decl(Parser *P) {
     return n; /* declaration: has a name */
 }
 
-static Node *parse_if(Parser *P) {
+static Node *parse_if(Parser *P, bool as_expr) {
     int line = P->prev.line;
     Node *n = new_node(N_IF, line);
     n->a = parse_expression(P);          /* condition */
     skip_newlines(P);
     n->b = parse_block(P);               /* then */
-    skip_newlines(P);                    /* allow newline(s) before else */
+    /* As a statement, allow `else` on its own line. As an expression we must NOT skip
+       the trailing newline (it terminates the enclosing statement), so an expression
+       `if` wants `} else` on the same line. */
+    if (!as_expr) skip_newlines(P);
     if (p_match(P, T_ELSE)) {
         skip_newlines(P);
-        if (p_check(P, T_IF)) { p_advance(P); n->c = parse_if(P); }
+        if (p_check(P, T_IF)) { p_advance(P); n->c = parse_if(P, as_expr); }
         else n->c = parse_block(P);      /* else */
     }
     return n;
@@ -1199,7 +1209,7 @@ static Node *parse_statement(Parser *P) {
     skip_newlines(P);
     if (p_match(P, T_LET))    return parse_let(P);
     if (p_match(P, T_FN))     return parse_fn_decl(P);
-    if (p_match(P, T_IF))     return parse_if(P);
+    if (p_match(P, T_IF))     return parse_if(P, false);
     if (p_match(P, T_WHILE))  return parse_while(P);
     if (p_match(P, T_FOR))    return parse_for(P);
     if (p_match(P, T_MATCH))  return parse_match(P);
@@ -1722,6 +1732,9 @@ typedef struct Compiler {
 
 static void compile_expr(Compiler *C, Node *n);
 static void compile_stmt(Compiler *C, Node *n);
+static void compile_as_value(Compiler *C, Node *n);
+static void compile_block_value(Compiler *C, Node *block);
+static void compile_if_expr(Compiler *C, Node *n);
 static void compile_function(Compiler *enc, Node *fn_node, int line);
 
 static Chunk *cur_chunk(Compiler *C) { return &C->proto->chunk; }
@@ -1865,6 +1878,7 @@ static void compile_expr(Compiler *C, Node *n) {
     }
     switch (n->type) {
         case N_NIL: emit_byte(C, OP_NIL, n->line); break;
+        case N_IF: compile_if_expr(C, n); break;       /* if as an expression -> branch value */
         case N_BOOL: emit_byte(C, AS_BOOL(n->literal) ? OP_TRUE : OP_FALSE, n->line); break;
         case N_INT: case N_FLOAT: case N_STR: emit_const(C, n->literal, n->line); break;
         case N_IDENT: named_get(C, n->name, n->line); break;
@@ -1992,6 +2006,54 @@ static void compile_if(Compiler *C, Node *n) {
     emit_byte(C, OP_POP, n->line);
     if (n->c) compile_stmt(C, n->c);
     patch_jump(C, endJ);
+}
+
+/* --- expression forms of blocks / if / match (block expressions, Rust/Kotlin-style):
+ * a block's value is its last expression; an if/match yields the taken branch's value.
+ * These leave exactly ONE value on the stack. They mirror the statement forms above but
+ * keep the value instead of popping it. compile_as_value routes any statement node to a
+ * value: real expressions yield their value; plain statements yield nil. */
+static void compile_block_value(Compiler *C, Node *block) {
+    begin_scope(C);
+    int base = C->local_count;
+    if (block->item_count == 0) {
+        emit_byte(C, OP_NIL, block->line);
+    } else {
+        for (int i = 0; i < block->item_count - 1; i++) compile_stmt(C, block->items[i]);
+        compile_as_value(C, block->items[block->item_count - 1]); /* last item -> the value */
+    }
+    /* Locals declared in an expression-position block would land at the wrong stack
+       slot when temporaries sit beneath them (the VM indexes locals from the frame
+       base, not the live top), so disallow them here — use a statement `if` instead. */
+    if (C->local_count > base) {
+        *C->had_error = true;
+        fprintf(stderr, "an if-expression branch cannot declare local variables (use a statement 'if')\n");
+    }
+    C->local_count = base;
+    C->scope_depth--;
+}
+static void compile_if_expr(Compiler *C, Node *n) {
+    compile_expr(C, n->a);                       /* condition */
+    int elseJ = emit_jump(C, OP_JUMP_IF_FALSE, n->line);
+    emit_byte(C, OP_POP, n->line);               /* pop cond (true path) */
+    compile_block_value(C, n->b);                /* then -> value */
+    int endJ = emit_jump(C, OP_JUMP, n->line);
+    patch_jump(C, elseJ);
+    emit_byte(C, OP_POP, n->line);               /* pop cond (false path) */
+    if (n->c) compile_as_value(C, n->c);         /* else / else-if -> value */
+    else emit_byte(C, OP_NIL, n->line);          /* no else -> nil */
+    patch_jump(C, endJ);
+}
+static void compile_as_value(Compiler *C, Node *n) {
+    switch (n->type) {
+        case N_EXPRSTMT: compile_expr(C, n->a); break;      /* expression statement -> its value */
+        case N_IF:       compile_if_expr(C, n); break;
+        case N_BLOCK:    compile_block_value(C, n); break;
+        case N_LET: case N_FN: case N_WHILE: case N_FOR: case N_RETURN:
+        case N_BREAK: case N_CONTINUE: case N_IMPORT: case N_TRY:
+            compile_stmt(C, n); emit_byte(C, OP_NIL, n->line); break; /* statements have no value -> nil */
+        default: compile_expr(C, n); break;                  /* a bare expression node */
+    }
 }
 
 static void compile_while(Compiler *C, Node *n) {

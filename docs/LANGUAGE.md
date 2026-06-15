@@ -220,6 +220,22 @@ for i in range(0, 10) {
 `for ... in` iterates over lists, maps (keys), and strings. `range(stop)`,
 `range(start, stop)` and `range(start, stop, step)` produce lists of ints.
 
+### `if` as an expression
+
+An `if` used in expression position evaluates to the value of the taken branch —
+no separate ternary operator needed. A branch's value is the last expression in its
+block; an `if` with no `else` whose condition is false evaluates to `nil`.
+
+```loqi
+let label = if score >= 90 { "A" } else if score >= 80 { "B" } else { "C" }
+let clamped = if n < 0 { 0 } else { n }
+print(map(xs, x => if x % 2 == 0 { "even" } else { "odd" }))
+```
+
+It composes anywhere a value is expected — call arguments, list elements, arrow
+bodies, nested `if`s. An expression `if` wants `} else` on the same line, and its
+branches can't declare local variables (`let`); for those, use a statement `if`.
+
 ### Pattern matching
 
 `match` compares a value against patterns and runs the first arm that matches.
