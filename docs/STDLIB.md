@@ -124,6 +124,11 @@ assert(2 + 2 == 4, "math is broken")
 | `index_of(coll, x)` | first index of `x` (substring for `str`), or `-1` |
 | `contains(coll, x)` | membership in `str` (substring), `list`, or `map` (key) |
 | `del(map, key)` | remove a key (mutates), returns the map |
+| `zip(a, b)` | list of `[a[i], b[i]]` pairs (stops at the shorter) |
+| `enumerate(list)` | list of `[index, value]` pairs |
+| `unique(list)` | duplicates removed, first-seen order kept |
+| `flatten(list)` | concatenate one level of nested lists |
+| `count(list, x)` | how many elements equal `x` |
 
 ### Higher-order
 | Function | Result |
@@ -133,11 +138,16 @@ assert(2 + 2 == 4, "math is broken")
 | `reduce(list, fn, init)` | fold left: `fn(acc, x)` |
 | `each(list, fn)` | call `fn(x)` for side effects |
 | `find(list, fn)` | first element where `fn(x)` is truthy, else `nil` |
+| `any(list, fn)` / `all(list, fn)` | does `fn(x)` hold for any / every element |
+| `group_by(list, fn)` | map from `fn(x)` (as a key) → list of its elements |
 
 ```loqi
 let evens = filter([1, 2, 3, 4], fn(x) { return x % 2 == 0 })   # [2, 4]
 let total = reduce([1, 2, 3], fn(a, b) { return a + b }, 0)       # 6
 print(sort(map([3, 1, 2], fn(x) { return x * 10 })))             # [10, 20, 30]
+
+let groups = group_by([1, 2, 3, 4, 5], fn(n) { return n % 2 })   # {"1": [1,3,5], "0": [2,4]}
+print(zip(["a", "b"], [1, 2]))                                    # [["a", 1], ["b", 2]]
 ```
 
 ## More strings

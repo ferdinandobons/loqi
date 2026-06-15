@@ -3535,6 +3535,118 @@ static Value nat_find(Interp *I, int argc, Value *argv) {
     }
     return NIL_VAL;
 }
+/* The pure-C collection helpers below never re-enter the VM, so the GC (which
+   only runs at the VM safe-point) cannot fire mid-call — their intermediate
+   allocations need no rooting. any/all run a callback but hold no unrooted
+   accumulator; group_by does, so it roots its result map on the value stack. */
+static Value nat_zip(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0]) || !IS_LIST(argv[1])) runtime_error(I, 0, "zip() requires (list, list)");
+    ObjList *a = AS_LIST(argv[0]), *b = AS_LIST(argv[1]);
+    int n = a->count < b->count ? a->count : b->count;
+    ObjList *out = new_list(I);
+    for (int i = 0; i < n; i++) {
+        ObjList *pair = new_list(I);
+        list_push(pair, a->items[i]);
+        list_push(pair, b->items[i]);
+        list_push(out, obj_val((Obj *)pair));
+    }
+    return obj_val((Obj *)out);
+}
+static Value nat_enumerate(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "enumerate() requires a list");
+    ObjList *src = AS_LIST(argv[0]);
+    ObjList *out = new_list(I);
+    for (int i = 0; i < src->count; i++) {
+        ObjList *pair = new_list(I);
+        list_push(pair, int_val(i));
+        list_push(pair, src->items[i]);
+        list_push(out, obj_val((Obj *)pair));
+    }
+    return obj_val((Obj *)out);
+}
+static Value nat_unique(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "unique() requires a list");
+    ObjList *src = AS_LIST(argv[0]);
+    ObjList *out = new_list(I);
+    for (int i = 0; i < src->count; i++) {
+        bool seen = false;
+        for (int j = 0; j < out->count; j++)
+            if (values_equal(out->items[j], src->items[i])) { seen = true; break; }
+        if (!seen) list_push(out, src->items[i]);
+    }
+    return obj_val((Obj *)out);
+}
+static Value nat_flatten(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "flatten() requires a list");
+    ObjList *src = AS_LIST(argv[0]);
+    ObjList *out = new_list(I);
+    for (int i = 0; i < src->count; i++) {
+        if (IS_LIST(src->items[i])) {
+            ObjList *inner = AS_LIST(src->items[i]);
+            for (int j = 0; j < inner->count; j++) list_push(out, inner->items[j]);
+        } else {
+            list_push(out, src->items[i]);
+        }
+    }
+    return obj_val((Obj *)out);
+}
+static Value nat_count(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "count() requires (list, value)");
+    ObjList *src = AS_LIST(argv[0]);
+    int64_t n = 0;
+    for (int i = 0; i < src->count; i++)
+        if (values_equal(src->items[i], argv[1])) n++;
+    return int_val(n);
+}
+static Value nat_any(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "any() requires (list, fn)");
+    ObjList *src = AS_LIST(argv[0]);
+    for (int i = 0; i < src->count; i++) {
+        Value a = src->items[i];
+        if (is_truthy(vm_invoke(I->vm, argv[1], 1, &a))) return bool_val(true);
+    }
+    return bool_val(false);
+}
+static Value nat_all(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "all() requires (list, fn)");
+    ObjList *src = AS_LIST(argv[0]);
+    for (int i = 0; i < src->count; i++) {
+        Value a = src->items[i];
+        if (!is_truthy(vm_invoke(I->vm, argv[1], 1, &a))) return bool_val(false);
+    }
+    return bool_val(true);
+}
+static Value nat_group_by(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "group_by() requires (list, fn)");
+    ObjList *src = AS_LIST(argv[0]);
+    ObjMap *groups = new_map(I);
+    vm_push(I->vm, obj_val((Obj *)groups)); /* root accumulator across callbacks */
+    for (int i = 0; i < src->count; i++) {
+        Value x = src->items[i];
+        Value k = vm_invoke(I->vm, argv[1], 1, &x);
+        char *key = value_to_cstr(I, k);     /* group key as a string */
+        Value *slot = map_get(groups, key);
+        ObjList *bucket;
+        if (slot && IS_LIST(*slot)) {
+            bucket = AS_LIST(*slot);
+        } else {
+            bucket = new_list(I);
+            map_set(groups, key, obj_val((Obj *)bucket));
+        }
+        list_push(bucket, x);
+        free(key);
+    }
+    vm_pop(I->vm);
+    return obj_val((Obj *)groups);
+}
 
 /* register a native inside a namespace map (e.g. json.parse) */
 static void define_native_in(Interp *I, ObjMap *ns, const char *name, NativeFn fn, int arity) {
@@ -3583,6 +3695,14 @@ static void install_stdlib(Interp *I) {
     define_native(I, "reduce", nat_reduce, 3);
     define_native(I, "each", nat_each, 2);
     define_native(I, "find", nat_find, 2);
+    define_native(I, "any", nat_any, 2);
+    define_native(I, "all", nat_all, 2);
+    define_native(I, "zip", nat_zip, 2);
+    define_native(I, "enumerate", nat_enumerate, 1);
+    define_native(I, "unique", nat_unique, 1);
+    define_native(I, "flatten", nat_flatten, 1);
+    define_native(I, "count", nat_count, 2);
+    define_native(I, "group_by", nat_group_by, 2);
 
     /* --- strings --- */
     define_native(I, "trim", nat_trim, 1);

@@ -1,0 +1,36 @@
+# Collection helpers.
+
+# zip stops at the shorter list
+assert(zip([1, 2, 3], ["a", "b"]) == [[1, "a"], [2, "b"]], "zip")
+
+# enumerate pairs index with value
+assert(enumerate(["a", "b", "c"]) == [[0, "a"], [1, "b"], [2, "c"]], "enumerate")
+
+# unique preserves first-seen order
+assert(unique([1, 2, 2, 3, 1, 3]) == [1, 2, 3], "unique")
+assert(unique(["x", "y", "x"]) == ["x", "y"], "unique strings")
+
+# flatten one level
+assert(flatten([[1, 2], [3], [4, 5]]) == [1, 2, 3, 4, 5], "flatten nested")
+assert(flatten([1, [2, 3], 4]) == [1, 2, 3, 4], "flatten mixed")
+
+# count occurrences
+assert(count([1, 2, 2, 3, 2], 2) == 3, "count")
+assert(count(["a", "b", "a"], "a") == 2, "count strings")
+
+# any / all (with empty-list edge cases)
+assert(any([1, 2, 3], fn(x) { return x > 2 }), "any true")
+assert(not any([1, 2], fn(x) { return x > 5 }), "any false")
+assert(all([2, 4, 6], fn(x) { return x % 2 == 0 }), "all true")
+assert(not all([2, 3], fn(x) { return x % 2 == 0 }), "all false")
+assert(not any([], fn(x) { return true }), "any of empty is false")
+assert(all([], fn(x) { return false }), "all of empty is true")
+
+# group_by builds a map of key -> list (key from the callback, stringified)
+let g = group_by([1, 2, 3, 4, 5, 6], fn(x) { return x % 2 })
+assert(g["0"] == [2, 4, 6], "group_by even bucket")
+assert(g["1"] == [1, 3, 5], "group_by odd bucket")
+let byfirst = group_by(["apple", "avocado", "banana"], fn(w) { return slice(w, 0, 1) })
+assert(byfirst["a"] == ["apple", "avocado"] and byfirst["b"] == ["banana"], "group_by by first letter")
+
+print("test_collections: all tests passed ✓")
