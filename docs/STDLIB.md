@@ -303,6 +303,39 @@ print(people[0].name)
 Built on `run_all`'s thread pool: the model requests overlap, while the Loqi
 runtime stays single-threaded. A failed call raises (use `try` to guard a batch).
 
+## `ai_json(prompt, schema) → value` / `ai_json(prompt, schema, options) → value`
+**Structured output** — the reliable way to get typed data out of a model. Loqi
+shows the model the `schema`, parses its JSON answer, **validates it against the
+schema, and automatically retries once** with the validation errors if it doesn't
+conform. Returns the validated native value, or raises if the model still can't
+produce conforming output.
+```loqi
+let schema = {
+  type: "object",
+  fields: {
+    name:    { type: "string" },
+    age:     { type: "int" },
+    hobbies: { type: "list", items: { type: "string" } },
+  },
+  required: ["name", "age"],
+}
+let p = ai_json("Extract the person: 'Ada Lovelace, 36, likes math and poetry'", schema)
+print(p.name, p.age, p.hobbies)            # Ada Lovelace 36 [math, poetry]
+```
+Schema shapes (see `json.validate`): primitive `type` (`string`/`str`, `int`,
+`float`, `number`, `bool`, `null`, `any`), `enum`, `{type:"list", items: …}`, and
+`{type:"object", fields:{…}, required:[…]}`.
+
+## `json.validate(value, schema) → bool`
+Checks any value against a schema (the same one `ai_json` uses) — handy for
+validating model output, API responses, or config. Listed `fields` that are present
+must match; `required` fields must exist; extra fields are allowed.
+```loqi
+let s = { type: "object", fields: { id: { type: "int" } }, required: ["id"] }
+print(json.validate({ id: 7, extra: "ok" }, s))   # true
+print(json.validate({ id: "x" }, s))              # false
+```
+
 ## `json.parse(str) → value` / `json.stringify(value) → str`
 A real JSON codec, built in. `parse` returns native Loqi values
 (`map`/`list`/`str`/`int`/`float`/`bool`/`nil`); `stringify` is the inverse.

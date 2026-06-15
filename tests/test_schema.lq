@@ -1,0 +1,57 @@
+# Regression tests for json.validate (schema validation) and ai_json arg handling.
+# Schema = a Loqi map describing the expected shape; the basis for structured LLM
+# output (ai_json) and for checking any external/model data.
+
+let person = {
+  type: "object",
+  fields: {
+    name:  { type: "string" },
+    age:   { type: "int" },
+    email: { type: "string" },
+    tags:  { type: "list", items: { type: "string" } },
+    role:  { type: "string", enum: ["admin", "user"] },
+  },
+  required: ["name", "age"],
+}
+
+# --- valid ---
+assert(json.validate({ name: "Ada", age: 36 }, person), "minimal valid object")
+assert(json.validate({ name: "Ada", age: 36, tags: ["x", "y"], role: "admin" }, person), "full valid object")
+assert(json.validate({ name: "Ada", age: 36, extra: 99 }, person), "extra fields are allowed")
+
+# --- invalid ---
+assert(not json.validate({ name: "Ada" }, person), "missing required field -> invalid")
+assert(not json.validate({ name: "Ada", age: "old" }, person), "wrong field type -> invalid")
+assert(not json.validate({ name: "Ada", age: 36, tags: ["x", 7] }, person), "wrong list-item type -> invalid")
+assert(not json.validate({ name: "Ada", age: 36, role: "root" }, person), "enum violation -> invalid")
+assert(not json.validate(42, person), "wrong top-level type -> invalid")
+
+# --- primitives & types ---
+assert(json.validate(7, { type: "int" }), "int")
+assert(not json.validate(7, { type: "string" }), "int is not string")
+assert(json.validate(7, { type: "number" }) and json.validate(1.5, { type: "number" }), "number = int or float")
+assert(json.validate(1.5, { type: "float" }) and not json.validate(1, { type: "float" }), "float is strict")
+assert(json.validate(true, { type: "bool" }), "bool")
+assert(json.validate(nil, { type: "null" }), "null")
+assert(json.validate({ anything: [1, "two"] }, { type: "any" }), "any accepts anything")
+
+# --- nested lists/objects ---
+let matrix = { type: "list", items: { type: "list", items: { type: "number" } } }
+assert(json.validate([[1, 2], [3, 4]], matrix), "nested list of number-lists")
+assert(not json.validate([[1, 2], [3, "x"]], matrix), "nested type error caught")
+
+let nested = {
+  type: "object",
+  fields: { user: { type: "object", fields: { id: { type: "int" } }, required: ["id"] } },
+  required: ["user"],
+}
+assert(json.validate({ user: { id: 1 } }, nested), "nested object valid")
+assert(not json.validate({ user: { id: "x" } }, nested), "nested object field type error")
+assert(not json.validate({ user: {} }, nested), "nested missing required field")
+
+# --- ai_json argument handling (the network path needs a key; tested live elsewhere) ---
+let bad = false
+try { ai_json("p", 42) } catch e { bad = true }
+assert(bad, "ai_json rejects a non-map schema")
+
+print("test_schema: all tests passed ✓")

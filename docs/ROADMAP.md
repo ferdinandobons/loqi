@@ -32,8 +32,10 @@ imply for the next step.
 | Lang | arrow functions `x => e`, `(a, b) => e`, `() => e` | ✅ done |
 | AI | `ai(prompt, options)` (model/system/temperature/max_tokens) | ✅ done |
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
+| AI | `ai_json(prompt, schema)` — schema-validated output + retry | ✅ done |
+| AI | `json.validate(value, schema)` — schema validation | ✅ done |
 | AI | `embed` (embeddings API) | 🔜 next |
-| AI | schema-constrained generation | 🔜 next |
+| AI | schema-constrained generation (`ai_json`) | ✅ done |
 | Concurrency | `run_all(cmds)` — parallel subprocesses (thread pool) | ✅ done |
 | Concurrency | `ai_all(prompts)` — concurrent model calls | ✅ done |
 | Core | garbage collector (mark-sweep) | ✅ done |

@@ -1,0 +1,2 @@
+# json.validate on a non-map schema is a clean catchable error.
+json.validate(1, "not a schema")

@@ -3609,6 +3609,98 @@ static Value nat_json_stringify(Interp *I, int argc, Value *argv) {
     return out;
 }
 
+/* ---- schema validation: validate a native value against a small JSON-Schema-like
+ * spec (a Loqi map). The basis for structured output (ai.json) and for checking any
+ * external/model data. Schema shapes:
+ *   { type: "string"|"str" }                      // also int, float, number/num,
+ *                                                  // bool, null/nil, any
+ *   { type: "string", enum: ["a", "b"] }          // value must be one of these
+ *   { type: "list", items: <schema> }             // every element matches `items`
+ *   { type: "object", fields: { k: <schema>, ... }, required: ["k", ...] }
+ *      // listed fields, when present, must match; `required` fields must be present;
+ *      // extra fields are allowed (lenient, matching typical model output).
+ * Errors are appended (human-readable) to `eb` for the retry prompt / diagnostics. */
+#define MAX_SCHEMA_DEPTH 64
+static void scherr(char *eb, size_t cap, size_t *el, const char *path, const char *msg) {
+    if (!eb || *el >= cap - 1) return;
+    int n = snprintf(eb + *el, cap - *el, "%s%s: %s", *el ? "; " : "", path[0] ? path : "(root)", msg);
+    if (n > 0) { *el += (size_t)n; if (*el >= cap) *el = cap - 1; }
+}
+static bool schema_type_ok(const char *t, Value v) {
+    if (!strcmp(t, "any")) return true;
+    if (!strcmp(t, "string") || !strcmp(t, "str")) return IS_STRING(v);
+    if (!strcmp(t, "int")) return IS_INT(v);
+    if (!strcmp(t, "float")) return IS_FLOAT(v);
+    if (!strcmp(t, "number") || !strcmp(t, "num")) return IS_NUM(v);
+    if (!strcmp(t, "bool") || !strcmp(t, "boolean")) return IS_BOOL(v);
+    if (!strcmp(t, "null") || !strcmp(t, "nil")) return IS_NIL(v);
+    if (!strcmp(t, "list") || !strcmp(t, "array")) return IS_LIST(v);
+    if (!strcmp(t, "object") || !strcmp(t, "map")) return IS_MAP(v);
+    return false; /* unknown type name */
+}
+static bool schema_check(Interp *I, Value v, Value schema, char *eb, size_t cap, size_t *el, const char *path, int depth) {
+    if (!IS_MAP(schema)) runtime_error(I, 0, "validate(): schema must be a map, got %s", type_name(schema));
+    if (depth > MAX_SCHEMA_DEPTH) { scherr(eb, cap, el, path, "schema/value nested too deep"); return false; }
+    ObjMap *s = AS_MAP(schema);
+    Value *tv = map_get(s, "type");
+    const char *t = (tv && IS_STRING(*tv)) ? AS_STRING(*tv)->chars : "any";
+    if (!schema_type_ok(t, v)) {
+        char m[128]; snprintf(m, sizeof m, "expected %s, got %s", t, type_name(v));
+        scherr(eb, cap, el, path, m); return false;
+    }
+    Value *ev = map_get(s, "enum");
+    if (ev && IS_LIST(*ev)) {
+        bool found = false;
+        ObjList *e = AS_LIST(*ev);
+        for (int i = 0; i < e->count; i++) if (values_equal(v, e->items[i])) { found = true; break; }
+        if (!found) { scherr(eb, cap, el, path, "value is not one of the allowed enum values"); return false; }
+    }
+    bool ok = true;
+    if (IS_LIST(v) && (!strcmp(t, "list") || !strcmp(t, "array"))) {
+        Value *items = map_get(s, "items");
+        if (items) {
+            ObjList *l = AS_LIST(v);
+            for (int i = 0; i < l->count; i++) {
+                char sub[256]; snprintf(sub, sizeof sub, "%s[%d]", path, i);
+                if (!schema_check(I, l->items[i], *items, eb, cap, el, sub, depth + 1)) ok = false;
+            }
+        }
+    } else if (IS_MAP(v) && (!strcmp(t, "object") || !strcmp(t, "map"))) {
+        ObjMap *mv = AS_MAP(v);
+        Value *required = map_get(s, "required");
+        if (required && IS_LIST(*required)) {
+            ObjList *rq = AS_LIST(*required);
+            for (int i = 0; i < rq->count; i++) {
+                if (!IS_STRING(rq->items[i])) continue;
+                const char *k = AS_STRING(rq->items[i])->chars;
+                if (!map_get(mv, k)) {
+                    char m[160]; snprintf(m, sizeof m, "missing required field '%s'", k);
+                    scherr(eb, cap, el, path, m); ok = false;
+                }
+            }
+        }
+        Value *fields = map_get(s, "fields");
+        if (fields && IS_MAP(*fields)) {
+            ObjMap *fm = AS_MAP(*fields);
+            for (int i = 0; i < fm->count; i++) { /* ObjMap is dense: entries[0..count) */
+                char *k = fm->entries[i].key;
+                Value *present = map_get(mv, k);
+                if (present) {
+                    char sub[256]; snprintf(sub, sizeof sub, "%s%s%s", path, path[0] ? "." : "", k);
+                    if (!schema_check(I, *present, fm->entries[i].value, eb, cap, el, sub, depth + 1)) ok = false;
+                }
+            }
+        }
+    }
+    return ok;
+}
+static Value nat_json_validate(Interp *I, int argc, Value *argv) {
+    /* json.validate(value, schema) -> bool */
+    char eb[512]; size_t el = 0; eb[0] = '\0';
+    bool ok = schema_check(I, argv[0], argv[1], eb, sizeof eb, &el, "", 0);
+    return bool_val(ok);
+}
+
 /* ---- shell / curl plumbing ---- */
 static char *shell_quote(const char *s) {
     size_t n = strlen(s);
@@ -3843,6 +3935,62 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     char *resp = run_capture(cmd, &rlen, &status);
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
     return ai_parse_response(I, resp, status, o.want_json);
+}
+
+/* One model call returning a parsed JSON value (want_json forced). */
+static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key) {
+    char body_tmpl[32], cfg_tmpl[32];
+    char *cmd = ai_build_request(I, prompt, o, key, body_tmpl, cfg_tmpl);
+    if (!cmd) raise_error(I);
+    size_t rlen; int status;
+    char *resp = run_capture(cmd, &rlen, &status);
+    free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
+    return ai_parse_response(I, resp, status, true);
+}
+/* ai_json(prompt, schema [, opts]) — structured output: ask the model for JSON that
+   matches `schema`, parse it, validate against the schema, and retry ONCE with the
+   validation errors if it doesn't conform. Returns the validated native value, or
+   raises if the model can't produce conforming output. The reliable way to get
+   typed data out of an LLM. */
+static Value nat_ai_json(Interp *I, int argc, Value *argv) {
+    if (argc < 2 || !IS_STRING(argv[0]) || !IS_MAP(argv[1]))
+        runtime_error(I, 0, "ai_json() requires (prompt: str, schema: map [, opts])");
+    const char *key = getenv("ANTHROPIC_API_KEY");
+    if (!key || !*key) runtime_error(I, 0, "ai_json(): set the ANTHROPIC_API_KEY environment variable");
+    AiOpts o = ai_parse_opts(I, argc, argv, 2);
+    o.want_json = true;
+    if (!o.system) o.system = "Respond with a single valid JSON value and nothing else. Do not wrap it in markdown code fences.";
+
+    /* show the model the schema in the user prompt */
+    char *sbuf = xmalloc(16); size_t slen = 0, scap = 16; sbuf[0] = '\0';
+    json_stringify_value(I, &sbuf, &slen, &scap, argv[1], 0);
+    ObjString *p0 = AS_STRING(argv[0]);
+    const char *instr = "\n\nReturn a JSON value that conforms to this schema:\n";
+    size_t blen = (size_t)p0->length + strlen(instr) + slen + 1;
+    char *full = xmalloc(blen);
+    snprintf(full, blen, "%s%s%s", p0->chars, instr, sbuf);
+    free(sbuf);
+    Value prompt = cstring_val(I, full);
+    free(full);
+
+    char eb[512]; size_t el;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        Value result = ai_one_json_call(I, prompt, o, key);
+        el = 0; eb[0] = '\0';
+        if (schema_check(I, result, argv[1], eb, sizeof eb, &el, "", 0)) return result;
+        if (attempt == 0) { /* feed the errors back and try once more */
+            const char *pre = "\n\nThe previous answer did not match the schema (";
+            const char *post = "). Return corrected JSON only.";
+            ObjString *cur = AS_STRING(prompt);
+            size_t rlen2 = (size_t)cur->length + strlen(pre) + el + strlen(post) + 1;
+            char *retry = xmalloc(rlen2);
+            snprintf(retry, rlen2, "%s%s%s%s", cur->chars, pre, eb, post);
+            prompt = cstring_val(I, retry);
+            free(retry);
+        }
+    }
+    runtime_error(I, 0, "ai_json(): the model's output did not match the schema after a retry (%s)", eb);
+    return NIL_VAL;
 }
 
 /* ---- environment, files, vectors ---- */
@@ -5011,6 +5159,7 @@ static void install_stdlib(Interp *I) {
     /* --- AI-first batteries --- */
     define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model|opts) */
     define_native(I, "ai_all", nat_ai_all, -1);      /* ai_all([prompts] [, opts]) — concurrent */
+    define_native(I, "ai_json", nat_ai_json, -1);    /* ai_json(prompt, schema [, opts]) — structured output */
     define_native(I, "env", nat_env, 1);
     define_native(I, "read", nat_read, 1);
     define_native(I, "write", nat_write, 2);
@@ -5032,6 +5181,7 @@ static void install_stdlib(Interp *I) {
     ObjMap *json = new_map(I);
     define_native_in(I, json, "parse", nat_json_parse, 1);
     define_native_in(I, json, "stringify", nat_json_stringify, 1);
+    define_native_in(I, json, "validate", nat_json_validate, 2);
     table_set(I->globals, "json", hash_string("json", 4), obj_val((Obj *)json));
 
     ObjMap *http = new_map(I);
