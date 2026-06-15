@@ -136,14 +136,18 @@ done
 if [ "$http_up" -eq 1 ]; then
   http_body="$(curl -s "http://127.0.0.1:$HTTP_PORT/ping")"
   http_json="$(curl -s -i "http://127.0.0.1:$HTTP_PORT/json")"
+  http_boom="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HTTP_PORT/boom")"
+  http_after="$(curl -s "http://127.0.0.1:$HTTP_PORT/after")"   # server must still be alive
   if printf '%s' "$http_body" | grep -q "loqi-http GET /ping" \
      && printf '%s' "$http_json" | grep -q "201 Created" \
-     && printf '%s' "$http_json" | grep -q "application/json"; then
-    echo "  ✓ (http-serve) the built-in server answers string and map responses"
+     && printf '%s' "$http_json" | grep -q "application/json" \
+     && [ "$http_boom" = "500" ] \
+     && printf '%s' "$http_after" | grep -q "loqi-http GET /after"; then
+    echo "  ✓ (http-serve) string/map responses, and a handler error is a 500 the server survives"
     pass=$((pass+1))
   else
-    echo "  ✗ (http-serve) unexpected server responses:"
-    printf '%s\n---\n%s\n' "$http_body" "$http_json" | sed 's/^/      /'
+    echo "  ✗ (http-serve) unexpected server responses (boom=$http_boom):"
+    printf '%s\n---\n%s\n---\n%s\n' "$http_body" "$http_json" "$http_after" | sed 's/^/      /'
     fail=$((fail+1))
   fi
 else

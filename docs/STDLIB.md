@@ -396,8 +396,15 @@ end (request → `ai()` → response). Blocks and serves forever (Ctrl-C to stop
 
 The handler runs on the main thread (one request at a time). An **uncaught error in
 the handler becomes a `500`** and the server keeps running, so a single bad request
-never takes the service down. Requests are bounds-checked (64 KB of headers, 32 MB
-body cap).
+never takes the service down (this holds even when `http.serve` is wrapped in a
+`try`/`catch`). Requests are bounds-checked (64 KB of headers, 32 MB body, a strict
+`Content-Length`, read/write timeouts) and response headers are sanitized against
+CRLF injection.
+
+It binds all interfaces (`0.0.0.0`) with no authentication and is single-threaded,
+so it is a development/agent primitive, not a hardened production server: put it
+behind a firewall or reverse proxy on untrusted networks, and escape untrusted
+request data before reflecting it.
 
 ```loqi
 fn handler(req) {

@@ -4023,6 +4023,9 @@ static Value nat_http_post(Interp *I, int argc, Value *argv) {
  * handler becomes a 500 response instead of killing the server. Every request byte
  * is bounds-checked (untrusted input). Enough to write an agent/webhook/API in Loqi
  * end-to-end (request -> ai() -> JSON response); not a hardened production server.
+ * It binds all interfaces (0.0.0.0) with no authentication, so put it behind a
+ * firewall/reverse proxy on untrusted networks, and handlers are responsible for
+ * escaping untrusted request data before reflecting it (the engine does not).
  * ========================================================================= */
 #define HTTP_MAX_HEADERS (64 * 1024)         /* request line + headers cap */
 #define HTTP_MAX_BODY    (32 * 1024 * 1024)  /* Content-Length cap */
@@ -4043,37 +4046,51 @@ static bool http_ci_eq(const char *a, const char *b) {
     for (; *a && *b; a++, b++) if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
     return *a == *b;
 }
+/* A header name/value is safe to emit only if it has no CR or LF: otherwise a
+   handler could inject extra headers or split the response (an embedded NUL just
+   truncates the C string, so it can't inject). */
+static bool http_token_safe(const char *s) {
+    for (; *s; s++) if (*s == '\r' || *s == '\n') return false;
+    return true;
+}
 /* Send all `len` bytes, retrying short writes. Returns false on error. */
 static bool http_send_all(int fd, const char *buf, size_t len) {
     size_t off = 0;
     while (off < len) {
         ssize_t n = send(fd, buf + off, len - off, 0);
-        if (n <= 0) return false;
+        if (n <= 0) return false; /* error or SO_SNDTIMEO: abandon this connection */
         off += (size_t)n;
     }
     return true;
 }
 /* Write a full HTTP/1.1 response: status line, our headers, the handler's extra
-   headers (reserved ones skipped), a blank line, then the body. */
+   headers (reserved or injection-unsafe ones skipped), a blank line, then the body.
+   status and content_type are handler-controlled, so both are validated here. */
 static void http_write_response(int fd, int status, const char *content_type,
                                 const char *body, size_t body_len, ObjMap *extra_headers) {
-    char head[1024];
+    if (status < 100 || status > 599) status = 500; /* HTTP status is a 3-digit code */
+    /* content_type is handler-controlled: reject CRLF (injection) and over-long
+       values (which would truncate the head buffer); fall back to a safe default. */
+    if (!content_type || !http_token_safe(content_type) || strlen(content_type) > 200)
+        content_type = "text/plain; charset=utf-8";
+    char head[512];
     int hn = snprintf(head, sizeof head,
         "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n",
         status, http_status_text(status), content_type, body_len);
-    if (hn < 0) return;
-    if (hn > (int)sizeof head) hn = (int)sizeof head;
+    if (hn < 0 || hn >= (int)sizeof head) return; /* never send a truncated head */
     http_send_all(fd, head, (size_t)hn);
     if (extra_headers) {
         for (int i = 0; i < extra_headers->count; i++) {
             const char *k = extra_headers->entries[i].key;
             Value v = extra_headers->entries[i].value;
             if (!IS_STRING(v)) continue;
+            const char *val = AS_STRING(v)->chars;
             if (http_ci_eq(k, "content-type") || http_ci_eq(k, "content-length") || http_ci_eq(k, "connection"))
                 continue; /* we control these */
+            if (!http_token_safe(k) || !http_token_safe(val)) continue; /* no header injection */
             char line[1024];
-            int ln = snprintf(line, sizeof line, "%s: %s\r\n", k, AS_STRING(v)->chars);
-            if (ln > 0 && ln <= (int)sizeof line) http_send_all(fd, line, (size_t)ln);
+            int ln = snprintf(line, sizeof line, "%s: %s\r\n", k, val);
+            if (ln > 0 && ln < (int)sizeof line) http_send_all(fd, line, (size_t)ln); /* skip, never truncate */
         }
     }
     http_send_all(fd, "\r\n", 2);
@@ -4083,10 +4100,11 @@ static void http_write_response(int fd, int status, const char *content_type,
    body}, reading the Content-Length body. Returns NULL on a malformed/oversized
    request (caller replies 400). All raw buffers are freed before returning, so the
    later vm_invoke can't strand them on a longjmp. */
-static ObjMap *http_read_request(Interp *I, int cfd) {
+static ObjMap *http_read_request(Interp *I, int cfd, time_t deadline) {
     size_t cap = 4096, len = 0, hdr_end = 0;
     char *buf = xmalloc(cap);
     for (;;) {
+        if (time(NULL) > deadline) { free(buf); return NULL; } /* total read budget (anti slow-drip) */
         if (len + 1 >= cap) {
             if (cap >= HTTP_MAX_HEADERS) { free(buf); return NULL; }
             cap *= 2; buf = xrealloc(buf, cap);
@@ -4127,9 +4145,15 @@ static ObjMap *http_read_request(Interp *I, int cfd) {
             http_lower(name);
             map_set(headers, name, cstring_val(I, val));
             if (strcmp(name, "content-length") == 0) {
-                content_length = strtol(val, NULL, 10);
-                if (content_length < 0) content_length = 0;
-                if (content_length > HTTP_MAX_BODY) content_length = HTTP_MAX_BODY;
+                /* parse strictly and fail closed: a malformed, negative, overflowing,
+                   or over-cap length is a bad request, not a silently truncated body. */
+                char *endp; errno = 0;
+                long cl = strtol(val, &endp, 10);
+                while (*endp == ' ' || *endp == '\t') endp++;
+                if (endp == val || *endp != '\0' || errno == ERANGE || cl < 0 || cl > HTTP_MAX_BODY) {
+                    free(buf); return NULL;
+                }
+                content_length = cl;
             }
         }
         h = eol + 2;
@@ -4143,6 +4167,7 @@ static ObjMap *http_read_request(Interp *I, int cfd) {
         memcpy(body, buf + hdr_end, have);
         size_t got = have;
         while (got < need) {
+            if (time(NULL) > deadline) { free(body); free(buf); return NULL; } /* slow-drip body */
             ssize_t n = recv(cfd, body + got, need - got, 0);
             if (n <= 0) break;
             got += (size_t)n;
@@ -4184,21 +4209,31 @@ static Value nat_http_serve(Interp *I, int argc, Value *argv) {
     for (;;) {
         int cfd = accept(srv, NULL, NULL);
         if (cfd < 0) { if (errno == EINTR) continue; break; }
-        /* a stalled client must not hang the single thread forever */
-        struct timeval tv = { 30, 0 };
-        setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        /* Bound both directions so neither a slow sender (drip) nor a slow reader
+           (won't drain our writes) can wedge the single thread indefinitely. The
+           per-recv idle timeout plus a total read deadline cover slow-drip too. */
+        struct timeval rcv = { 15, 0 }, snd = { 30, 0 };
+        setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &rcv, sizeof rcv);
+        setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &snd, sizeof snd);
 
-        ObjMap *req = http_read_request(I, cfd);
+        ObjMap *req = http_read_request(I, cfd, time(NULL) + 20);
         if (!req) {
             http_write_response(cfd, 400, "text/plain; charset=utf-8", "Bad Request\n", 12, NULL);
             close(cfd); continue;
         }
 
         /* Call the handler with a per-request catch: an uncaught error becomes a 500
-           rather than tearing down the server. Mirror run_vm's trap save/restore. */
+           rather than tearing down the server. The catch is I->err_jmp, which
+           raise_error uses only when vm->handler_count == 0; so we temporarily hide
+           the caller's try/catch stack (saving its entries, since the handler's own
+           `try` would otherwise reuse those slots) and restore it afterward. Without
+           this, an http.serve() wrapped in a Loqi try/catch would route an escaping
+           handler error to that outer catch and tear the server down. */
         int sv_frames = vm->frame_count;
         Value *sv_top = vm->stack_top;
         int sv_handlers = vm->handler_count;
+        TryHandler sv_hbuf[MAX_HANDLERS];
+        if (sv_handlers > 0) memcpy(sv_hbuf, vm->handlers, (size_t)sv_handlers * sizeof(TryHandler));
         jmp_buf saved;
         memcpy(saved, I->err_jmp, sizeof(jmp_buf));
         Value resp = NIL_VAL;
@@ -4208,12 +4243,14 @@ static Value nat_http_serve(Interp *I, int argc, Value *argv) {
             close_upvalues(vm, sv_top);
             vm->frame_count = sv_frames;
             vm->stack_top = sv_top;
-            vm->handler_count = sv_handlers;
             I->has_error = false;
         } else {
             Value reqv = obj_val((Obj *)req);
+            vm->handler_count = 0; /* an escaping handler error must reach OUR catch */
             resp = vm_invoke(vm, handler, 1, &reqv);
         }
+        if (sv_handlers > 0) memcpy(vm->handlers, sv_hbuf, (size_t)sv_handlers * sizeof(TryHandler));
+        vm->handler_count = sv_handlers;
         memcpy(I->err_jmp, saved, sizeof(jmp_buf));
 
         if (errored) {

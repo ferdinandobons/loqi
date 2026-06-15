@@ -1,11 +1,19 @@
 # Driven by scripts/test.sh: a tiny server exercised over the loopback. The /quit
-# path stops it cleanly; /json returns a map response; anything else echoes. Not in
-# examples/ (the suite smoke-runs those, and http.serve blocks forever).
+# path stops it cleanly; /json returns a map response; /boom raises (must become a
+# 500 without killing the server); anything else echoes. Not in examples/ (the suite
+# smoke-runs those, and http.serve blocks forever).
 fn handler(req) {
   if req.path == "/quit" { exit(0) }
+  if req.path == "/boom" { return this_name_does_not_exist() }   # uncaught -> 500
   if req.path == "/json" {
     return { status: 201, content_type: "application/json", body: `{"ok":true}` }
   }
   return "loqi-http {req.method} {req.path}"
 }
-http.serve(8911, handler)
+# serve INSIDE a try/catch on purpose: an escaping handler error must become a 500,
+# not propagate to this catch and tear the server down.
+try {
+  http.serve(8911, handler)
+} catch e {
+  print("server torn down: {e}")
+}
