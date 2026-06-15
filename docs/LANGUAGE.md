@@ -88,8 +88,8 @@ Notes:
 
   ```loqi
   let result = [1, 2, 3, 4, 5]
-    |> filter(fn(x) { return x % 2 == 1 })
-    |> map(fn(x) { return x * x })
+    |> filter(x => x % 2 == 1)
+    |> map(x => x * x)
     |> sum                                  # 1 + 9 + 25 = 35
   ```
 
@@ -290,6 +290,33 @@ print(c(), c(), c())                          # 1 2 3
 
 A function with no `return` returns `nil`. Recursion is supported directly.
 
+### Arrow functions
+
+For the common case of a one-expression function — especially callbacks — use the
+arrow shorthand. `params => expr` is exactly `fn(params) { return expr }`:
+
+```loqi
+let dbl   = x => x * 2          # one parameter, no parentheses
+let add   = (a, b) => a + b     # parenthesize two or more
+let answer = () => 42           # and the empty parameter list
+
+map([1, 2, 3], x => x * x)      # [1, 4, 9]
+reduce(nums, (acc, x) => acc + x, 0)
+```
+
+The body is a single expression. Arrows are right-associative, so they curry
+naturally — `a => b => a + b` is a function returning a function — and they read
+especially well with the pipe operator:
+
+```loqi
+[1, 2, 3, 4, 5, 6]
+  |> filter(x => x % 2 == 0)
+  |> map(x => x * 10)
+  |> sum                        # 120
+```
+
+For a multi-statement body, use the full `fn(params) { ... }` form.
+
 ## Modules
 
 Loqi has two ways to bring in another file. **Import paths resolve relative to the
@@ -353,7 +380,8 @@ importStmt  = "import" STRING NEWLINE ;
 block       = "{" { statement } "}" ;
 exprStmt    = expression NEWLINE ;
 
-expression  = assignment ;
+expression  = arrowFn | assignment ;
+arrowFn     = ( IDENT | "(" [ params ] ")" ) "=>" expression ;   (* fn(params){ return expr } *)
 assignment  = ( IDENT | index | member ) "=" assignment | logicOr ;
 logicOr     = logicAnd { "or" logicAnd } ;
 logicAnd    = equality { "and" equality } ;
@@ -373,3 +401,6 @@ mapLit      = "{" [ entry { "," entry } ] "}" ;
 entry       = ( IDENT | expression ) ":" expression ;
 fnExpr      = "fn" "(" [ params ] ")" block ;
 ```
+
+(See *Arrow functions* above: `params => expr` and `(params) => expr` desugar to
+`fn(params) { return expr }`.)

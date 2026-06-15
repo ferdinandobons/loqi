@@ -27,6 +27,8 @@ imply for the next step.
 | AI | `similarity` (cosine on vectors) | ✅ done |
 | AI | `env`, `read`, `write` | ✅ done |
 | Lang | raw strings (backticks) | ✅ done |
+| Lang | null-safety `??` / `?.`, ranges `a..b`, pipe `\|>` | ✅ done |
+| Lang | arrow functions `x => e`, `(a, b) => e`, `() => e` | ✅ done |
 | AI | `ai(prompt, options)` (model/system/temperature/max_tokens) | ✅ done |
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `embed` (embeddings API) | 🔜 next |

@@ -1,0 +1,2 @@
+# Invalid arrow-function parameters must be a clean compile error, not a crash.
+let bad = (a + b) => a

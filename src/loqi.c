@@ -337,6 +337,7 @@ typedef enum {
     T_COMMA, T_DOT, T_DOTDOT, T_COLON,
     T_PLUS, T_MINUS, T_STAR, T_SLASH, T_SLASHSLASH, T_PERCENT,
     T_EQ, T_EQEQ, T_BANGEQ, T_LT, T_LTEQ, T_GT, T_GTEQ,
+    T_ARROW, /* => for arrow functions */
     T_QQ, T_QDOT, /* ?? null-coalescing, ?. optional chaining */
     T_PIPE,       /* |> pipeline */
     T_NEWLINE, T_EOF, T_ERROR
@@ -600,7 +601,10 @@ static Token lex_next(Lexer *L) {
         case '*': return make_token(L, T_STAR);
         case '/': return make_token(L, match_ch(L, '/') ? T_SLASHSLASH : T_SLASH);
         case '%': return make_token(L, T_PERCENT);
-        case '=': return make_token(L, match_ch(L, '=') ? T_EQEQ : T_EQ);
+        case '=':
+            if (match_ch(L, '=')) return make_token(L, T_EQEQ);
+            if (match_ch(L, '>')) return make_token(L, T_ARROW);
+            return make_token(L, T_EQ);
         case '!': return match_ch(L, '=') ? make_token(L, T_BANGEQ)
                                           : error_token(L, "unexpected character '!' (use 'not')");
         case '<': return make_token(L, match_ch(L, '=') ? T_LTEQ : T_LT);
@@ -626,7 +630,8 @@ typedef enum {
     N_LIST, N_MAP, N_UNARY, N_BINARY, N_LOGICAL,
     N_CALL, N_INDEX, N_MEMBER, N_ASSIGN,
     N_LET, N_BLOCK, N_IF, N_WHILE, N_FOR, N_FN, N_RETURN,
-    N_BREAK, N_CONTINUE, N_EXPRSTMT, N_PROGRAM, N_IMPORT, N_TRY
+    N_BREAK, N_CONTINUE, N_EXPRSTMT, N_PROGRAM, N_IMPORT, N_TRY,
+    N_PARAMS /* transient: a parenthesized `(a, b)` list, only valid before `=>` */
 } NodeType;
 
 struct Node {
@@ -760,9 +765,24 @@ static Node *parse_primary(Parser *P) {
         return n;
     }
     if (p_match(P, T_LPAREN)) {
-        Node *e = parse_expression(P);
+        int line = P->prev.line;
+        /* `()` — only meaningful as an empty arrow-function parameter list */
+        if (p_check(P, T_RPAREN)) { p_advance(P); return new_node(N_PARAMS, line); }
+        Node *first = parse_expression(P);
+        if (p_check(P, T_COMMA)) {
+            /* `(a, b, ...)` — a parameter group; only valid immediately before `=>` */
+            Node *g = new_node(N_PARAMS, line);
+            node_add(&g->items, &g->item_count, first);
+            while (p_match(P, T_COMMA)) {
+                skip_newlines(P);
+                if (p_check(P, T_RPAREN)) break; /* trailing comma */
+                node_add(&g->items, &g->item_count, parse_expression(P));
+            }
+            p_consume(P, T_RPAREN, "expected ')'");
+            return g;
+        }
         p_consume(P, T_RPAREN, "expected ')'");
-        return e;
+        return first; /* ordinary grouped expression */
     }
     if (p_match(P, T_LBRACKET)) { /* list literal */
         Node *n = new_node(N_LIST, P->prev.line);
@@ -941,8 +961,42 @@ static Node *parse_binary(Parser *P, int min_prec) {
     return left;
 }
 
+/* Turn a parameter spec (`x` or a parenthesized `(a, b)` group) plus `=> body`
+ * into an N_FN whose body is `{ return body }`. Right-associative so `a => b => …`
+ * curries. `params` is reused in place when it is already an N_PARAMS group. */
+static Node *finish_arrow(Parser *P, Node *params) {
+    int line = P->cur.line;
+    p_advance(P); /* consume '=>' */
+    Node *fn;
+    if (params->type == N_PARAMS) {
+        for (int i = 0; i < params->item_count; i++)
+            if (params->items[i]->type != N_IDENT)
+                parser_error_at(P, &P->prev, "arrow-function parameters must be plain names");
+        params->type = N_FN; /* items are already the parameter idents */
+        fn = params;
+    } else if (params->type == N_IDENT) {
+        fn = new_node(N_FN, line);
+        node_add(&fn->items, &fn->item_count, params);
+    } else {
+        parser_error_at(P, &P->prev, "invalid arrow-function parameters (expected a name or '(name, ...)')");
+        fn = new_node(N_FN, line);
+    }
+    skip_newlines(P);
+    Node *body = parse_expression(P); /* single-expression body; recursion enables currying */
+    Node *ret = new_node(N_RETURN, line); ret->a = body;
+    Node *block = new_node(N_BLOCK, line);
+    node_add(&block->items, &block->item_count, ret);
+    fn->a = block;
+    return fn;
+}
+
 static Node *parse_expression(Parser *P) {
     Node *expr = parse_binary(P, 1);
+    if (p_check(P, T_ARROW)) return finish_arrow(P, expr);
+    if (expr->type == N_PARAMS) {
+        parser_error_at(P, &P->cur, "unexpected ',' — a parenthesized list is only valid as arrow-function parameters before '=>'");
+        return expr;
+    }
     if (p_match(P, T_EQ)) {
         /* assignment: target = value (right associative) */
         Node *value = parse_expression(P);

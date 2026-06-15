@@ -1,0 +1,48 @@
+# Regression tests for arrow functions (lambda shorthand): `x => expr`,
+# `(a, b) => expr`, `() => expr`, currying, capture, and pipeline integration.
+
+# --- single parameter, no parens ---
+let dbl = x => x * 2
+assert(dbl(21) == 42, "single-param arrow")
+
+# --- multiple parameters ---
+let add = (a, b) => a + b
+assert(add(3, 4) == 7, "multi-param arrow")
+
+# --- zero parameters ---
+let answer = () => 42
+assert(answer() == 42, "zero-param arrow")
+
+# --- as higher-order callbacks (the main use) ---
+let xs = [1, 2, 3, 4, 5]
+assert(map(xs, x => x * x) == [1, 4, 9, 16, 25], "arrow as map callback")
+assert(filter(xs, x => x % 2 == 1) == [1, 3, 5], "arrow as filter callback")
+assert(reduce(xs, (acc, x) => acc + x, 0) == 15, "arrow as reduce callback")
+
+# --- currying (right-associative) ---
+let curry = a => b => a + b
+assert(curry(10)(5) == 15, "arrow currying is right-associative")
+
+# --- lexical capture ---
+let base = 100
+let shift = x => x + base
+assert(shift(5) == 105, "arrow captures its lexical scope")
+
+# --- pairs with the pipe operator for data pipelines ---
+let result = [1, 2, 3, 4, 5, 6]
+  |> filter(x => x % 2 == 0)
+  |> map(x => x * 10)
+  |> sum
+assert(result == 120, "arrows compose with the pipe operator")
+
+# --- a grouped expression is NOT an arrow (no `=>`) — must still group ---
+assert((1 + 2) * 3 == 9, "parenthesized expressions still group normally")
+assert(((7)) == 7, "nested parentheses still group normally")
+
+# --- an arrow body is a full expression (operators, calls, coalescing) ---
+let in_range = x => x > 0 and x < 10
+assert(in_range(5) and not in_range(20), "arrow body is a full boolean expression")
+let or_default = v => v ?? "fallback"
+assert(or_default(nil) == "fallback" and or_default("set") == "set", "arrow body can use ??")
+
+print("test_arrow: all tests passed ✓")
