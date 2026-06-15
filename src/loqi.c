@@ -212,6 +212,11 @@ struct Interp {
     uint64_t rng_state; /* xorshift64 state for random()/randint() */
     int script_argc;   /* CLI arguments passed to the script (for args()) */
     char **script_argv;
+    /* every per-module globals table (the `mod` from run_module_ns), owned here so
+       interp_free can reclaim them — they are raw Tables, not GC objects, so the
+       sweep never touches them and a data-only module would otherwise orphan one. */
+    Table **module_tables;
+    int module_table_count, module_table_cap;
 };
 
 /* An import that re-enters another file recurses through run_source on the C
@@ -4639,6 +4644,13 @@ static Value run_module_ns(Interp *I, char *path /* owned */) {
     Table defines; table_init(&defines);   /* names the module defines, for export */
     Table *mod = xmalloc(sizeof(Table));
     table_init(mod);
+    /* own `mod` so interp_free reclaims it (it is not a GC object). Register before
+       evaluation: even if the module errors out, the table is tracked and freed. */
+    if (I->module_table_count == I->module_table_cap) {
+        I->module_table_cap = I->module_table_cap ? I->module_table_cap * 2 : 8;
+        I->module_tables = xrealloc(I->module_tables, sizeof(Table *) * (size_t)I->module_table_cap);
+    }
+    I->module_tables[I->module_table_count++] = mod;
     I->globals = mod;
     I->module_defines = &defines;
     install_stdlib(I);                 /* seeds built-ins (not via OP_DEFINE_GLOBAL, so unrecorded) */
@@ -4693,10 +4705,30 @@ static void interp_init(Interp *I) {
     I->module_defines = NULL;
     I->module_cache = xmalloc(sizeof(Table));
     table_init(I->module_cache);
+    I->module_tables = NULL; I->module_table_count = 0; I->module_table_cap = 0;
     I->script_argc = 0; I->script_argv = NULL;
     I->globals = xmalloc(sizeof(Table));
     table_init(I->globals);
     install_stdlib(I);
+}
+
+/* Tear the interpreter all the way down so a run leaves no reachable-at-exit
+ * allocations (clean under leak detectors / valgrind). Frees every heap object in
+ * the arena, the global + module-cache tables, every per-module globals table, the
+ * kept source/path strings, and the GC gray worklist. Order: objects first (they
+ * own only their own buffers), then the tables (which never own their values), so
+ * nothing is touched after it is freed. */
+static void interp_free(Interp *I) {
+    Obj *o = I->arena;
+    while (o) { Obj *next = o->arena_next; gc_free_obj(o); o = next; }
+    I->arena = NULL;
+    if (I->globals) { table_free(I->globals); free(I->globals); I->globals = NULL; }
+    if (I->module_cache) { table_free(I->module_cache); free(I->module_cache); I->module_cache = NULL; }
+    for (int i = 0; i < I->module_table_count; i++) { table_free(I->module_tables[i]); free(I->module_tables[i]); }
+    free(I->module_tables); I->module_tables = NULL; I->module_table_count = I->module_table_cap = 0;
+    for (int i = 0; i < I->source_count; i++) free(I->sources[i]);
+    free(I->sources); I->sources = NULL; I->source_count = I->source_cap = 0;
+    free(I->gray); I->gray = NULL; I->gray_count = I->gray_cap = 0;
 }
 
 #define LOQI_VERSION "0.2.0"
@@ -4717,23 +4749,20 @@ int main(int argc, char **argv) {
     Interp I;
     interp_init(&I);
 
+    int rc = 0;
     if (argc == 1) {
         repl(&I);
-        return 0;
-    }
-    if (argc >= 2) {
-        if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
-            printf("Loqi %s\n", LOQI_VERSION);
-            return 0;
-        }
+    } else if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
+        printf("Loqi %s\n", LOQI_VERSION);
+    } else {
         char *src = read_file(argv[1]);
-        if (!src) return 74;
+        if (!src) { interp_free(&I); return 74; }
         /* expose any arguments after the script path to args() */
         I.script_argc = argc - 2;
         I.script_argv = (argc > 2) ? &argv[2] : NULL;
-        int rc = interpret(&I, src, argv[1]);
+        rc = interpret(&I, src, argv[1]);
         free(src);
-        return rc;
     }
-    return 0;
+    interp_free(&I);
+    return rc;
 }
