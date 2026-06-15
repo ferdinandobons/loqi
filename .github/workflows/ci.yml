@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    # Apple Silicon (arm64) — Loqi's target platform; matches -mcpu=apple-m1.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (release) + test suite
+        run: |
+          ./scripts/build.sh
+          ./scripts/test.sh
+
+      - name: Build (ASan/UBSan) + test suite
+        run: |
+          ./scripts/build.sh debug
+          ./scripts/test.sh

@@ -2,6 +2,9 @@
 
 # Loqi
 
+[![CI](https://github.com/ferdinandobons/loqi/actions/workflows/ci.yml/badge.svg)](https://github.com/ferdinandobons/loqi/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **The AI-first programming language — the language you speak to machines.**
 
 *Loqi* (from Latin *loqui*, "to speak") is a small, modern language with batteries
