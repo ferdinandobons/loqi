@@ -64,8 +64,16 @@ Instant startup, single static binary, macOS and Linux.
 
 ## Install
 
-Requirements to build: a C compiler (`clang`; the Xcode Command Line Tools on macOS).
-Nothing else.
+**Prebuilt static binary** (macOS arm64, Linux x86_64/arm64), verified by SHA256 and
+installed to `~/.local/bin`:
+
+```sh
+curl -fsSL https://ferdinandobons.github.io/loqi/install.sh | sh
+```
+
+Or grab a tarball from [Releases](https://github.com/ferdinandobons/loqi/releases) (each
+checksummed in `SHA256SUMS`). **Build from source** instead (needs only `clang`, the
+Xcode Command Line Tools on macOS):
 
 ```sh
 git clone https://github.com/ferdinandobons/loqi && cd loqi

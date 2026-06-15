@@ -1,0 +1,119 @@
+name: Release
+
+# Tag-triggered release: build the static binaries, verify each runnable artifact's
+# --version matches the tag and that the suite passes on the ACTUAL musl binary, then
+# publish checksummed tarballs. workflow_dispatch runs everything EXCEPT publish, so the
+# pipeline can be exercised without cutting a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  ZIG_VERSION: '0.13.0'
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install zig ${{ env.ZIG_VERSION }}
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar -xJ
+          echo "$PWD/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Build static Linux binaries
+        run: LOQI_RELEASE_VERSION="${GITHUB_REF_NAME}" ./scripts/release.sh
+
+      - name: Verify x86_64 musl binary (version + full suite on the runner)
+        run: |
+          tar -xzf "dist/loqi-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
+          bin="loqi-${GITHUB_REF_NAME}-linux-x86_64/loqi"
+          file "$bin" | grep -q "statically linked"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            [ "$("$bin" --version)" = "Loqi ${GITHUB_REF_NAME#v}" ] \
+              || { echo "version != tag: $("$bin" --version) vs ${GITHUB_REF_NAME}"; exit 1; }
+          fi
+          LOQI="$PWD/$bin" ./scripts/test.sh
+
+      - name: Run the suite on bare Alpine (pure musl userland)
+        run: |
+          docker run --rm \
+            -e "LOQI=/w/loqi-${GITHUB_REF_NAME}-linux-x86_64/loqi" \
+            -v "$PWD:/w" -w /w alpine:3.20 \
+            sh -c 'apk add --no-cache bash curl >/dev/null && bash scripts/test.sh'
+
+      - name: Verify arm64 musl binary under qemu (version)
+        run: |
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes >/dev/null 2>&1 || true
+          tar -xzf "dist/loqi-${GITHUB_REF_NAME}-linux-arm64.tar.gz"
+          bin="loqi-${GITHUB_REF_NAME}-linux-arm64/loqi"
+          file "$bin" | grep -q "ARM aarch64"
+          file "$bin" | grep -q "statically linked"
+          out="$(docker run --rm --platform linux/arm64 -v "$PWD:/w" -w /w alpine:3.20 "/w/$bin" --version)"
+          echo "arm64 --version: $out"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            [ "$out" = "Loqi ${GITHUB_REF_NAME#v}" ] || { echo "arm64 version != tag"; exit 1; }
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: |
+            dist/loqi-*-linux-*.tar.gz
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build native macos-arm64 binary
+        # No zig on the macOS runner: LOQI_SKIP_LINUX=1 makes the native-only build
+        # explicit (release.sh errors by default when zig is missing).
+        run: LOQI_RELEASE_VERSION="${GITHUB_REF_NAME}" LOQI_SKIP_LINUX=1 ./scripts/release.sh
+
+      - name: Verify macos-arm64 binary (version + full suite)
+        run: |
+          tar -xzf "dist/loqi-${GITHUB_REF_NAME}-macos-arm64.tar.gz"
+          bin="loqi-${GITHUB_REF_NAME}-macos-arm64/loqi"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            [ "$("$bin" --version)" = "Loqi ${GITHUB_REF_NAME#v}" ] \
+              || { echo "version != tag: $("$bin" --version) vs ${GITHUB_REF_NAME}"; exit 1; }
+          fi
+          LOQI="$PWD/$bin" ./scripts/test.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: |
+            dist/loqi-*-macos-*.tar.gz
+
+  publish:
+    needs: [linux, macos]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect tarballs + compute one SHA256SUMS
+        run: |
+          mkdir -p dist
+          find artifacts -name 'loqi-*.tar.gz' -exec cp {} dist/ \;
+          cd dist
+          sha256sum loqi-*.tar.gz > SHA256SUMS
+          echo "Release assets:"; ls -1; echo; cat SHA256SUMS
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Loqi ${GITHUB_REF_NAME}" \
+            --notes "Static binaries for macOS (arm64) and Linux (x86_64, arm64). Verify with SHA256SUMS. Runtime needs only curl and, for model calls, ANTHROPIC_API_KEY." \
+            dist/loqi-*.tar.gz dist/SHA256SUMS

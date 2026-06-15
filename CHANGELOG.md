@@ -42,6 +42,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Linux support**: builds and CI green on macOS arm64 AND Linux (glibc), in addition
   to the existing memory-safety gates (ASan/UBSan/leaks clean). Runtime deps: `curl` and
   `ANTHROPIC_API_KEY`.
+- **Prebuilt static binaries + installer**: `scripts/release.sh` builds static musl
+  binaries for linux-x86_64 and linux-arm64 (via `zig cc`) plus a native macos-arm64
+  binary, tarballs them with a `SHA256SUMS`; a tag-triggered `.github/workflows/release.yml`
+  verifies each runnable artifact's `--version` matches the tag and runs the full suite
+  against the actual musl binary (on the runner and in a bare Alpine container) before
+  publishing. One-line install: `curl -fsSL https://ferdinandobons.github.io/loqi/install.sh | sh`
+  (`web/install.sh`, POSIX sh, verifies SHA256, installs to `~/.local/bin`).
 - **Container/CI correctness for the model call**: the key-bearing 0600 curl config file
   is now created under `$TMPDIR` (falling back to `/tmp` when unset), so Loqi behaves on
   hosts where `/tmp` is read-only or namespaced. A missing `curl` on `PATH` now fails the
