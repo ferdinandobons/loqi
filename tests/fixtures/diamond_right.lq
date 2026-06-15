@@ -1,0 +1,2 @@
+import "counter.lq" as c
+fn rbump() { return c.bump() }

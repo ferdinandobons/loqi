@@ -323,11 +323,14 @@ import "geometry.lq"
 print(area(2))          # area and PI are now in scope here
 ```
 
-Two things to know about the current model (a loaded-module cache giving
-single-evaluation semantics is on the roadmap):
+Two things to know about the model:
 
-- **Each import executes the file.** Importing the same module twice runs its
-  top-level code twice, so keep import-time side effects light.
+- **A namespaced module evaluates exactly once.** `import "x.lq" as a` is cached by
+  the file's canonical path: a second `import "x.lq" as b` — including a *diamond*
+  where two modules both import `x.lq` — returns the same already-evaluated module
+  instead of re-running its top-level code, so `a` and `b` share one instance of its
+  state. (Flat `import "x.lq"` binds names into the *current* scope, so it re-runs
+  per importing scope by design.)
 - **Cycles are detected, not fatal.** A circular import (`a` imports `b` imports
   `a`) raises a catchable `cyclic import of '...'` error instead of crashing.
 

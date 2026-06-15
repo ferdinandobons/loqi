@@ -40,7 +40,7 @@ imply for the next step.
 | Diagnostics | source-line snippet on uncaught errors | ✅ done |
 | Diagnostics | accurate per-frame file names (cross-module) | ✅ done |
 | Diagnostics | caret under the column (needs column tracking) | 🔜 next |
-| Core | module cache (single-evaluation) | 📋 planned |
+| Core | module cache (single-evaluation, diamond-safe) | ✅ done |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |
 | Speed | AOT: emit C and compile (`loqi build`) | 🔬 exploring |
 

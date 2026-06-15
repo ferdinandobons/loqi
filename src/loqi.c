@@ -187,6 +187,7 @@ struct Interp {
     Obj *arena;        /* all heap objects, for cleanup */
     Table *globals;    /* global names -> values (hash table, O(1)) */
     Table *module_defines; /* while running a namespaced module: names it defines (for export) */
+    Table *module_cache;   /* canonical path -> namespace map, so each module evaluates once */
     const char *path;  /* current source path for diagnostics */
     VM *vm;            /* the currently running VM (for native -> closure callbacks) */
     jmp_buf err_jmp;   /* runtime error landing pad */
@@ -2379,6 +2380,7 @@ static void gc_blacken(Interp *I, Obj *o) {
 }
 static void gc_mark_roots(Interp *I) {
     gc_mark_table(I, I->globals);
+    gc_mark_table(I, I->module_cache); /* cached module namespaces (and, through them, module state) */
     for (VM *vm = I->vm; vm; vm = vm->enclosing) {
         for (Value *s = vm->stack; s < vm->stack_top; s++) gc_mark_value(I, *s);
         for (int i = 0; i < vm->frame_count; i++) gc_mark_obj(I, (Obj *)vm->frames[i].closure);
@@ -4560,6 +4562,16 @@ static void table_free(Table *t) {
     table_init(t);
 }
 static Value run_module_ns(Interp *I, char *path /* owned */) {
+    /* A module evaluates exactly once: a second `import "x" as ...` — including a
+       diamond where two modules both import the same file — returns the cached
+       namespace instead of re-running the file's top-level code. Keyed by the
+       canonical absolute path so "./x.lq", "x.lq" and "../d/x.lq" dedupe. */
+    char canon[PATH_MAX];
+    const char *key = realpath(path, canon) ? canon : path;
+    uint32_t kh = hash_string(key, strlen(key));
+    Value *hit = table_get(I->module_cache, key, kh);
+    if (hit) { free(path); return *hit; }
+
     Table *saved = I->globals;
     Table *prev_defines = I->module_defines;
     Table defines; table_init(&defines);   /* names the module defines, for export */
@@ -4580,7 +4592,6 @@ static Value run_module_ns(Interp *I, char *path /* owned */) {
         if (rc == 70) runtime_error(I, 0, "import of '%s' failed: %s", name, cause);
         runtime_error(I, 0, "import of '%s' failed (code %d)", name, rc);
     }
-    free(path);
     /* namespace = exactly the names the module defined at top level (so a module
        can export a name even when it shadows a built-in, e.g. PI or log). */
     ObjMap *ns = new_map(I);
@@ -4590,6 +4601,10 @@ static Value run_module_ns(Interp *I, char *path /* owned */) {
             map_set(ns, k, mod->entries[i].value);
     }
     table_free(&defines);
+    /* cache for single-evaluation; `key` (canon or path) is still valid here. The
+       cache is a GC root, so ns and the module's state stay alive. */
+    table_set(I->module_cache, key, kh, obj_val((Obj *)ns));
+    free(path);
     return obj_val((Obj *)ns);
 }
 
@@ -4614,6 +4629,8 @@ static void interp_init(Interp *I) {
     { uint64_t s = (uint64_t)time(NULL) * 0x2545F4914F6CDD1DULL + 0x9e3779b97f4a7c15ULL;
       I->rng_state = s ? s : 0x9e3779b97f4a7c15ULL; } /* non-zero xorshift seed */
     I->module_defines = NULL;
+    I->module_cache = xmalloc(sizeof(Table));
+    table_init(I->module_cache);
     I->script_argc = 0; I->script_argv = NULL;
     I->globals = xmalloc(sizeof(Table));
     table_init(I->globals);

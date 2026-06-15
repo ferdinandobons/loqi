@@ -1,0 +1,24 @@
+# Regression tests for the module cache: a module evaluates EXACTLY ONCE, so
+# repeated imports — and diamond imports — share a single instance of its state.
+
+# Two aliases for the same file resolve to ONE shared module instance.
+import "fixtures/counter.lq" as a
+import "fixtures/counter.lq" as b
+assert(a.bump() == 1, "first bump on the shared counter")
+assert(b.bump() == 2, "the second alias shares the SAME module state (evaluated once)")
+assert(a.state["n"] == 2 and b.state["n"] == 2, "both aliases observe the shared mutable state")
+
+# Diamond: two different modules each import "counter.lq". With single-evaluation
+# they import the SAME counter, so their bumps continue the same sequence.
+import "fixtures/diamond_left.lq" as L
+import "fixtures/diamond_right.lq" as R
+assert(L.lbump() == 3, "diamond-left shares the one counter instance")
+assert(R.rbump() == 4, "diamond-right shares the very same counter instance")
+assert(a.state["n"] == 4, "every importer sees one cumulative counter (no duplicate evaluation)")
+
+# Path spelling doesn't defeat the cache: a different relative spelling of the same
+# file is canonicalized to the same key, so it's still the one shared instance.
+import "fixtures/../fixtures/counter.lq" as c
+assert(c.bump() == 5, "a different path spelling resolves to the same cached module")
+
+print("test_module_cache: all tests passed ✓")

@@ -1,0 +1,7 @@
+# A module with top-level state. With single-evaluation (module cache) this
+# initializer runs exactly ONCE, so every importer shares this one `state` map.
+let state = {"n": 0}
+fn bump() {
+    state["n"] = state["n"] + 1
+    return state["n"]
+}
