@@ -1579,8 +1579,16 @@ typedef struct Compiler {
     int scope_depth;
     LoopCtx *loop;
     int try_depth; /* number of try handlers currently open in this function */
+    int expr_depth; /* compile_expr recursion depth, to bound deep flat chains */
     bool *had_error; /* shared flag across nested compilers */
 } Compiler;
+/* Cap expression-tree depth at compile time: the iterative binary/pipe/index parse
+ * loops can build very deep ASTs that the recursive compiler would otherwise walk
+ * until the C stack overflows. Kept well below the C-stack ceiling — under
+ * AddressSanitizer (large instrumented frames) compile_expr overflows ~1500 deep,
+ * so 500 leaves a ~3x margin while staying far above any real expression. Matches
+ * the parser's MAX_PARSE_DEPTH. */
+#define MAX_EXPR_DEPTH 500
 
 static void compile_expr(Compiler *C, Node *n);
 static void compile_stmt(Compiler *C, Node *n);
@@ -1623,7 +1631,7 @@ static void emit_loop(Compiler *C, int loop_start, int line) {
 
 static void init_compiler(Compiler *C, Interp *I, Compiler *enclosing, const char *name, bool *had_error) {
     C->enclosing = enclosing; C->I = I; C->local_count = 0; C->scope_depth = 0;
-    C->loop = NULL; C->try_depth = 0; C->had_error = had_error;
+    C->loop = NULL; C->try_depth = 0; C->expr_depth = 0; C->had_error = had_error;
     C->proto = new_proto(I);
     if (name) C->proto->name = strdup(name);
     /* slot 0 holds the executing closure itself */
@@ -1715,6 +1723,16 @@ static void compile_assign(Compiler *C, Node *n) {
 }
 
 static void compile_expr(Compiler *C, Node *n) {
+    /* Bound C-stack recursion: the iterative parse loops (binary chains, calls,
+       indexing) can build ASTs far deeper than the parser's own MAX_PARSE_DEPTH,
+       so guard here instead of overflowing the native stack. */
+    if (++C->expr_depth > MAX_EXPR_DEPTH) {
+        if (!*C->had_error) /* one diagnostic; suppress the cascade as we unwind */
+            fprintf(stderr, "expression nested too deeply (max %d)\n", MAX_EXPR_DEPTH);
+        *C->had_error = true;
+        C->expr_depth--;
+        return;
+    }
     switch (n->type) {
         case N_NIL: emit_byte(C, OP_NIL, n->line); break;
         case N_BOOL: emit_byte(C, AS_BOOL(n->literal) ? OP_TRUE : OP_FALSE, n->line); break;
@@ -1807,6 +1825,7 @@ static void compile_expr(Compiler *C, Node *n) {
         case N_FN: compile_function(C, n, n->line); break;
         default: *C->had_error = true; fprintf(stderr, "expression cannot be compiled\n"); break;
     }
+    C->expr_depth--;
 }
 
 static void compile_break(Compiler *C, int line) {
