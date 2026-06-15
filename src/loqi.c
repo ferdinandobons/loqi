@@ -4302,17 +4302,28 @@ static Value nat_regex_split(Interp *I, int argc, Value *argv) {
     rx_free(&prog);
     return obj_val((Obj *)out);
 }
-/* Cosine similarity of two numeric vectors; 0 if either is the zero vector. */
+/* Cosine similarity of two numeric vectors; 0 if either is the zero vector.
+ * Each vector is divided by its largest-magnitude component before accumulating —
+ * cosine is scale-invariant, so this changes nothing mathematically but keeps the
+ * sums finite for huge embeddings (x*x would otherwise overflow to +inf -> NaN). */
 static double vec_cosine(Interp *I, ObjList *a, ObjList *b, const char *who) {
     if (a->count != b->count) runtime_error(I, 0, "%s: vectors of different length (%d vs %d)", who, a->count, b->count);
-    double dot = 0, na = 0, nb = 0;
+    double ma = 0, mb = 0;
     for (int i = 0; i < a->count; i++) {
         if (!IS_NUM(a->items[i]) || !IS_NUM(b->items[i])) runtime_error(I, 0, "%s: vectors must contain only numbers", who);
-        double x = as_double(a->items[i]), y = as_double(b->items[i]);
+        double x = fabs(as_double(a->items[i])), y = fabs(as_double(b->items[i]));
+        if (x > ma) ma = x;
+        if (y > mb) mb = y;
+    }
+    if (ma == 0 || mb == 0) return 0.0; /* a zero vector */
+    double dot = 0, na = 0, nb = 0;
+    for (int i = 0; i < a->count; i++) {
+        double x = as_double(a->items[i]) / ma, y = as_double(b->items[i]) / mb;
         dot += x * y; na += x * x; nb += y * y;
     }
-    if (na == 0 || nb == 0) return 0.0;
-    return dot / (sqrt(na) * sqrt(nb));
+    double r = dot / (sqrt(na) * sqrt(nb));
+    if (!isfinite(r)) return 0.0;        /* belt-and-suspenders against NaN/Inf inputs */
+    return r < -1.0 ? -1.0 : (r > 1.0 ? 1.0 : r); /* clamp to cosine's true range */
 }
 static Value nat_similarity(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
@@ -4369,15 +4380,24 @@ static Value nat_topk(Interp *I, int argc, Value *argv) {
 static Value nat_normalize(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0])) runtime_error(I, 0, "normalize() requires a vector (list of numbers)");
     ObjList *v = AS_LIST(argv[0]);
-    double norm = 0;
+    /* scale by the largest-magnitude component so the norm stays finite even for
+       huge vectors (the unit vector is scale-invariant). */
+    double m = 0;
     for (int i = 0; i < v->count; i++) {
         if (!IS_NUM(v->items[i])) runtime_error(I, 0, "normalize(): vector must contain only numbers");
-        double x = as_double(v->items[i]); norm += x * x;
+        double x = fabs(as_double(v->items[i]));
+        if (x > m) m = x;
     }
     ObjList *out = new_list(I);
-    norm = sqrt(norm);
-    for (int i = 0; i < v->count; i++)
-        list_push(out, float_val(norm == 0 ? 0.0 : as_double(v->items[i]) / norm));
+    if (m == 0) { for (int i = 0; i < v->count; i++) list_push(out, float_val(0.0)); return obj_val((Obj *)out); }
+    double n2 = 0;
+    for (int i = 0; i < v->count; i++) { double s = as_double(v->items[i]) / m; n2 += s * s; }
+    double len = sqrt(n2);
+    for (int i = 0; i < v->count; i++) {
+        double s = as_double(v->items[i]) / m;
+        double r = (len == 0) ? 0.0 : s / len;
+        list_push(out, float_val(isfinite(r) ? r : 0.0));
+    }
     return obj_val((Obj *)out);
 }
 

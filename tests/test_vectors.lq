@@ -31,6 +31,16 @@ assert(len(topk([1, 0], [[1, 0], [0, 1]], 10)) == 2, "k larger than the set retu
 assert(topk([1, 0], [], 3) == [], "no candidates -> empty")
 assert(topk([1, 0], [[1, 0]], 0) == [], "k = 0 -> empty")
 
+# huge-magnitude vectors must give FINITE, correct results (no overflow -> NaN),
+# and cosine is clamped to its true [-1, 1] range
+assert(similarity([1e200, 1e200, 1e200], [1e200, 1e200, 1e200]) > 0.999, "huge identical vectors -> ~1.0, not NaN")
+assert(similarity([1e300, 0.0], [0.0, 1e300]) == 0.0, "huge orthogonal vectors -> 0.0")
+assert(similarity([1, 0, 0], [-1, 0, 0]) == -1.0, "opposite vectors -> -1.0")
+let unit = normalize([1e250, 1e250])
+assert(unit[0] > 0.7 and unit[0] < 0.71, "huge vector normalizes to a real unit vector, not [0,0]")
+let hits_big = topk([1e200, 0.0], [[1e200, 0.0], [0.0, 1e200]], 2)
+assert(hits_big[0].index == 0 and hits_big[0].score > 0.999, "topk over huge vectors stays finite & correct")
+
 # a deterministic tie is broken by the original index (stable order)
 let tied = topk([1, 0], [[1, 0], [1, 0], [0, 1]], 2)
 assert(tied[0].index == 0 and tied[1].index == 1, "ties keep the original order")
