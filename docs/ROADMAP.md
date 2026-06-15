@@ -41,6 +41,7 @@ framing is now the extraction job above.)
 | AI | `ai(prompt, options)` (model/system/temperature/max_tokens) | ✅ done |
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `ai_json(prompt, schema)`, schema-validated output + retry | ✅ done |
+| AI | `ai_json_all(prompts, schema)`, parallel + per-row validated extraction | ✅ done |
 | AI | `json.validate(value, schema)`, schema validation | ✅ done |
 | AI | retry/backoff on 429/5xx + transient network errors | ✅ done |
 | AI | `LOQI_AI_BASE_URL` endpoint override (gateway/proxy) | ✅ done |

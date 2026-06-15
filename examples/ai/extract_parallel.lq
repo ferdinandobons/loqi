@@ -1,0 +1,30 @@
+# Parallel structured extraction: ai_json_all runs every prompt at once and validates
+# each result against the schema (one per-row retry; a row that never validates fails
+# the whole run naming the row + field). Use this when you have the records up front
+# and want maximum throughput; use the per-line ai_json loop (extract.lq) when you want
+# each row emitted as it is produced.
+#
+#   loqi examples/ai/extract_parallel.lq
+#
+# Needs: curl on PATH and ANTHROPIC_API_KEY in the env.
+
+let schema = {
+  type: "object",
+  required: ["id", "sentiment"],
+  fields: {
+    id:        { type: "int", min: 1 },
+    sentiment: { type: "string", enum: ["positive", "neutral", "negative"] },
+  },
+}
+let opts = { model: "claude-sonnet-4-6", temperature: 0 }
+
+let reviews = [
+  "#101: Absolutely love the new dashboard, fastest release yet.",
+  "#102: It works but the export button is hidden three menus deep.",
+  "#103: Crashes every time I open settings. Unusable.",
+]
+
+# all three model calls overlap; each row is typed and schema-checked before it returns
+let prompts = map(reviews, r => "Extract id and sentiment from this review:\n{r}")
+let rows = ai_json_all(prompts, schema, opts)
+for row in rows { print(json.stringify(row)) }

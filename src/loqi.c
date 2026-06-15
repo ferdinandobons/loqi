@@ -4845,6 +4845,36 @@ static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
     return ai_parse_response(I, resp, status, http, attempts, true, false);
 }
+
+/* Append the target schema (as a hint) to a base prompt and return a GC string:
+   "<base>\n\nReturn a JSON value that conforms to this schema:\n<schema-json>".
+   Shared by ai_json and ai_json_all so the model always sees the target shape. */
+static Value ai_schema_prompt(Interp *I, ObjString *base, Value schema) {
+    char *sbuf = xmalloc(16); size_t slen = 0, scap = 16; sbuf[0] = '\0';
+    json_stringify_value(I, &sbuf, &slen, &scap, schema, 0);
+    const char *instr = "\n\nReturn a JSON value that conforms to this schema:\n";
+    size_t blen = (size_t)base->length + strlen(instr) + slen + 1;
+    char *full = xmalloc(blen);
+    snprintf(full, blen, "%s%s%s", base->chars, instr, sbuf);
+    free(sbuf);
+    Value v = cstring_val(I, full);
+    free(full);
+    return v;
+}
+
+/* Build the one-retry prompt: the prior prompt plus the schema-validation errors,
+   asking for corrected JSON. Shared by ai_json and ai_json_all's per-row retry. */
+static Value ai_retry_prompt(Interp *I, ObjString *prev, const char *errs) {
+    const char *pre = "\n\nThe previous answer did not match the schema (";
+    const char *post = "). Return corrected JSON only.";
+    size_t rlen = (size_t)prev->length + strlen(pre) + strlen(errs) + strlen(post) + 1;
+    char *retry = xmalloc(rlen);
+    snprintf(retry, rlen, "%s%s%s%s", prev->chars, pre, errs, post);
+    Value v = cstring_val(I, retry);
+    free(retry);
+    return v;
+}
+
 /* ai_json(prompt, schema [, opts]), structured output: ask the model for JSON that
    matches `schema`, parse it, validate against the schema, and retry ONCE with the
    validation errors if it doesn't conform. Returns the validated native value, or
@@ -4862,33 +4892,13 @@ static Value nat_ai_json(Interp *I, int argc, Value *argv) {
     o.want_json = true;
     if (!o.system) o.system = "Respond with a single valid JSON value and nothing else. Do not wrap it in markdown code fences.";
 
-    /* show the model the schema in the user prompt */
-    char *sbuf = xmalloc(16); size_t slen = 0, scap = 16; sbuf[0] = '\0';
-    json_stringify_value(I, &sbuf, &slen, &scap, argv[1], 0);
-    ObjString *p0 = AS_STRING(argv[0]);
-    const char *instr = "\n\nReturn a JSON value that conforms to this schema:\n";
-    size_t blen = (size_t)p0->length + strlen(instr) + slen + 1;
-    char *full = xmalloc(blen);
-    snprintf(full, blen, "%s%s%s", p0->chars, instr, sbuf);
-    free(sbuf);
-    Value prompt = cstring_val(I, full);
-    free(full);
-
+    Value prompt = ai_schema_prompt(I, AS_STRING(argv[0]), argv[1]); /* show the model the schema */
     char eb[512]; size_t el;
     for (int attempt = 0; attempt < 2; attempt++) {
         Value result = ai_one_json_call(I, prompt, o, key);
         el = 0; eb[0] = '\0';
         if (schema_check(I, result, argv[1], eb, sizeof eb, &el, "", 0)) return result;
-        if (attempt == 0) { /* feed the errors back and try once more */
-            const char *pre = "\n\nThe previous answer did not match the schema (";
-            const char *post = "). Return corrected JSON only.";
-            ObjString *cur = AS_STRING(prompt);
-            size_t rlen2 = (size_t)cur->length + strlen(pre) + el + strlen(post) + 1;
-            char *retry = xmalloc(rlen2);
-            snprintf(retry, rlen2, "%s%s%s%s", cur->chars, pre, eb, post);
-            prompt = cstring_val(I, retry);
-            free(retry);
-        }
+        if (attempt == 0) prompt = ai_retry_prompt(I, AS_STRING(prompt), eb); /* feed errors back, retry once */
     }
     runtime_error(I, 0, "ai_json(): the model's output did not match the schema after a retry (%s)", eb);
     return NIL_VAL;
@@ -5121,6 +5131,95 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
         list_push(out, ai_value_from_body(I, body,
             (int)AS_INT(*map_get(m, "status")), (long)AS_INT(*map_get(m, "http")),
             (int)AS_INT(*map_get(m, "attempts")), o.want_json, o.want_usage));
+    }
+    return obj_val((Obj *)out);
+}
+
+/* ai_json_all(prompts, schema [, opts]): the parallel, validated extractor, ai_all +
+   ai_json's validate-or-fail contract. Runs every prompt concurrently asking for
+   schema-conforming JSON, then validates each result in input order against `schema`.
+   A row that doesn't validate is retried ONCE (sequentially, with the validation
+   errors fed back, exactly like ai_json); if it still fails the whole call raises
+   naming the row index and the field. Returns a list of validated values in input
+   order. The slow part (the model calls) overlaps; validation is local and cheap. */
+static Value nat_ai_json_all(Interp *I, int argc, Value *argv) {
+    if (argc < 2 || !IS_LIST(argv[0]) || !IS_MAP(argv[1]))
+        runtime_error(I, 0, "ai_json_all() requires (prompts: list, schema: map [, opts])");
+    ObjList *prompts = AS_LIST(argv[0]);
+    int n = prompts->count;
+    for (int i = 0; i < n; i++)
+        if (!IS_STRING(prompts->items[i])) runtime_error(I, 0, "ai_json_all(): each prompt must be a str");
+    if (ai_dry_run()) { /* one {} stub per prompt, no call/validation */
+        ObjList *out = new_list(I);
+        for (int i = 0; i < n; i++) { ai_dry_log(prompts->items[i]); list_push(out, obj_val((Obj *)new_map(I))); }
+        return obj_val((Obj *)out);
+    }
+    const char *key = getenv("ANTHROPIC_API_KEY");
+    if (!key || !*key) runtime_error(I, 0, "ai_json_all(): set the ANTHROPIC_API_KEY environment variable");
+    require_curl(I, "ai_json_all()");
+    AiOpts o = ai_parse_opts(I, argc, argv, 2);
+    o.want_json = true;
+    if (!o.system) o.system = "Respond with a single valid JSON value and nothing else. Do not wrap it in markdown code fences.";
+    if (n == 0) return obj_val((Obj *)new_list(I));
+    ai_charge(I, n);
+
+    /* The N schema-augmented prompts, rooted by a GC list so the build below (and the
+       per-row retry later) can reference them; the model sees the schema, as in ai_json. */
+    ObjList *aug = new_list(I);
+    for (int i = 0; i < n; i++)
+        list_push(aug, ai_schema_prompt(I, AS_STRING(prompts->items[i]), argv[1]));
+
+    RunJob *jobs = xmalloc(sizeof(RunJob) * (size_t)n);
+    char (*body_tmpls)[AI_TMPL_CAP] = xmalloc(sizeof(char[AI_TMPL_CAP]) * (size_t)n);
+    char (*cfg_tmpls)[AI_TMPL_CAP]  = xmalloc(sizeof(char[AI_TMPL_CAP]) * (size_t)n);
+    for (int i = 0; i < n; i++) {
+        jobs[i].cmd = ai_build_request(I, aug->items[i], o, key, body_tmpls[i], cfg_tmpls[i]);
+        if (!jobs[i].cmd) { /* build failed: clean temp files built so far, no key on disk, raise */
+            for (int j = 0; j < i; j++) { unlink(body_tmpls[j]); unlink(cfg_tmpls[j]); free((char *)jobs[j].cmd); }
+            free(jobs); free(body_tmpls); free(cfg_tmpls);
+            raise_error(I);
+        }
+        jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
+        jobs[i].ai_retry = true; jobs[i].http = 0; jobs[i].attempts = 1;
+    }
+    run_jobs_parallel(jobs, n);
+    for (int i = 0; i < n; i++) { unlink(body_tmpls[i]); unlink(cfg_tmpls[i]); free((char *)jobs[i].cmd); }
+    free(body_tmpls); free(cfg_tmpls);
+
+    /* Stage raw worker results into GC memory and free ALL raw buffers up front: the
+       parse/validate below can raise (longjmp), and GC objects are reclaimed at
+       teardown while raw mallocs would leak. (Same shape as ai_all.) */
+    ObjList *staged = new_list(I);
+    for (int i = 0; i < n; i++) {
+        ObjMap *m = new_map(I);
+        map_set(m, "body", jobs[i].out ? string_val(I, jobs[i].out, (int)jobs[i].len) : NIL_VAL);
+        map_set(m, "status", int_val(jobs[i].status));
+        map_set(m, "http", int_val(jobs[i].http));
+        map_set(m, "attempts", int_val(jobs[i].attempts));
+        list_push(staged, obj_val((Obj *)m));
+        free(jobs[i].out);
+    }
+    free(jobs);
+
+    /* Validate each row in input order; one sequential retry-with-feedback per row,
+       then fail naming the row + field. Only GC objects + ai_one_json_call (which
+       owns its own raw buffer) live across the loop, so a raise here leaks nothing. */
+    ObjList *out = new_list(I);
+    char eb[512]; size_t el;
+    for (int i = 0; i < n; i++) {
+        ObjMap *m = AS_MAP(staged->items[i]);
+        Value *bodyv = map_get(m, "body");
+        const char *body = (bodyv && IS_STRING(*bodyv)) ? AS_STRING(*bodyv)->chars : NULL;
+        Value result = ai_value_from_body(I, body,
+            (int)AS_INT(*map_get(m, "status")), (long)AS_INT(*map_get(m, "http")),
+            (int)AS_INT(*map_get(m, "attempts")), true, false);
+        el = 0; eb[0] = '\0';
+        if (schema_check(I, result, argv[1], eb, sizeof eb, &el, "", 0)) { list_push(out, result); continue; }
+        Value retryp = ai_retry_prompt(I, AS_STRING(aug->items[i]), eb); /* one retry, with feedback */
+        Value r2 = ai_one_json_call(I, retryp, o, key);
+        el = 0; eb[0] = '\0';
+        if (schema_check(I, r2, argv[1], eb, sizeof eb, &el, "", 0)) { list_push(out, r2); continue; }
+        runtime_error(I, 0, "ai_json_all(): row %d did not match the schema after a retry (%s)", i, eb);
     }
     return obj_val((Obj *)out);
 }
@@ -6141,6 +6240,7 @@ static void install_stdlib(Interp *I) {
     define_native(I, "ai", nat_ai, -1);              /* ai("prompt") | ai("prompt", model|opts) */
     define_native(I, "ai_all", nat_ai_all, -1);      /* ai_all([prompts] [, opts]), concurrent */
     define_native(I, "ai_json", nat_ai_json, -1);    /* ai_json(prompt, schema [, opts]), structured output */
+    define_native(I, "ai_json_all", nat_ai_json_all, -1); /* ai_json_all(prompts, schema [, opts]), parallel + validated */
     define_native(I, "env", nat_env, 1);
     define_native(I, "read", nat_read, 1);
     define_native(I, "write", nat_write, 2);

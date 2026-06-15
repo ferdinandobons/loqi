@@ -376,6 +376,27 @@ trustworthy: `pattern` (a regex a string must match; partial like JSON Schema, a
 with `^…$` for full), `min_length`/`max_length` for strings, and `min`/`max`
 (inclusive) for numbers.
 
+## `ai_json_all(prompts, schema) → list` / `ai_json_all(prompts, schema, options) → list`
+**Parallel + validated**, `ai_all`'s concurrency with `ai_json`'s validate-or-fail
+contract. Runs every prompt at once asking for schema-conforming JSON, then validates
+each result in input order against `schema`. A row that doesn't validate is retried
+once (with the errors fed back, exactly like `ai_json`); if it still fails, the whole
+call raises naming the **row index and the field** that broke. Returns the validated
+values in input order. This is the fast path for extracting structured rows from many
+records: the model calls overlap, validation is local and cheap.
+```loqi
+let schema = { type: "object", required: ["id", "sentiment"], fields: {
+  id:        { type: "int" },
+  sentiment: { type: "string", enum: ["positive", "neutral", "negative"] },
+} }
+let prompts = map(reviews, r => "Extract id and sentiment from: {r}")
+let rows = ai_json_all(prompts, schema)   # all calls overlap; each row typed + checked
+for row in rows { print(json.stringify(row)) }
+```
+Use the per-line `ai_json` loop (see the flagship `examples/ai/extract.lq`) when you
+want each row emitted as it is produced (pipe-friendly, works with `| head`); use
+`ai_json_all` when you have the records up front and want maximum throughput.
+
 ## `json.validate(value, schema) → bool`
 Checks any value against a schema (the same one `ai_json` uses), handy for
 validating model output, API responses, or config. Listed `fields` that are present

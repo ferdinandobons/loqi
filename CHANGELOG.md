@@ -28,6 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
   `temperature: 0` for deterministic rows).
 - **`ai_all(prompts)`**, parallel model calls returned in input order (batched, not
   streamed).
+- **`ai_json_all(prompts, schema[, options])`**, the parallel **and** validated
+  extractor: `ai_all`'s concurrency with `ai_json`'s validate-or-fails contract. Each
+  row is schema-checked in input order with one per-row retry; a row that never
+  validates fails the whole call naming the row index and the field. The fast path for
+  turning many records into trustworthy typed rows.
 - **`{ usage: true }`** on `ai`/`ai_all` for per-call token counts.
 - **Schema constraints**: `type`, `enum`, `required`, `fields`, `items`, `pattern`,
   `min_length`/`max_length`, `min`/`max`.

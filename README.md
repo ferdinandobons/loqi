@@ -123,8 +123,9 @@ genuine programming language:
   modules, `try`/`catch`, implicit line continuation. No semicolons, no ceremony.
 - **AI layer**: `ai(prompt, opts)` for a plain answer, `ai_json(prompt, schema, opts)`
   for schema-validated structured output with auto-retry, `ai_all(prompts)` to run
-  calls in parallel and get answers back in order. Pass `{ usage: true }` in opts to
-  get token counts back.
+  calls in parallel and get answers back in order, and `ai_json_all(prompts, schema)`
+  for parallel **and** validated extraction (fails naming the row + field that broke).
+  Pass `{ usage: true }` in opts to get token counts back.
 - **Schema constraints**: `type`, `enum`, `required`, `fields`, `items`, `pattern`,
   `min_length`/`max_length`, `min`/`max`. Validate any value yourself with
   `json.validate(value, schema)`.

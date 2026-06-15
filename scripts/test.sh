@@ -286,6 +286,47 @@ else
   fail=$((fail+1))
 fi
 
+# ai_json_all: parallel + validated extraction. A multi-response stub curl reads each
+# request's body file (named in the -K config's data=@ line) and tailors the reply:
+# a row tagged ALWAYSBAD never validates; a row tagged BADROW fails the first attempt
+# but the retry (whose prompt now contains the validation feedback) returns a valid
+# row; anything else validates immediately. Exercises the happy path, the per-row
+# retry, and the fail-loud-with-index contract.
+jall_stub="$(mktemp -d)"
+cat > "$jall_stub/curl" <<'STUB'
+#!/bin/sh
+cfg=""
+while [ $# -gt 0 ]; do [ "$1" = "-K" ] && cfg="$2"; shift; done
+body=""
+if [ -n "$cfg" ]; then
+  bf=$(sed -n 's/^data = "@\(.*\)"$/\1/p' "$cfg")
+  [ -n "$bf" ] && [ -f "$bf" ] && body=$(cat "$bf")
+fi
+if printf '%s' "$body" | grep -q "ALWAYSBAD"; then       text='{\"id\":\"nope\"}'
+elif printf '%s' "$body" | grep -q "did not match the schema"; then text='{\"id\":1}'
+elif printf '%s' "$body" | grep -q "BADROW"; then         text='{\"id\":\"x\"}'
+else                                                       text='{\"id\":1}'
+fi
+printf '%s' "{\"content\":[{\"type\":\"text\",\"text\":\"$text\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
+printf '\n__LQHTTP:200__'
+STUB
+chmod +x "$jall_stub/curl"
+jall_out="$(PATH="$jall_stub:$PATH" ANTHROPIC_API_KEY=dummy "$LOQI" tests/fixtures/ai_json_all.lq 2>&1)"
+jall_rc=$?
+# fail-loud: a row that never validates raises naming the row index + field
+jall_bad="$(PATH="$jall_stub:$PATH" ANTHROPIC_API_KEY=dummy "$LOQI" -e 'print(ai_json_all(["g1","ALWAYSBAD"], { type: "object", required: ["id"], fields: { id: { type: "int" } } }))' 2>&1)"
+jall_bad_rc=$?
+rm -rf "$jall_stub"
+if [ "$jall_rc" -eq 0 ] && [ "$jall_out" = "$(printf '3\n1\n1\n1')" ] \
+   && [ "$jall_bad_rc" -ge 64 ] && [ "$jall_bad_rc" -lt 128 ] \
+   && printf '%s' "$jall_bad" | grep -q "row 1 did not match the schema after a retry"; then
+  echo "  ✓ (ai-json-all) parallel validated rows, per-row retry, fail-loud with row index"
+  pass=$((pass+1))
+else
+  echo "  ✗ (ai-json-all) rc=$jall_rc out=[$jall_out] bad_rc=$jall_bad_rc bad=[$jall_bad]"
+  fail=$((fail+1))
+fi
+
 # curl-presence guardrail: with a PATH that has no curl, the first ai()/http call
 # must fail with a clear install hint, not a confusing "curl returned an error".
 # ($LOQI has a slash, so it is run directly, not via PATH; /bin/sh used by popen is

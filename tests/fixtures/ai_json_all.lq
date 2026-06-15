@@ -1,0 +1,8 @@
+# Exercised by scripts/test.sh with a multi-response stub curl. Three prompts run in
+# parallel; the middle one ("BADROW") returns a schema-violating row on the first
+# attempt and a valid row on the retry, so ai_json_all must recover it and return all
+# three validated rows in input order.
+let schema = { type: "object", required: ["id"], fields: { id: { type: "int" } } }
+let rows = ai_json_all(["g1", "BADROW", "g3"], schema)
+print(len(rows))
+for r in rows { print(r.id) }
