@@ -1,0 +1,23 @@
+# Fan out work to the model in PARALLEL — N calls overlap instead of running one
+# after another. Here we classify several product reviews at once with ai_all.
+#   ANTHROPIC_API_KEY=... loqi examples/ai/parallel.lq
+
+let reviews = [
+  "Shipping was slow but the product is fantastic.",
+  "Broke on day one. Very disappointed.",
+  "Exactly what I needed, works perfectly.",
+  "It's okay — nothing special, nothing terrible.",
+]
+
+# build one prompt per review, then run them all concurrently
+let prompts = map(reviews, fn(r) {
+  return "Classify the sentiment as positive, negative, or mixed. One word only: " + r
+})
+
+let t = now()
+let labels = ai_all(prompts)
+print("classified {len(reviews)} reviews in {now() - t}s (in parallel)\n")
+
+for pair in zip(reviews, labels) {
+  print("  [{trim(pair[1])}]  {pair[0]}")
+}

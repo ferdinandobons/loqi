@@ -28,11 +28,13 @@ print(summary)
 
 > **🌐 Live site: [ferdinandobons.github.io/loqi](https://ferdinandobons.github.io/loqi/)**
 
-> **Status: v0.2 — early but real, and it does what it says.** The core language, a
-> **bytecode VM** (on par with CPython, ~5× faster than the first cut), the
-> **AI-native layer** (`ai`, `json`, `http`, `read`/`write`, `similarity`), **modules**,
-> plus **`match`** and **`try`/`catch`** all work today — implemented in dependency-free
-> C11, built with nothing but `clang`. Every claim here is backed by code, tests, and an
+> **Status: v0.2 — small but real, and it does what it says.** A **bytecode VM** with a
+> precise **garbage collector**, the **AI-native layer** (`ai` with options + structured
+> JSON, `json`, `http`, `similarity`), **parallel model calls** (`ai_all`/`run_all`),
+> **modules**, **`match`**, **`try`/`catch`** with backtraces, and a broad standard
+> library (collections, math/random, filesystem + `path`, `base64`/`hex`, date/time,
+> subprocess) all work today — implemented in dependency-free C11, built with nothing but
+> `clang`, **CI-green on Apple Silicon**. Every claim here is backed by code, tests, and an
 > honest [ROADMAP](docs/ROADMAP.md).
 
 ## Why Loqi
@@ -126,6 +128,22 @@ print("{person.name} was born in {person.birth_year}")   # Ada Lovelace was born
 
 Pass options the same way — `ai(prompt, { model, system, temperature, max_tokens })` —
 or just `ai("...")` for a plain text answer. See [`examples/ai/extract.lq`](examples/ai/extract.lq).
+
+**Call the model in parallel.** Slow model calls are the bottleneck in AI work, so
+fanning them out is built in — `ai_all` runs them concurrently and returns the
+answers in order:
+
+```loqi
+let reviews = ["Love it!", "Broke on day one.", "It's fine, nothing special."]
+let prompts = map(reviews, fn(r) { return "Sentiment in one word: " + r })
+
+let labels = ai_all(prompts)            # all calls overlap — ~1 call's latency, not N
+for l in labels { print(trim(l)) }      # Positive / Negative / Mixed
+```
+
+The runtime stays single-threaded (your logic is never racy); only the blocking
+I/O overlaps. The same trick works for any commands via `run_all`. See
+[`examples/ai/parallel.lq`](examples/ai/parallel.lq).
 
 **Split your program into modules.**
 
