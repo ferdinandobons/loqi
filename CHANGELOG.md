@@ -69,6 +69,11 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
   `LOQI_AI_BASE_URL` (a gateway/proxy, or a local mock for testing).
 - Example gallery `examples/ai/` (haiku, structured extraction, web+JSON).
 
+### Added, diagnostics
+- **Syntax-error carets.** A parse error now reports `file:line:column`, prints the
+  offending source line, and underlines the exact spot with a `^` caret (Rust/Elm
+  style). Runtime errors already carry the source line + a full backtrace.
+
 ### Fixed
 - A `let` redeclaration of a module global after a `const` of the same name is now
   mutable again (`const x = 1; let x = 2; x = 3` was wrongly rejected at compile

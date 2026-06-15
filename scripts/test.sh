@@ -91,6 +91,38 @@ else
   fail=$((fail+1))
 fi
 
+# Syntax-error caret: a parse error must print a file:line:column location, the
+# offending source line, and a ^ caret under the exact column (here column 14).
+caret_out="$("$LOQI" tests/fixtures/syntax_caret.lq 2>&1)"
+rc=$?
+if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ] \
+   && printf '%s' "$caret_out" | grep -q ":4:14]" \
+   && printf '%s' "$caret_out" | grep -q "let x = (1 + )" \
+   && printf '%s' "$caret_out" | grep -q "\^"; then
+  echo "  ✓ (caret) a syntax error shows line:column + the source line + a ^ caret"
+  pass=$((pass+1))
+else
+  echo "  ✗ (caret) expected a line:column caret diagnostic, exit=$rc:"
+  printf '%s\n' "$caret_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
+# Caret line attribution: an incomplete expression at end of line must report the
+# line the code is ON (line 2), not the lexer's post-newline line. The rendered
+# source line and the reported line:column must agree.
+eol_out="$("$LOQI" tests/fixtures/syntax_caret_eol.lq 2>&1)"
+rc=$?
+if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ] \
+   && printf '%s' "$eol_out" | grep -q ":5:12]" \
+   && printf '%s' "$eol_out" | grep -q "5 | let b = 2 +"; then
+  echo "  ✓ (caret-line) an end-of-line error is attributed to the right line"
+  pass=$((pass+1))
+else
+  echo "  ✗ (caret-line) expected an error attributed to line 5 (:5:12 + 'let b = 2 +'), exit=$rc:"
+  printf '%s\n' "$eol_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

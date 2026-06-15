@@ -301,6 +301,15 @@ runtime error [app.lq:4]: index 3 out of bounds (len 0)
   at <script> (app.lq:8)
 ```
 
+A **syntax** error pinpoints the exact column: it reports `file:line:column`, prints
+the offending line, and underlines the spot with a `^` caret (Rust/Elm style):
+
+```
+syntax error [app.lq:1:14] at ')': expected an expression
+  1 | let x = (1 + )
+                   ^
+```
+
 ## Functions and closures
 
 Declare with `fn name(params) { ... }`. Functions are first-class values and can

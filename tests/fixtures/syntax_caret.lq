@@ -1,0 +1,4 @@
+# Driven by scripts/test.sh: a syntax error must print a Rust/Elm-style diagnostic
+# with a file:line:column location, the offending source line, and a ^ caret under
+# the exact column. The missing operand below errors at the ')' in column 14.
+let x = (1 + )

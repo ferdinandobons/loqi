@@ -1,0 +1,6 @@
+# Driven by scripts/test.sh: an incomplete expression at end of line must report the
+# line the code is ON (line 2 here), not the next line. Regression for the newline
+# token carrying the lexer's post-increment line number.
+let a = 1
+let b = 2 +
+let c = 3

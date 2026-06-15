@@ -389,9 +389,13 @@ static Token make_token(Lexer *L, TokType t) {
     return tok;
 }
 static Token error_token(Lexer *L, const char *msg) {
-    Token tok; tok.type = T_ERROR; tok.start = msg;
-    tok.length = (int)strlen(msg); tok.line = L->line;
-    tok.str_val = NULL; tok.int_val = 0; tok.float_val = 0;
+    /* Carry the offending source span in start/length (like a real token) and the
+       message in str_val, so the parser can render a precise line:column + caret.
+       L->start is the token's first byte (the opening quote for a string), so an
+       unterminated literal points at where it began, not where scanning stopped. */
+    Token tok; tok.type = T_ERROR; tok.start = L->start;
+    tok.length = (int)(L->cur - L->start); tok.line = L->line;
+    tok.str_val = (char *)msg; tok.int_val = 0; tok.float_val = 0;
     return tok;
 }
 
@@ -500,6 +504,7 @@ static Token lex_string(Lexer *L) {
         }
         if (interp == 0) {
             if (c == '\\') {
+                if (is_at_end(L)) break; /* trailing '\' at EOF: fall to unterminated-string error */
                 char e = advance_ch(L);
                 switch (e) {
                     case 'n': PUSH('\n'); break;
@@ -705,23 +710,112 @@ typedef struct {
     int depth; /* recursion depth guard against pathological nesting */
 } Parser;
 
+/* 1-based column of byte `at` within its line (0 if out of range). */
+static int column_of(const char *src, const char *at) {
+    if (!src || !at || at < src) return 0;
+    const char *ls = at;
+    while (ls > src && ls[-1] != '\n') ls--;
+    return (int)(at - ls) + 1;
+}
+/* Pointer to the first byte of 1-based `line` in `src` (NULL if out of range). */
+static const char *line_start_ptr(const char *src, int line) {
+    if (!src || line <= 0) return NULL;
+    const char *p = src;
+    for (int l = 1; l < line && *p; ) { if (*p++ == '\n') l++; }
+    return p;
+}
+/* 1-based line containing byte `at`. Counts newlines BEFORE `at`, so a token whose
+   start is the '\n' that ends line N (e.g. a T_NEWLINE token) maps to line N, and a
+   multi-line string token maps to the line of its opening quote. Authoritative for
+   diagnostics: the line label, column, and caret all derive from the same pointer. */
+static int line_of(const char *src, const char *at) {
+    if (!src || !at || at < src) return 0;
+    int line = 1;
+    for (const char *p = src; p < at && *p; p++) if (*p == '\n') line++;
+    return line;
+}
+/* A short, single-line rendering of a token lexeme for the "at '...'" part of an
+   error: stops at the first newline and caps the length, with a trailing "..." when
+   truncated, so a multi-line string or a long token can't spill across the message. */
+static void short_lexeme(char *buf, size_t bufsz, const char *start, int len) {
+    const int CAP = 40;
+    if (len < 0) len = 0;
+    int n = len < CAP ? len : CAP;
+    size_t j = 0;
+    int i = 0;
+    for (; i < n && start[i] && start[i] != '\n' && j + 1 < bufsz; i++) buf[j++] = start[i];
+    bool more = (i < len) && start[i] != '\0';
+    if (more && j + 3 < bufsz) { buf[j++] = '.'; buf[j++] = '.'; buf[j++] = '.'; }
+    buf[j] = '\0';
+}
+/* Render the offending source line and a caret line under columns [col, col+span)
+   for the byte `at` in `src`, Rust/Elm-style:
+     3 | let x = (1 + )
+       |             ^
+   No-op if `at` is outside `src`. Leading tabs are echoed so the caret aligns. */
+static void print_source_caret(FILE *out, const char *src, const char *at, int span, int line) {
+    if (!src || !at || at < src) return;
+    const char *ls = at;                              /* start of the line */
+    while (ls > src && ls[-1] != '\n') ls--;
+    const char *le = ls;                              /* end of the line */
+    while (*le && *le != '\n') le++;
+    int line_len = (int)(le - ls);
+    int col = (int)(at - ls);                         /* 0-based offset into the line */
+    if (col < 0) col = 0;
+    if (col > line_len) col = line_len;
+    if (span < 1) span = 1;
+    if (col + span > line_len) span = (line_len - col > 0) ? (line_len - col) : 1;
+    char gutter[32];
+    int gw = snprintf(gutter, sizeof gutter, "  %d | ", line);
+    if (gw < 0) return;
+    fprintf(out, "%s%.*s\n", gutter, line_len, ls);
+    for (int i = 0; i < gw; i++) fputc(' ', out);
+    for (int i = 0; i < col; i++) fputc(ls[i] == '\t' ? '\t' : ' ', out);
+    fputc('^', out);
+    for (int i = 1; i < span; i++) fputc('~', out);
+    fputc('\n', out);
+}
+
 static void parser_error_at(Parser *P, Token *t, const char *msg) {
     if (P->had_error) return; /* report first only */
     P->had_error = true;
-    if (t->type == T_EOF)
-        fprintf(stderr, "syntax error [%s:%d] at end of file: %s\n", P->I->path, t->line, msg);
-    else if (t->type == T_ERROR)
-        fprintf(stderr, "syntax error [%s:%d]: %.*s\n", P->I->path, t->line, t->length, t->start);
-    else
-        fprintf(stderr, "syntax error [%s:%d] at '%.*s': %s\n", P->I->path, t->line, t->length, t->start, msg);
+    const char *src = P->lex.src;
+    /* Derive the line from t->start, not t->line: the lexer advances its line
+       counter past embedded newlines, so a multi-line string or a newline token
+       carries an end-of-token line that disagrees with where t->start renders. */
+    int ln = line_of(src, t->start);
+    if (t->type == T_EOF) {
+        fprintf(stderr, "syntax error [%s:%d] at end of file: %s\n", P->I->path, ln, msg);
+        print_source_caret(stderr, src, t->start, 1, ln);
+    } else if (t->type == T_ERROR) {
+        /* a lexer error: t->str_val is the message, t->start the offending byte. */
+        const char *m = t->str_val ? t->str_val : "lexing error";
+        fprintf(stderr, "syntax error [%s:%d:%d]: %s\n", P->I->path, ln, column_of(src, t->start), m);
+        print_source_caret(stderr, src, t->start, t->length > 0 ? t->length : 1, ln);
+    } else if (t->type == T_NEWLINE) {
+        fprintf(stderr, "syntax error [%s:%d:%d] at end of line: %s\n",
+                P->I->path, ln, column_of(src, t->start), msg);
+        print_source_caret(stderr, src, t->start, 1, ln);
+    } else {
+        char lex[48];
+        short_lexeme(lex, sizeof lex, t->start, t->length);
+        fprintf(stderr, "syntax error [%s:%d:%d] at '%s': %s\n",
+                P->I->path, ln, column_of(src, t->start), lex, msg);
+        print_source_caret(stderr, src, t->start, t->length, ln);
+    }
 }
 
 /* Report at a specific source line (no token lexeme), for errors whose offending
- * node isn't the current token, e.g. an invalid arrow parameter. */
+ * node isn't the current token, e.g. an invalid arrow parameter. The caret points
+ * at the first non-blank column of the line. */
 static void parser_error_line(Parser *P, int line, const char *msg) {
     if (P->had_error) return;
     P->had_error = true;
-    fprintf(stderr, "syntax error [%s:%d]: %s\n", P->I->path, line, msg);
+    const char *src = P->lex.src;
+    const char *at = line_start_ptr(src, line);
+    if (at) while (*at == ' ' || *at == '\t') at++;
+    fprintf(stderr, "syntax error [%s:%d:%d]: %s\n", P->I->path, line, column_of(src, at), msg);
+    print_source_caret(stderr, src, at, 1, line);
 }
 
 static void p_advance(Parser *P) {

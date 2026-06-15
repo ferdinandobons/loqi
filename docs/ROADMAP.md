@@ -50,7 +50,8 @@ imply for the next step.
 | Stdlib | date/time: `time.iso/parts/format/make/parse` (UTC) | ✅ done |
 | Diagnostics | source-line snippet on uncaught errors | ✅ done |
 | Diagnostics | accurate per-frame file names (cross-module) | ✅ done |
-| Diagnostics | caret under the column (needs column tracking) | 🔜 next |
+| Diagnostics | `^` caret + line:column on **syntax** errors | ✅ done |
+| Diagnostics | `^` caret on **runtime** errors (needs per-op columns) | 🔜 next |
 | Core | module cache (single-evaluation, diamond-safe) | ✅ done |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |
 | Speed | AOT: emit C and compile (`loqi build`) | 🔬 exploring |

@@ -260,6 +260,10 @@ it with a small, modern, memory-safe runtime:
 - **Safer text processing.** The `regex` engine is a linear-time Thompson NFA: it
   **cannot** catastrophically backtrack, so the ReDoS that hangs Python/JS/Java/PCRE
   on a crafted input simply can't happen here.
+- **Errors that point at the problem.** A syntax error reports `file:line:column`,
+  prints the offending source line, and underlines the exact spot with a `^` caret
+  (Rust/Elm style); runtime errors carry a full backtrace and the offending line.
+  Recoverable with `try`/`catch`, so one bad input or failed call never kills the run.
 - **Modern, expression-oriented surface.** Arrow functions (`x => x*2`), `if`/`match`
   as expressions, the pipe `|>`, null-safety (`?.`/`??`), ranges, string interpolation:
   concise to read and write, no semicolons, no ceremony.
