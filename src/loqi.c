@@ -13,6 +13,13 @@
  * long-running programs.
  */
 
+/* Expose POSIX/GNU functions (getline, popen, realpath, strdup, setenv, ...) under
+ * strict -std=c11 on glibc/musl. No-op on macOS, where they are visible by default.
+ * Must precede every system header. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

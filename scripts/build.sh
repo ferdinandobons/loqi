@@ -10,8 +10,12 @@ COMMON="-std=c11 -Wall -Wextra -Wno-unused-parameter -Isrc"
 
 case "$MODE" in
   release)
-    # -O3 + native arch + LTO for a fast Apple Silicon binary.
-    FLAGS="-O3 -mcpu=apple-m1 -flto -DNDEBUG"
+    # Portable release by default (builds on macOS + Linux, any CPU). Set
+    # LOQI_NATIVE=1 to tune for the host's Apple Silicon (-mcpu=apple-m1 + LTO).
+    FLAGS="-O2 -DNDEBUG"
+    if [ "${LOQI_NATIVE:-0}" = "1" ]; then
+      FLAGS="-O3 -mcpu=apple-m1 -flto -DNDEBUG"
+    fi
     ;;
   debug)
     FLAGS="-O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer"

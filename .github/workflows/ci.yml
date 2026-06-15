@@ -8,10 +8,19 @@ on:
 
 jobs:
   build-and-test:
-    # Apple Silicon (arm64), Loqi's target platform; matches -mcpu=apple-m1.
-    runs-on: macos-14
+    # The product promise is "one static binary, no runtime": verify the portable
+    # build + full suite on Linux (glibc) AND macOS (Apple Silicon) every push.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install clang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang
 
       - name: Build (release) + test suite
         run: |
