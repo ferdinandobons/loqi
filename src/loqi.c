@@ -1281,8 +1281,12 @@ static bool values_equal(Value a, Value b) {
 
 /* stringify a value into a freshly heap string buffer (caller frees) */
 static char *value_to_cstr(Interp *I, Value v);
+static char *value_to_cstr_depth(Interp *I, Value v, int depth);
 
 #define REPR_BUF 64 /* buffer size for the <fn ...>/<native ...>/<proto ...> reprs */
+/* Cap nesting when stringifying so a cyclic structure (a list that contains
+   itself) prints "..." instead of recursing until the C stack overflows. */
+#define MAX_REPR_DEPTH 64
 
 static void append_str(char **buf, size_t *len, size_t *cap, const char *s, size_t n) {
     if (*len + n + 1 > *cap) {
@@ -1296,21 +1300,24 @@ static void append_str(char **buf, size_t *len, size_t *cap, const char *s, size
 
 /* Append a value's display form to buf; strings are quoted. Shared by the
  * list and map stringify branches of value_to_cstr. */
-static void append_value_repr(Interp *I, char **buf, size_t *len, size_t *cap, Value v) {
+static void append_value_repr(Interp *I, char **buf, size_t *len, size_t *cap, Value v, int depth) {
     if (IS_STRING(v)) {
         ObjString *s = AS_STRING(v);
         append_str(buf, len, cap, "\"", 1);
         append_str(buf, len, cap, s->chars, (size_t)s->length);
         append_str(buf, len, cap, "\"", 1);
     } else {
-        char *s = value_to_cstr(I, v);
+        char *s = value_to_cstr_depth(I, v, depth + 1);
         append_str(buf, len, cap, s, strlen(s));
         free(s);
     }
 }
 
-static char *value_to_cstr(Interp *I, Value v) {
+static char *value_to_cstr(Interp *I, Value v) { return value_to_cstr_depth(I, v, 0); }
+static char *value_to_cstr_depth(Interp *I, Value v, int depth) {
     char tmp[64];
+    if (depth > MAX_REPR_DEPTH)
+        return strdup(IS_LIST(v) ? "[...]" : IS_MAP(v) ? "{...}" : "...");
     switch (v.type) {
         case VAL_NIL: return strdup("nil");
         case VAL_BOOL: return strdup(v.as.b ? "true" : "false");
@@ -1350,7 +1357,7 @@ static char *value_to_cstr(Interp *I, Value v) {
                     size_t len = 1, cap = 2;
                     for (int i = 0; i < l->count; i++) {
                         if (i) append_str(&b, &len, &cap, ", ", 2);
-                        append_value_repr(I, &b, &len, &cap, l->items[i]);
+                        append_value_repr(I, &b, &len, &cap, l->items[i], depth);
                     }
                     append_str(&b, &len, &cap, "]", 1);
                     return b;
@@ -1363,7 +1370,7 @@ static char *value_to_cstr(Interp *I, Value v) {
                         if (i) append_str(&b, &len, &cap, ", ", 2);
                         append_str(&b, &len, &cap, m->entries[i].key, strlen(m->entries[i].key));
                         append_str(&b, &len, &cap, ": ", 2);
-                        append_value_repr(I, &b, &len, &cap, m->entries[i].value);
+                        append_value_repr(I, &b, &len, &cap, m->entries[i].value, depth);
                     }
                     append_str(&b, &len, &cap, "}", 1);
                     return b;
