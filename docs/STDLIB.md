@@ -271,6 +271,22 @@ Reads an environment variable.
 let key = env("ANTHROPIC_API_KEY")
 ```
 
+## Process & OS
+| Function | Result |
+|----------|--------|
+| `run(cmd)` | run `cmd` via the shell; returns `{ out: <stdout>, code: <exit> }` |
+| `args()` | list of CLI arguments passed after the script path |
+| `exit(code?)` | exit the process (default code `0`) |
+| `env(name)` | environment variable, or `nil` |
+| `input(prompt?)` | read a line from stdin |
+
+```loqi
+let res = run("git rev-parse --short HEAD")
+if res.code == 0 { print("commit: {trim(res.out)}") }
+for a in args() { print("arg: {a}") }
+```
+> `run` passes the command to the shell — quote untrusted input yourself.
+
 ## `read(path) → str` / `write(path, content) → nil`
 Read and write whole files.
 ```loqi

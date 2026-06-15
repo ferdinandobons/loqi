@@ -193,6 +193,8 @@ struct Interp {
     int gray_count, gray_cap;
     bool gc_stress;    /* LOQI_GC_STRESS=1 -> collect at every safe-point (testing) */
     uint64_t rng_state; /* xorshift64 state for random()/randint() */
+    int script_argc;   /* CLI arguments passed to the script (for args()) */
+    char **script_argv;
 };
 
 /* An import that re-enters another file recurses through run_source on the C
@@ -3230,6 +3232,32 @@ static Value nat_rm(Interp *I, int argc, Value *argv) {
     if (remove(path) != 0) runtime_error(I, 0, "rm(): could not remove '%s'", path);
     return NIL_VAL;
 }
+/* ---- process / OS ---- */
+static Value nat_run(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "run() requires a command (str)");
+    size_t len; int status;
+    /* runs via the shell and captures stdout; the caller is responsible for the
+       command string (quote untrusted input). Returns { out, code }. */
+    char *out = run_capture(AS_STRING(argv[0])->chars, &len, &status);
+    if (!out) runtime_error(I, 0, "run(): could not start the command");
+    ObjMap *m = new_map(I);
+    map_set(m, "out", string_val(I, out, (int)len));
+    free(out);
+    map_set(m, "code", int_val(status));
+    return obj_val((Obj *)m);
+}
+static Value nat_args(Interp *I, int argc, Value *argv) {
+    (void)argc; (void)argv;
+    ObjList *l = new_list(I);
+    for (int i = 0; i < I->script_argc; i++) list_push(l, cstring_val(I, I->script_argv[i]));
+    return obj_val((Obj *)l);
+}
+static Value nat_exit(Interp *I, int argc, Value *argv) {
+    (void)I;
+    int code = (argc >= 1 && IS_INT(argv[0])) ? (int)AS_INT(argv[0]) : 0;
+    exit(code);
+}
 /* ---- path manipulation (string-only, length-aware) ---- */
 static Value nat_path_join(Interp *I, int argc, Value *argv) {
     char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
@@ -3975,6 +4003,10 @@ static void install_stdlib(Interp *I) {
     define_native(I, "is_dir", nat_is_dir, 1);
     define_native(I, "mkdir", nat_mkdir, 1);
     define_native(I, "rm", nat_rm, 1);
+    /* process / OS */
+    define_native(I, "run", nat_run, 1);
+    define_native(I, "args", nat_args, 0);
+    define_native(I, "exit", nat_exit, -1);
 
     ObjMap *json = new_map(I);
     define_native_in(I, json, "parse", nat_json_parse, 1);
@@ -4177,6 +4209,7 @@ static void interp_init(Interp *I) {
     { uint64_t s = (uint64_t)time(NULL) * 0x2545F4914F6CDD1DULL + 0x9e3779b97f4a7c15ULL;
       I->rng_state = s ? s : 0x9e3779b97f4a7c15ULL; } /* non-zero xorshift seed */
     I->module_defines = NULL;
+    I->script_argc = 0; I->script_argv = NULL;
     I->globals = xmalloc(sizeof(Table));
     table_init(I->globals);
     install_stdlib(I);
@@ -4211,6 +4244,9 @@ int main(int argc, char **argv) {
         }
         char *src = read_file(argv[1]);
         if (!src) return 74;
+        /* expose any arguments after the script path to args() */
+        I.script_argc = argc - 2;
+        I.script_argv = (argc > 2) ? &argv[2] : NULL;
         int rc = interpret(&I, src, argv[1]);
         free(src);
         return rc;
