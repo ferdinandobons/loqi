@@ -92,6 +92,11 @@ typedef struct {
     int cap;
 } ObjMap;
 
+/* Inline cache for a global name constant: the table its slot was resolved in,
+ * that table's version, and the resolved value slot. Valid while the table's
+ * version is unchanged (it bumps only on a rehash/grow, which moves entries). */
+typedef struct { Table *table; uint32_t version; Value *slot; } GCache;
+
 /* A chunk of compiled bytecode: instruction bytes, source lines, constants. */
 typedef struct Chunk {
     uint8_t *code;
@@ -101,6 +106,7 @@ typedef struct Chunk {
     Value *constants;
     int const_count;
     int const_cap;
+    GCache *gcache;     /* lazily allocated, one slot per constant index; OP_*_GLOBAL cache */
 } Chunk;
 
 /* A compiled function prototype (the immutable code + metadata). */
@@ -1201,7 +1207,8 @@ struct Table {
     int count;
     int cap;
     TableEntry *entries;
-    uint32_t gc_gen; /* GC generation this table was last marked in (dedup) */
+    uint32_t gc_gen;  /* GC generation this table was last marked in (dedup) */
+    uint32_t version; /* bumped on every rehash/grow (entries move) — invalidates GCache */
 };
 
 static uint32_t hash_string(const char *s, size_t n) {
@@ -1210,7 +1217,7 @@ static uint32_t hash_string(const char *s, size_t n) {
     return h;
 }
 
-static void table_init(Table *t) { t->count = 0; t->cap = 0; t->entries = NULL; t->gc_gen = 0; }
+static void table_init(Table *t) { t->count = 0; t->cap = 0; t->entries = NULL; t->gc_gen = 0; t->version = 0; }
 
 static TableEntry *table_find(TableEntry *entries, int cap, const char *key, uint32_t hash) {
     uint32_t idx = hash & (uint32_t)(cap - 1);
@@ -1233,6 +1240,7 @@ static void table_grow(Table *t) {
     }
     free(t->entries);
     t->entries = ne; t->cap = new_cap;
+    t->version++; /* entries moved: any cached value-slot pointer is now stale */
 }
 
 /* Returns pointer to the stored value, or NULL if absent. */
@@ -1440,6 +1448,15 @@ typedef enum {
 } OpCode;
 
 static void chunk_init(Chunk *c) { memset(c, 0, sizeof(Chunk)); }
+/* Lazily allocate (zeroed) the per-constant global cache on first global access. */
+static GCache *chunk_gcache(Chunk *c) {
+    if (!c->gcache) {
+        size_t n = c->const_count > 0 ? (size_t)c->const_count : 1;
+        c->gcache = xmalloc(sizeof(GCache) * n);
+        memset(c->gcache, 0, sizeof(GCache) * n);
+    }
+    return c->gcache;
+}
 static void chunk_write(Chunk *c, uint8_t byte, int line) {
     if (c->count + 1 > c->cap) {
         c->cap = c->cap < 8 ? 8 : c->cap * 2;
@@ -2300,6 +2317,7 @@ static void gc_free_obj(Obj *o) {
         case OBJ_PROTO: {
             ObjProto *p = (ObjProto *)o;
             free(p->chunk.code); free(p->chunk.lines); free(p->chunk.constants);
+            free(p->chunk.gcache);
             free(p->name); /* module_globals is borrowed, not owned */
             break;
         }
@@ -2370,10 +2388,19 @@ static void run_vm(VM *vm, int stop_at) {
             case OP_GET_LOCAL: { uint8_t s = READ_BYTE(); vm_push(vm, frame->slots[s]); break; }
             case OP_SET_LOCAL: { uint8_t s = READ_BYTE(); frame->slots[s] = vm_peek(vm, 0); break; }
             case OP_GET_GLOBAL: {
-                ObjString *name = AS_STRING(READ_CONST());
+                uint16_t ci = READ_U16();
+                Chunk *ch = &frame->closure->proto->chunk;
                 Table *g = frame->closure->proto->module_globals;
-                Value *v = table_get(g, name->chars, hash_string(name->chars, (size_t)name->length));
-                if (!v) vm_error(vm, "undefined name: '%s'", name->chars);
+                GCache *c = &chunk_gcache(ch)[ci];
+                Value *v;
+                if (c->table == g && c->version == g->version) {
+                    v = c->slot;                 /* fast path: cached value slot */
+                } else {
+                    ObjString *name = AS_STRING(ch->constants[ci]);
+                    v = table_get(g, name->chars, hash_string(name->chars, (size_t)name->length));
+                    if (!v) vm_error(vm, "undefined name: '%s'", name->chars);
+                    c->table = g; c->version = g->version; c->slot = v;
+                }
                 vm_push(vm, *v);
                 break;
             }
@@ -2390,12 +2417,20 @@ static void run_vm(VM *vm, int stop_at) {
                 break;
             }
             case OP_SET_GLOBAL: {
-                ObjString *name = AS_STRING(READ_CONST());
+                uint16_t ci = READ_U16();
+                Chunk *ch = &frame->closure->proto->chunk;
                 Table *g = frame->closure->proto->module_globals;
-                uint32_t h = hash_string(name->chars, (size_t)name->length);
-                if (!table_get(g, name->chars, h))
-                    vm_error(vm, "assignment to undeclared variable '%s' (use 'let')", name->chars);
-                table_set(g, name->chars, h, vm_peek(vm, 0));
+                GCache *c = &chunk_gcache(ch)[ci];
+                Value *v;
+                if (c->table == g && c->version == g->version) {
+                    v = c->slot;
+                } else {
+                    ObjString *name = AS_STRING(ch->constants[ci]);
+                    v = table_get(g, name->chars, hash_string(name->chars, (size_t)name->length));
+                    if (!v) vm_error(vm, "assignment to undeclared variable '%s' (use 'let')", name->chars);
+                    c->table = g; c->version = g->version; c->slot = v;
+                }
+                *v = vm_peek(vm, 0); /* write through the cached slot */
                 break;
             }
             case OP_GET_UPVALUE: { uint8_t i = READ_BYTE(); vm_push(vm, *frame->closure->upvalues[i]->location); break; }

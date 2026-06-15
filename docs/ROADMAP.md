@@ -19,7 +19,8 @@ imply for the next step.
 | Speed | tree-walking interpreter | ✅ done (v0.1 baseline, retired) |
 | Speed | **bytecode VM (stack, slot locals, upvalues)** | ✅ done |
 | Speed | global hash table (O(1) lookup) | ✅ done |
-| Speed | computed-goto dispatch / inline caches | 🔜 next |
+| Speed | inline cache of global slots | ✅ done |
+| Speed | computed-goto dispatch / NaN-boxing | 🔜 next |
 | AI | `ai(...)` LLM call (Anthropic API) | ✅ done |
 | AI | `json.parse` / `json.stringify` | ✅ done |
 | AI | `http.get` / `http.post` | ✅ done |
@@ -100,15 +101,16 @@ that gap is the next speed iteration.
 
 | Workload | Loqi v0.2 | CPython 3.13 | Loqi vs CPython |
 |----------|----------:|-------------:|-----------------|
-| `fib(30)` | ~0.099 s | ~0.091 s | ~1.1× slower (on par) |
-| tight loop 10M, **locals** | ~0.35 s | ~0.32 s | ~1.1× slower (on par) |
-| tight loop 10M, **globals** | ~1.8 s | — | 5× slower than locals |
+| `fib(30)` | ~0.090 s | ~0.091 s | on par |
+| tight loop 10M, **locals** | ~0.35 s | ~0.32 s | ~1.1× slower |
+| tight loop 10M, **globals** | ~0.39 s | ~0.82 s | **~2× faster** |
 
-The earlier "1.4× faster on loops" was optimistic — Loqi is roughly on par, not
-ahead. The clear finding: **global-variable access is the bottleneck** (each
-`let` at top level is a hash-table lookup per read/write), so **inline caching of
-global slots** is the highest-leverage speed work, alongside computed-goto
-dispatch. Keep hot loops in functions (locals are stack slots) until then.
+After adding **inline caching of global slots** (each `OP_*_GLOBAL` caches its
+resolved value slot, invalidated by a table version that bumps only on rehash),
+global access went from ~5× slower than locals to roughly the same — a ~4.6×
+speedup on global-heavy code, which also helps recursion (a call resolves the
+function via a global lookup). Loqi is now on par with CPython on `fib` and ahead
+on the loop. Next: computed-goto dispatch and NaN-boxed values.
 
 **Decision.** The remaining headroom is in interpreter dispatch and global access:
 (1) computed-goto dispatch instead of a `switch`, (2) caching global slots so a
