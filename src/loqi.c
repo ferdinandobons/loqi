@@ -652,6 +652,30 @@ static void node_add(Node ***arr, int *count, Node *child) {
     (*arr)[(*count)++] = child;
 }
 
+/* Free an AST once it has been compiled to bytecode. Iterative (explicit worklist,
+ * not C recursion) because the parser builds left-associative chains far deeper than
+ * the compiler will accept — a recursive free would overflow the stack on the very
+ * inputs the compile-depth guard rejects. Frees only AST-owned memory: every `name`
+ * is heap-owned (copy_lexeme / strdup / the import path), and `items`/`items2` are
+ * malloc'd; `literal` is an arena ObjString owned by the GC, so it is left alone. */
+static void free_node(Node *root) {
+    if (!root) return;
+    Node **stack = NULL; int top = 0, cap = 0;
+    #define FN_PUSH(x) do { if (x) { \
+        if (top == cap) { cap = cap ? cap * 2 : 64; stack = xrealloc(stack, sizeof(Node *) * (size_t)cap); } \
+        stack[top++] = (x); } } while (0)
+    FN_PUSH(root);
+    while (top) {
+        Node *n = stack[--top];
+        FN_PUSH(n->a); FN_PUSH(n->b); FN_PUSH(n->c); FN_PUSH(n->d);
+        for (int i = 0; i < n->item_count; i++) FN_PUSH(n->items[i]);
+        for (int i = 0; i < n->item2_count; i++) FN_PUSH(n->items2[i]);
+        free(n->items); free(n->items2); free(n->name); free(n);
+    }
+    free(stack);
+    #undef FN_PUSH
+}
+
 /* ===========================================================================
  * Parser (recursive descent + Pratt for binary precedence)
  * ========================================================================= */
@@ -727,6 +751,7 @@ static Node *parse_primary(Parser *P) {
     if (p_match(P, T_RAWSTRING)) {
         Node *n = new_node(N_STR, P->prev.line);
         n->literal = cstring_val(P->I, P->prev.str_val ? P->prev.str_val : "");
+        free(P->prev.str_val); P->prev.str_val = NULL; /* copied into the arena literal */
         return n;
     }
     if (p_match(P, T_IDENT)) {
@@ -1022,7 +1047,7 @@ static Node *parse_match(Parser *P) {
     p_consume(P, T_LBRACE, "expected '{' after the match expression");
 
     Node *outer = new_node(N_BLOCK, line);
-    Node *letm = new_node(N_LET, line); letm->name = "$m"; letm->a = subj;
+    Node *letm = new_node(N_LET, line); letm->name = strdup("$m"); letm->a = subj;
     node_add(&outer->items, &outer->item_count, letm);
 
     Node *first_if = NULL, *last_if = NULL, *default_body = NULL;
@@ -1043,7 +1068,7 @@ static Node *parse_match(Parser *P) {
             } else {
                 Node *pat = parse_expression(P);
                 Node *eq = new_node(N_BINARY, arm_line); eq->op = T_EQEQ;
-                Node *mref = new_node(N_IDENT, arm_line); mref->name = "$m";
+                Node *mref = new_node(N_IDENT, arm_line); mref->name = strdup("$m");
                 eq->a = mref; eq->b = pat;
                 if (!cond) cond = eq;
                 else { Node *orn = new_node(N_LOGICAL, arm_line); orn->op = T_OR; orn->a = cond; orn->b = eq; cond = orn; }
@@ -1230,6 +1255,9 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
             PUSHC(s[i]); i++;
         }
     }
+    /* the decoded source `s` (the token's str_val) is now fully consumed into the
+       literal/expression pieces above; release it (no node references it). */
+    free(strtok->str_val); strtok->str_val = NULL;
     /* trailing literal */
     buf[len] = '\0';
     if (!any_interp) {
@@ -4572,9 +4600,10 @@ static int run_source(Interp *I, const char *src, const char *path) {
     lex_init(&P.lex, I, src);
     p_advance(&P);
     Node *prog = parse_program(&P);
-    if (P.had_error) { free(owned); I->path = prev_path; I->current_source = prev_source; I->current_path = prev_cur_path; I->import_depth--; return 65; }
+    if (P.had_error) { free_node(prog); free(owned); I->path = prev_path; I->current_source = prev_source; I->current_path = prev_cur_path; I->import_depth--; return 65; }
 
     ObjProto *script = compile_script(I, prog);
+    free_node(prog); /* AST fully lowered to bytecode; names/literals are copied into the chunk */
     if (!script) { free(owned); I->path = prev_path; I->current_source = prev_source; I->current_path = prev_cur_path; I->import_depth--; return 65; }
 
     /* save the enclosing error landing pad + VM for safe nesting (imports) */
