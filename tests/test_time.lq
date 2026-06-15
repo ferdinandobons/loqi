@@ -19,4 +19,25 @@ let nowp = time.parts()
 assert(nowp.year >= 2026, "current year is sane")
 assert(type(time.iso()) == "str", "time.iso() current")
 
+# --- time.make: build a UTC timestamp from components ---
+assert(time.make(1970, 1, 1) == 0, "make epoch")
+assert(time.make(2023, 11, 14, 22, 13, 20) == 1700000000, "make known timestamp")
+assert(time.make(2026, 6, 15) == time.make(2026, 6, 15, 0, 0, 0), "make defaults to midnight")
+
+# --- time.parse: ISO-8601 (and a custom strptime format) -> seconds ---
+assert(time.parse("1970-01-01T00:00:00Z") == 0, "parse epoch ISO")
+assert(time.parse("2023-11-14T22:13:20Z") == 1700000000, "parse known ISO")
+assert(time.parse("2026-06-15") == time.make(2026, 6, 15), "parse date-only -> midnight")
+assert(time.parse("2023-11-14 22:13:20") == 1700000000, "parse space-separated datetime")
+assert(time.parse("14/11/2023", `%d/%m/%Y`) == time.make(2023, 11, 14), "parse with a custom format")
+
+# --- round-trips ---
+assert(time.iso(time.make(2000, 2, 29, 12, 0, 0)) == "2000-02-29T12:00:00Z", "make -> iso (leap day)")
+assert(time.parse(time.iso(1700000000)) == 1700000000, "iso -> parse round-trip")
+
+# --- malformed input is a catchable error, never a crash ---
+let bad = false
+try { time.parse("definitely not a date") } catch e { bad = true }
+assert(bad, "an unparseable date is a catchable error")
+
 print("test_time: all tests passed ✓")

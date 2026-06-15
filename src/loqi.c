@@ -4469,6 +4469,50 @@ static Value nat_time_format(Interp *I, int argc, Value *argv) {
     size_t n = strftime(buf, sizeof(buf), AS_STRING(argv[1])->chars, &tmv);
     return string_val(I, buf, (int)n); /* n == 0 if the result didn't fit */
 }
+/* time.make(year, month, day [, hour, min, sec]) -> Unix seconds (UTC). */
+static Value nat_time_make(Interp *I, int argc, Value *argv) {
+    if (argc < 3) runtime_error(I, 0, "time.make() requires at least (year, month, day)");
+    for (int i = 0; i < argc && i < 6; i++)
+        if (!IS_INT(argv[i])) runtime_error(I, 0, "time.make() requires integer components");
+    struct tm tmv; memset(&tmv, 0, sizeof tmv);
+    tmv.tm_year = (int)AS_INT(argv[0]) - 1900;
+    tmv.tm_mon  = (int)AS_INT(argv[1]) - 1;
+    tmv.tm_mday = (int)AS_INT(argv[2]);
+    tmv.tm_hour = argc > 3 ? (int)AS_INT(argv[3]) : 0;
+    tmv.tm_min  = argc > 4 ? (int)AS_INT(argv[4]) : 0;
+    tmv.tm_sec  = argc > 5 ? (int)AS_INT(argv[5]) : 0;
+    time_t t = timegm(&tmv);
+    if (t == (time_t)-1) runtime_error(I, 0, "time.make(): invalid date/time");
+    return int_val((int64_t)t);
+}
+/* time.parse(str [, fmt]) -> Unix seconds (UTC). Without a format, tries ISO-8601
+ * shapes; with one, uses a strptime format string. The whole string must be consumed
+ * (trailing whitespace aside) so a partial match isn't silently accepted. */
+static bool time_try_parse(const char *s, const char *fmt, time_t *out) {
+    struct tm tmv; memset(&tmv, 0, sizeof tmv);
+    char *end = strptime(s, fmt, &tmv);
+    if (!end) return false;
+    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
+    if (*end != '\0') return false;
+    *out = timegm(&tmv);
+    return *out != (time_t)-1;
+}
+static Value nat_time_parse(Interp *I, int argc, Value *argv) {
+    if (argc < 1 || !IS_STRING(argv[0])) runtime_error(I, 0, "time.parse() requires a date string");
+    const char *s = AS_STRING(argv[0])->chars;
+    time_t t;
+    if (argc > 1 && IS_STRING(argv[1])) {
+        if (time_try_parse(s, AS_STRING(argv[1])->chars, &t)) return int_val((int64_t)t);
+        runtime_error(I, 0, "time.parse(): '%s' does not match the given format", s);
+    }
+    static const char *fmts[] = {
+        "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", NULL
+    };
+    for (int i = 0; fmts[i]; i++)
+        if (time_try_parse(s, fmts[i], &t)) return int_val((int64_t)t);
+    runtime_error(I, 0, "time.parse(): could not parse '%s' (expected ISO-8601, or pass a format)", s);
+    return NIL_VAL;
+}
 /* ---- regex.* : linear-time pattern matching (see the engine above) ---- */
 static void rx_compile_or_raise(Interp *I, Value patv, const char *who, RxProg *prog) {
     if (!IS_STRING(patv)) runtime_error(I, 0, "%s requires a string pattern", who);
@@ -5311,6 +5355,8 @@ static void install_stdlib(Interp *I) {
     define_native_in(I, tm, "iso", nat_time_iso, -1);       /* time.iso([secs]) */
     define_native_in(I, tm, "parts", nat_time_parts, -1);   /* time.parts([secs]) */
     define_native_in(I, tm, "format", nat_time_format, 2);  /* time.format(secs, fmt) */
+    define_native_in(I, tm, "make", nat_time_make, -1);     /* time.make(y, mo, d[, h, mi, s]) */
+    define_native_in(I, tm, "parse", nat_time_parse, -1);   /* time.parse(str[, fmt]) */
     table_set(I->globals, "time", hash_string("time", 4), obj_val((Obj *)tm));
 
     ObjMap *rx = new_map(I);

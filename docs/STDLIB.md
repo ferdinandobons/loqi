@@ -113,11 +113,23 @@ for timestamps and for timing real (wall-clock) elapsed time.
 | `time.iso(secs?)` | ISO-8601 string `YYYY-MM-DDTHH:MM:SSZ` (default: now) |
 | `time.parts(secs?)` | map: `year, month, day, hour, minute, second, weekday (0=Sun), yearday` |
 | `time.format(secs, fmt)` | `strftime`-style formatting |
+| `time.make(year, month, day [, hour, min, sec])` | build Unix seconds from components (UTC) |
+| `time.parse(str [, fmt])` | parse a date string to Unix seconds (UTC) |
+
+`time.parse` accepts ISO-8601 by default (`2026-06-15T09:30:00Z`, `2026-06-15 09:30:00`,
+or date-only `2026-06-15` → midnight); pass a `strptime` format for anything else. The
+whole string must match, so a partial/garbled date raises rather than parsing silently.
+`time.make`/`time.parse` and `time.iso`/`time.format` round-trip.
 ```loqi
 print(time.iso())                          # e.g. 2026-06-15T09:30:00Z
 let d = time.parts(now())
 print("{d.year}-{d.month}-{d.day}")
 print(time.format(now(), `%A, %B %d`))     # e.g. Monday, June 15
+
+let t = time.make(2026, 6, 15, 9, 30, 0)   # -> Unix seconds
+print(time.iso(t))                         # 2026-06-15T09:30:00Z
+print(time.parse("2026-06-15T09:30:00Z") == t)   # true
+print(time.parse("14/11/2023", `%d/%m/%Y`))      # custom format
 ```
 
 ## Regex

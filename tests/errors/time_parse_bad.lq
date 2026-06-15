@@ -1,0 +1,2 @@
+# An unparseable date must be a clean catchable error, not a crash.
+time.parse("not a date at all")
