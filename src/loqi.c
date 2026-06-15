@@ -4302,19 +4302,83 @@ static Value nat_regex_split(Interp *I, int argc, Value *argv) {
     rx_free(&prog);
     return obj_val((Obj *)out);
 }
-static Value nat_similarity(Interp *I, int argc, Value *argv) {
-    if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
-        runtime_error(I, 0, "similarity() requires two vectors (list of numbers)");
-    ObjList *a = AS_LIST(argv[0]), *b = AS_LIST(argv[1]);
-    if (a->count != b->count) runtime_error(I, 0, "similarity(): vectors of different length");
+/* Cosine similarity of two numeric vectors; 0 if either is the zero vector. */
+static double vec_cosine(Interp *I, ObjList *a, ObjList *b, const char *who) {
+    if (a->count != b->count) runtime_error(I, 0, "%s: vectors of different length (%d vs %d)", who, a->count, b->count);
     double dot = 0, na = 0, nb = 0;
     for (int i = 0; i < a->count; i++) {
-        if (!IS_NUM(a->items[i]) || !IS_NUM(b->items[i])) runtime_error(I, 0, "similarity(): vectors must contain numbers");
+        if (!IS_NUM(a->items[i]) || !IS_NUM(b->items[i])) runtime_error(I, 0, "%s: vectors must contain only numbers", who);
         double x = as_double(a->items[i]), y = as_double(b->items[i]);
         dot += x * y; na += x * x; nb += y * y;
     }
-    if (na == 0 || nb == 0) return float_val(0.0);
-    return float_val(dot / (sqrt(na) * sqrt(nb)));
+    if (na == 0 || nb == 0) return 0.0;
+    return dot / (sqrt(na) * sqrt(nb));
+}
+static Value nat_similarity(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
+        runtime_error(I, 0, "similarity() requires two vectors (list of numbers)");
+    return float_val(vec_cosine(I, AS_LIST(argv[0]), AS_LIST(argv[1]), "similarity()"));
+}
+/* topk(query, vectors, k) -> the k most-similar vectors, as {index, score} maps
+ * sorted by descending cosine similarity. The RAG/semantic-search primitive: pass a
+ * query embedding and a list of candidate embeddings, get back which ones match. */
+typedef struct { int index; double score; } TopkHit;
+static int topk_cmp(const void *pa, const void *pb) {
+    double sa = ((const TopkHit *)pa)->score, sb = ((const TopkHit *)pb)->score;
+    if (sa < sb) return 1;       /* descending by score */
+    if (sa > sb) return -1;
+    int ia = ((const TopkHit *)pa)->index, ib = ((const TopkHit *)pb)->index;
+    return ia < ib ? -1 : (ia > ib ? 1 : 0); /* stable tie-break by index */
+}
+static Value nat_topk(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]) || !IS_INT(argv[2]))
+        runtime_error(I, 0, "topk() requires (query: vector, vectors: list of vectors, k: int)");
+    ObjList *q = AS_LIST(argv[0]), *vs = AS_LIST(argv[1]);
+    int64_t k = AS_INT(argv[2]);
+    ObjList *out = new_list(I);
+    if (k <= 0 || vs->count == 0) return obj_val((Obj *)out);
+    /* Validate everything BEFORE allocating `hits`, so an error (which longjmps out
+       of the native) can't strand the C buffer. After this, vec_cosine cannot raise. */
+    for (int j = 0; j < q->count; j++)
+        if (!IS_NUM(q->items[j])) runtime_error(I, 0, "topk(): the query vector must contain only numbers");
+    for (int i = 0; i < vs->count; i++) {
+        if (!IS_LIST(vs->items[i])) runtime_error(I, 0, "topk(): candidate %d is not a vector", i);
+        ObjList *vi = AS_LIST(vs->items[i]);
+        if (vi->count != q->count) runtime_error(I, 0, "topk(): candidate %d has length %d, expected %d", i, vi->count, q->count);
+        for (int j = 0; j < vi->count; j++)
+            if (!IS_NUM(vi->items[j])) runtime_error(I, 0, "topk(): candidate %d must contain only numbers", i);
+    }
+    TopkHit *hits = xmalloc(sizeof(TopkHit) * (size_t)vs->count);
+    for (int i = 0; i < vs->count; i++) {
+        hits[i].index = i;
+        hits[i].score = vec_cosine(I, q, AS_LIST(vs->items[i]), "topk()"); /* pre-validated: cannot raise */
+    }
+    qsort(hits, (size_t)vs->count, sizeof(TopkHit), topk_cmp);
+    int n = k < vs->count ? (int)k : vs->count;
+    for (int i = 0; i < n; i++) {
+        ObjMap *m = new_map(I);
+        map_set(m, "index", int_val(hits[i].index));
+        map_set(m, "score", float_val(hits[i].score));
+        list_push(out, obj_val((Obj *)m));
+    }
+    free(hits);
+    return obj_val((Obj *)out);
+}
+/* normalize(vector) -> the unit vector (same direction, length 1); the zero vector
+ * maps to itself. Handy before storing/comparing embeddings. */
+static Value nat_normalize(Interp *I, int argc, Value *argv) {
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "normalize() requires a vector (list of numbers)");
+    ObjList *v = AS_LIST(argv[0]);
+    double norm = 0;
+    for (int i = 0; i < v->count; i++) {
+        if (!IS_NUM(v->items[i])) runtime_error(I, 0, "normalize(): vector must contain only numbers");
+        double x = as_double(v->items[i]); norm += x * x;
+    }
+    ObjList *out = new_list(I);
+    norm = sqrt(norm);
+    for (int i = 0; i < v->count; i++)
+        list_push(out, float_val(norm == 0 ? 0.0 : as_double(v->items[i]) / norm));
+    return obj_val((Obj *)out);
 }
 
 /* ---- collections, strings, math: completeness for everyday tasks ---- */
@@ -4931,6 +4995,8 @@ static void install_stdlib(Interp *I) {
     define_native(I, "read", nat_read, 1);
     define_native(I, "write", nat_write, 2);
     define_native(I, "similarity", nat_similarity, 2);
+    define_native(I, "topk", nat_topk, 3);
+    define_native(I, "normalize", nat_normalize, 1);
     /* filesystem */
     define_native(I, "ls", nat_ls, 1);
     define_native(I, "exists", nat_exists, 1);

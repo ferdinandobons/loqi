@@ -25,6 +25,7 @@ imply for the next step.
 | AI | `json.parse` / `json.stringify` | ✅ done |
 | AI | `http.get` / `http.post` | ✅ done |
 | AI | `similarity` (cosine on vectors) | ✅ done |
+| AI | `topk` (nearest-neighbour search) + `normalize` — RAG | ✅ done |
 | AI | `env`, `read`, `write` | ✅ done |
 | Lang | raw strings (backticks) | ✅ done |
 | Lang | null-safety `??` / `?.`, ranges `a..b`, pipe `\|>` | ✅ done |

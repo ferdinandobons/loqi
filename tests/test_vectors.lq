@@ -1,0 +1,43 @@
+# Regression tests for the vector / semantic-search (RAG) helpers:
+# similarity (cosine), topk (nearest neighbours), normalize (unit vector).
+
+# --- similarity (cosine) ---
+assert(similarity([1, 0, 0], [1, 0, 0]) == 1.0, "identical vectors -> 1.0")
+assert(similarity([1, 0], [0, 1]) == 0.0, "orthogonal vectors -> 0.0")
+assert(similarity([0, 0], [1, 1]) == 0.0, "zero vector -> 0.0 (no divide-by-zero)")
+
+# --- normalize (unit vector) ---
+assert(normalize([3.0, 4.0]) == [0.6, 0.8], "3-4-5 triangle normalizes to 0.6/0.8")
+assert(normalize([0, 0]) == [0, 0], "zero vector normalizes to itself")
+let u = normalize([2, 0, 0])
+assert(u == [1.0, 0.0, 0.0], "normalize collapses magnitude, keeps direction")
+
+# --- topk: the RAG / nearest-neighbour primitive ---
+let docs = [
+  { text: "cats and kittens", vec: [1.0, 0.0, 0.0] },
+  { text: "dogs and puppies", vec: [0.0, 1.0, 0.0] },
+  { text: "felines purr",     vec: [0.9, 0.1, 0.0] },
+  { text: "automobiles",      vec: [0.0, 0.0, 1.0] },
+]
+let hits = topk([1.0, 0.05, 0.0], map(docs, d => d.vec), 2)
+assert(len(hits) == 2, "topk returns exactly k results")
+assert(hits[0].index == 0, "the closest match is the cat document")
+assert(hits[1].index == 2, "the second match is the feline document")
+assert(hits[0].score >= hits[1].score, "results are sorted by descending score")
+assert(docs[hits[0].index].text == "cats and kittens", "index maps back to the document")
+
+# topk clamps k to the number of candidates, and handles the empty/zero cases
+assert(len(topk([1, 0], [[1, 0], [0, 1]], 10)) == 2, "k larger than the set returns all")
+assert(topk([1, 0], [], 3) == [], "no candidates -> empty")
+assert(topk([1, 0], [[1, 0]], 0) == [], "k = 0 -> empty")
+
+# a deterministic tie is broken by the original index (stable order)
+let tied = topk([1, 0], [[1, 0], [1, 0], [0, 1]], 2)
+assert(tied[0].index == 0 and tied[1].index == 1, "ties keep the original order")
+
+# --- a dimension/type mismatch is a catchable error, never a crash ---
+let bad = false
+try { topk([1, 0, 0], [[1, 0]], 1) } catch e { bad = true }
+assert(bad, "topk reports a dimension mismatch as a catchable error")
+
+print("test_vectors: all tests passed ✓")

@@ -1,0 +1,2 @@
+# A topk dimension mismatch must be a clean catchable error, not a crash.
+topk([1, 0, 0], [[1, 0]], 1)

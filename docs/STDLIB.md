@@ -324,12 +324,41 @@ print("{repo.full_name}: {repo.stargazers_count} ⭐")
 let reply = http.post("https://httpbin.org/post", json.stringify({ hi: "loqi" }))
 ```
 
-## `similarity(a, b) → float`
-Cosine similarity between two numeric vectors (`list` of numbers) — the core of
-semantic search, no library required.
+## Vectors & semantic search (RAG)
+
+Batteries-included building blocks for retrieval-augmented generation: embed your
+documents (and the query) into vectors, then rank by similarity — no vector
+database required.
+
+### `similarity(a, b) → float`
+Cosine similarity between two numeric vectors (`list` of numbers). `0.0` if either
+is the zero vector (never divides by zero).
 ```loqi
 print(similarity([1, 0, 1], [1, 0, 1]))   # 1.0
 print(similarity([1, 0], [0, 1]))          # 0.0
+```
+
+### `topk(query, vectors, k) → list`
+The nearest-neighbour primitive: given a `query` vector and a list of candidate
+`vectors`, returns the `k` most similar as `{index, score}` maps, sorted by
+descending cosine similarity (`k` is clamped to the number of candidates; ties keep
+their original order). `index` points back into `vectors`.
+```loqi
+let docs = [
+  { text: "cats and kittens", vec: [1.0, 0.0, 0.0] },
+  { text: "dogs and puppies", vec: [0.0, 1.0, 0.0] },
+  { text: "felines purr",     vec: [0.9, 0.1, 0.0] },
+]
+for h in topk([1.0, 0.05, 0.0], map(docs, d => d.vec), 2) {
+  print(docs[h.index].text, h.score)        # cats…, then felines…
+}
+```
+
+### `normalize(vector) → list`
+Returns the unit vector (same direction, length 1); the zero vector maps to itself.
+Handy before storing or comparing embeddings.
+```loqi
+print(normalize([3.0, 4.0]))               # [0.6, 0.8]
 ```
 
 ## `env(name) → str | nil`
