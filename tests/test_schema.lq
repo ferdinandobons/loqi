@@ -64,6 +64,22 @@ assert(schema_raises([1], { type: "list", items: "bad" }), "non-map items raises
 assert(schema_raises({ a: 1 }, { type: "object", fields: "bad" }), "non-map fields raises")
 assert(schema_raises(1, "not a schema"), "a non-map schema raises")
 
+# --- M0-4 scalar constraints: pattern, string length, numeric range ---
+assert(json.validate("hello", { type: "string", pattern: "^[a-z]+$" }), "pattern matches")
+assert(not json.validate("Nope1", { type: "string", pattern: "^[a-z]+$" }), "pattern rejects non-match")
+assert(json.validate("abc", { type: "string", min_length: 3, max_length: 5 }), "string length in range")
+assert(not json.validate("ab", { type: "string", min_length: 3 }), "below min_length rejected")
+assert(not json.validate("abcdef", { type: "string", max_length: 5 }), "above max_length rejected")
+assert(json.validate(42, { type: "int", min: 1, max: 100 }), "int in range")
+assert(not json.validate(0, { type: "int", min: 1 }), "below min rejected")
+assert(not json.validate(101, { type: "int", max: 100 }), "above max rejected")
+assert(json.validate(2.5, { type: "float", min: 2.0, max: 3.0 }), "float in range")
+# malformed scalar constraints raise deterministically (author error, not data-dependent)
+assert(schema_raises("x", { pattern: 42 }), "non-string pattern raises")
+assert(schema_raises("x", { pattern: "(" }), "invalid regex pattern raises")
+assert(schema_raises("x", { min_length: "3" }), "non-int min_length raises")
+assert(schema_raises(5, { min: "lo" }), "non-number min raises")
+
 # --- ai_json argument handling (the network path needs a key; tested live elsewhere) ---
 let bad = false
 try { ai_json("p", 42) } catch e { bad = true }

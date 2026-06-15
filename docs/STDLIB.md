@@ -359,7 +359,10 @@ print(p.name, p.age, p.hobbies)            # Ada Lovelace 36 [math, poetry]
 ```
 Schema shapes (see `json.validate`): primitive `type` (`string`/`str`, `int`,
 `float`, `number`, `bool`, `null`, `any`), `enum`, `{type:"list", items: …}`, and
-`{type:"object", fields:{…}, required:[…]}`.
+`{type:"object", fields:{…}, required:[…]}`. Scalar constraints make a row
+trustworthy: `pattern` (a regex a string must match; partial like JSON Schema, anchor
+with `^…$` for full), `min_length`/`max_length` for strings, and `min`/`max`
+(inclusive) for numbers.
 
 ## `json.validate(value, schema) → bool`
 Checks any value against a schema (the same one `ai_json` uses), handy for
@@ -368,9 +371,17 @@ must match; `required` fields must exist; extra fields are allowed. A *malformed
 schema (e.g. `required` that isn't a list, `type` that isn't a string) raises a
 clear error rather than silently passing, so a schema typo never hides a bug.
 ```loqi
-let s = { type: "object", fields: { id: { type: "int" } }, required: ["id"] }
-print(json.validate({ id: 7, extra: "ok" }, s))   # true
-print(json.validate({ id: "x" }, s))              # false
+let s = {
+  type: "object",
+  fields: {
+    id:       { type: "int", min: 1 },
+    severity: { type: "string", enum: ["low", "high"] },
+    summary:  { type: "string", min_length: 3, pattern: "\\S" },  # non-empty, has real text
+  },
+  required: ["id", "severity"],
+}
+print(json.validate({ id: 7, severity: "high", summary: "boom" }, s))  # true
+print(json.validate({ id: 0, severity: "nope" }, s))                   # false (min, enum)
 ```
 
 ## `json.parse(str) → value` / `json.stringify(value) → str`

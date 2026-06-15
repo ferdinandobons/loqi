@@ -4011,6 +4011,39 @@ static bool schema_check(Interp *I, Value v, Value schema, char *eb, size_t cap,
         if (!found) { scherr(eb, cap, el, path, "value is not one of the allowed enum values"); return false; }
     }
     bool ok = true;
+    /* Scalar constraints that make a row trustworthy to the next pipe stage. A
+       malformed constraint is an author bug -> raise deterministically (like enum). */
+    Value *pat = map_get(s, "pattern");
+    if (pat) {
+        if (!IS_STRING(*pat)) runtime_error(I, 0, "validate(): schema 'pattern' must be a string, got %s", type_name(*pat));
+        if (IS_STRING(v)) { /* JSON-Schema-style partial match; anchor with ^...$ for full */
+            ObjString *ps = AS_STRING(*pat); RxProg prog; const char *rxe = NULL;
+            if (!rx_compile(ps->chars, ps->length, &prog, &rxe))
+                runtime_error(I, 0, "validate(): schema 'pattern' is not a valid regex: %s", rxe ? rxe : "?");
+            ObjString *sv = AS_STRING(v); int ms, me;
+            bool matched = rx_search(&prog, sv->chars, sv->length, 0, &ms, &me);
+            rx_free(&prog);
+            if (!matched) { scherr(eb, cap, el, path, "value does not match the required pattern"); ok = false; }
+        }
+    }
+    Value *minl = map_get(s, "min_length");
+    Value *maxl = map_get(s, "max_length");
+    if (minl && !IS_INT(*minl)) runtime_error(I, 0, "validate(): schema 'min_length' must be an int, got %s", type_name(*minl));
+    if (maxl && !IS_INT(*maxl)) runtime_error(I, 0, "validate(): schema 'max_length' must be an int, got %s", type_name(*maxl));
+    if ((minl || maxl) && IS_STRING(v)) {
+        int L = AS_STRING(v)->length;
+        if (minl && L < (int)AS_INT(*minl)) { char m[96]; snprintf(m, sizeof m, "string length %d is below min_length %lld", L, (long long)AS_INT(*minl)); scherr(eb, cap, el, path, m); ok = false; }
+        if (maxl && L > (int)AS_INT(*maxl)) { char m[96]; snprintf(m, sizeof m, "string length %d exceeds max_length %lld", L, (long long)AS_INT(*maxl)); scherr(eb, cap, el, path, m); ok = false; }
+    }
+    Value *minv = map_get(s, "min");
+    Value *maxv = map_get(s, "max");
+    if (minv && !IS_NUM(*minv)) runtime_error(I, 0, "validate(): schema 'min' must be a number, got %s", type_name(*minv));
+    if (maxv && !IS_NUM(*maxv)) runtime_error(I, 0, "validate(): schema 'max' must be a number, got %s", type_name(*maxv));
+    if ((minv || maxv) && IS_NUM(v)) {
+        double d = as_double(v);
+        if (minv && d < as_double(*minv)) { char m[96]; snprintf(m, sizeof m, "value %g is below min %g", d, as_double(*minv)); scherr(eb, cap, el, path, m); ok = false; }
+        if (maxv && d > as_double(*maxv)) { char m[96]; snprintf(m, sizeof m, "value %g is above max %g", d, as_double(*maxv)); scherr(eb, cap, el, path, m); ok = false; }
+    }
     if (IS_LIST(v) && (!strcmp(t, "list") || !strcmp(t, "array"))) {
         Value *items = map_get(s, "items");
         if (items) {
