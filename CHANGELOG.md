@@ -75,6 +75,13 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
   body). See `examples/ai/server.lq`.
 - Example gallery `examples/ai/` (haiku, structured extraction, web+JSON).
 
+### Added, ergonomics
+- **Implicit line continuation.** A long expression continues onto the next line
+  automatically when a line ends on a token a statement can't end on, a binary or
+  logical operator, an open `(`/`[`, a trailing `,`, `=>`, `|>`, `??`, `?.`, or `.`.
+  No trailing `\` needed; `price * qty +\n shipping` and multi-line calls/lists/maps
+  and `|>` pipelines just work. (Fixes the stale "trailing `\`" claim in the docs.)
+
 ### Added, diagnostics
 - **Syntax-error carets.** A parse error now reports `file:line:column`, prints the
   offending source line, and underlines the exact spot with a `^` caret (Rust/Elm

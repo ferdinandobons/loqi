@@ -1,6 +1,6 @@
-# Driven by scripts/test.sh: an incomplete expression at end of line must report the
-# line the code is ON (line 2 here), not the next line. Regression for the newline
-# token carrying the lexer's post-increment line number.
+# Driven by scripts/test.sh: a syntax error must be attributed to the line the bad
+# token is actually on, with the rendered source line matching the reported line
+# (regression: a token's line once came from the lexer's running counter, not its
+# start byte). The stray '3' below ends the statement-terminator expectation.
 let a = 1
-let b = 2 +
-let c = 3
+let b = 2 3

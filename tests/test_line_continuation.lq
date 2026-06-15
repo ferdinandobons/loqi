@@ -1,0 +1,52 @@
+# Implicit line continuation: a line ending on an operator, an open delimiter, a
+# comma, '|>', '=>', or a logical keyword continues onto the next line, so a long
+# expression can be split for readability without a trailing marker.
+
+# split at a trailing binary operator
+let a = 1 +
+        2 *
+        3
+assert(a == 7, "trailing + and * continue the expression")
+
+# logical operators at end of line
+let b = 1 < 2 and
+        3 > 2 or
+        false
+assert(b == true, "trailing and/or continue")
+
+# a multi-line function call
+fn add3(x, y, z) { return x + y + z }
+let c = add3(1,
+             2,
+             3)
+assert(c == 6, "an open paren / trailing comma continues a call")
+
+# a multi-line list and map literal
+let xs = [10,
+          20,
+          30]
+assert(xs[0] + xs[1] + xs[2] == 60, "a list literal spans lines")
+let m = {
+  "name": "Ada",
+  "year": 1815,
+}
+assert(m.year == 1815, "a map literal spans lines")
+
+# the pipe can break before or after |>
+let d = [1, 2, 3, 4]
+  |> filter(fn(x) { return x % 2 == 0 })
+let e = [1, 2, 3, 4] |>
+  filter(fn(x) { return x > 2 })
+assert(len(d) == 2 and len(e) == 2, "pipelines break across lines either way")
+
+# arrow-function body on the next line
+let sq = (n) =>
+  n * n
+assert(sq(9) == 81, "an arrow body continues after =>")
+
+# NON-continuation: separate statements still terminate independently
+let f = 5
+-3
+assert(f == 5, "a value-ending line is its own statement; the next -3 is separate")
+
+print("test_line_continuation: all tests passed ✓")

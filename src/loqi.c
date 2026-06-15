@@ -371,10 +371,12 @@ typedef struct {
     const char *start;
     const char *cur;
     int line;
+    TokType prev; /* last non-newline token, for implicit line continuation */
 } Lexer;
 
 static void lex_init(Lexer *L, Interp *I, const char *src) {
     L->I = I; L->src = src; L->start = src; L->cur = src; L->line = 1;
+    L->prev = T_NEWLINE; /* a leading newline is never a continuation */
 }
 
 static bool is_at_end(Lexer *L) { return *L->cur == '\0'; }
@@ -581,7 +583,28 @@ static Token lex_raw_string(Lexer *L) {
     return tok;
 }
 
-static Token lex_next(Lexer *L) {
+/* A line that ends on one of these tokens cannot be a complete statement, so the
+   following newline is a continuation, not a terminator: infix/assignment operators,
+   logical keywords, separators (',' '.' '..' ':'), '=>'/'??'/'?.'/'|>', and the
+   openers '(' '['. Not '{' (block/map start) which the parser handles itself. */
+static bool tok_continues_line(TokType t) {
+    switch (t) {
+        case T_PLUS: case T_MINUS: case T_STAR: case T_SLASH: case T_SLASHSLASH:
+        case T_PERCENT: case T_EQ: case T_EQEQ: case T_BANGEQ:
+        case T_LT: case T_LTEQ: case T_GT: case T_GTEQ:
+        case T_AND: case T_OR: case T_NOT:
+        case T_COMMA: case T_DOT: case T_DOTDOT: case T_COLON:
+        case T_ARROW: case T_QQ: case T_QDOT: case T_PIPE:
+        case T_LPAREN: case T_LBRACKET:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static Token lex_next(Lexer *L); /* wrapper below tracks the previous token */
+
+static Token lex_scan(Lexer *L) {
     skip_trivia(L);
     L->start = L->cur;
     if (is_at_end(L)) return make_token(L, T_EOF);
@@ -589,11 +612,13 @@ static Token lex_next(Lexer *L) {
     char c = advance_ch(L);
     if (c == '\n') {
         L->line++;
-        /* Line continuation: if the next non-blank content begins with `|>`,
-           swallow this newline so a pipeline can break before each `|>`. */
+        /* Implicit line continuation: swallow this newline when the line ends on a
+           token a statement can't end on (a + at EOL, an open paren, a trailing
+           comma, ...), or when the next non-blank content begins with `|>`. */
         const char *p = L->cur;
         while (*p == ' ' || *p == '\t' || *p == '\r') p++;
         if (p[0] == '|' && p[1] == '>') { L->cur = p; return lex_next(L); }
+        if (tok_continues_line(L->prev)) return lex_next(L);
         return make_token(L, T_NEWLINE);
     }
     if (isdigit((unsigned char)c)) { L->cur--; return lex_number(L); }
@@ -637,6 +662,14 @@ static Token lex_next(Lexer *L) {
         case '`': return lex_raw_string(L);
     }
     return error_token(L, "unexpected character");
+}
+
+/* Public lexer entry: scan one token and remember it (unless it is a newline) so the
+   next newline can decide whether it continues the line. */
+static Token lex_next(Lexer *L) {
+    Token t = lex_scan(L);
+    if (t.type != T_NEWLINE) L->prev = t.type;
+    return t;
 }
 
 /* ===========================================================================

@@ -22,8 +22,18 @@ documents what runs.
 ## Lexical structure
 
 - **Comments** start with `#` and run to end of line.
-- **Statements** are terminated by a newline. There are no semicolons.
-- A long expression can be continued onto the next line with a trailing `\`.
+- **Statements** are terminated by a newline. There are no semicolons (though `;`
+  may be used to put several statements on one line).
+- A long expression **continues automatically** onto the next line when the line
+  ends on something a statement can't end on, a binary or logical operator, an open
+  `(`/`[`, a trailing `,`, `=>`, `|>`, `??`, `?.`, or `.`. No line-continuation
+  character is needed:
+  ```loqi
+  let total = price * qty +
+              shipping
+  let evens = nums
+    |> filter(fn(x) { return x % 2 == 0 })
+  ```
 - Whitespace is otherwise insignificant.
 
 ```loqi

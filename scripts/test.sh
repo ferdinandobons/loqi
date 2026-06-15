@@ -113,12 +113,12 @@ fi
 eol_out="$("$LOQI" tests/fixtures/syntax_caret_eol.lq 2>&1)"
 rc=$?
 if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ] \
-   && printf '%s' "$eol_out" | grep -q ":5:12]" \
-   && printf '%s' "$eol_out" | grep -q "5 | let b = 2 +"; then
-  echo "  ✓ (caret-line) an end-of-line error is attributed to the right line"
+   && printf '%s' "$eol_out" | grep -q ":6:11]" \
+   && printf '%s' "$eol_out" | grep -q "6 | let b = 2 3"; then
+  echo "  ✓ (caret-line) a syntax error is attributed to the right line"
   pass=$((pass+1))
 else
-  echo "  ✗ (caret-line) expected an error attributed to line 5 (:5:12 + 'let b = 2 +'), exit=$rc:"
+  echo "  ✗ (caret-line) expected an error attributed to line 6 (:6:11 + 'let b = 2 3'), exit=$rc:"
   printf '%s\n' "$eol_out" | sed 's/^/      /'
   fail=$((fail+1))
 fi

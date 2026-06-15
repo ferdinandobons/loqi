@@ -32,6 +32,7 @@ imply for the next step.
 | Lang | arrow functions `x => e`, `(a, b) => e`, `() => e` | ✅ done |
 | Lang | `if` & `match` as expressions (`let x = if c { a } else { b }`) | ✅ done |
 | Lang | `const` immutable bindings | ✅ done |
+| Lang | implicit line continuation (trailing operator / open bracket) | ✅ done |
 | AI | `ai(prompt, options)` (model/system/temperature/max_tokens) | ✅ done |
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `ai_json(prompt, schema)`, schema-validated output + retry | ✅ done |
