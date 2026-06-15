@@ -201,6 +201,7 @@ struct Interp {
     Obj **gray;        /* worklist of marked-but-not-yet-scanned objects */
     int gray_count, gray_cap;
     bool gc_stress;    /* LOQI_GC_STRESS=1 -> collect at every safe-point (testing) */
+    bool gc_pending;   /* set when a collection is due; the only per-instruction GC check */
     uint64_t rng_state; /* xorshift64 state for random()/randint() */
     int script_argc;   /* CLI arguments passed to the script (for args()) */
     char **script_argv;
@@ -255,7 +256,7 @@ static Obj *alloc_obj(Interp *I, size_t size, ObjType type) {
     o->marked = false;
     o->arena_next = I->arena;
     I->arena = o;
-    I->obj_count++;
+    if (++I->obj_count >= I->next_gc) I->gc_pending = true; /* threshold check here, not per-instruction */
     return o;
 }
 
@@ -2333,6 +2334,8 @@ static void collect_garbage(Interp *I) {
     gc_sweep(I);
     size_t floor = 1u << 14;
     I->next_gc = (I->obj_count > floor / 2) ? I->obj_count * 2 : floor;
+    /* clear the flag (or keep collecting every instruction under stress) */
+    I->gc_pending = I->gc_stress;
 }
 
 static void run_vm(VM *vm, int stop_at) {
@@ -2356,7 +2359,7 @@ static void run_vm(VM *vm, int stop_at) {
 #define READ_U16() (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
 #define READ_CONST() (frame->closure->proto->chunk.constants[READ_U16()])
     for (;;) {
-        if (vm->I->gc_stress || vm->I->obj_count >= vm->I->next_gc) collect_garbage(vm->I);
+        if (vm->I->gc_pending) collect_garbage(vm->I);
         uint8_t inst = READ_BYTE();
         switch (inst) {
             case OP_CONSTANT: vm_push(vm, READ_CONST()); break;
@@ -4478,6 +4481,7 @@ static void interp_init(Interp *I) {
     I->gc_gen = 0;
     I->gray = NULL; I->gray_count = 0; I->gray_cap = 0;
     I->gc_stress = getenv("LOQI_GC_STRESS") != NULL;
+    I->gc_pending = I->gc_stress; /* stress mode: collect from the first instruction */
     { uint64_t s = (uint64_t)time(NULL) * 0x2545F4914F6CDD1DULL + 0x9e3779b97f4a7c15ULL;
       I->rng_state = s ? s : 0x9e3779b97f4a7c15ULL; } /* non-zero xorshift seed */
     I->module_defines = NULL;

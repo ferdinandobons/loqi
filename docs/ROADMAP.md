@@ -92,10 +92,23 @@ and every example pass unchanged — same language, new engine.
 | `fib(30)` | 0.55 s | **0.105 s** | 0.094 s | 0.017 s |
 | tight loop to 50M | — | **3.0 s** | 4.3 s | — |
 
-**Result.** ~5× faster than the v0.1 tree-walker. Now **on par with CPython** on
-recursion and **~1.4× faster than CPython** on tight numeric loops, from a VM
-written from scratch with no JIT. V8's JIT is still ahead on `fib` — closing that
-gap is the next speed iteration.
+**Result.** ~5× faster than the v0.1 tree-walker, and **on par with CPython** from
+a VM written from scratch with no JIT. V8's JIT is still ahead on `fib` — closing
+that gap is the next speed iteration.
+
+**Re-measured (honest, v0.2 today, wall-clock best-of-3):**
+
+| Workload | Loqi v0.2 | CPython 3.13 | Loqi vs CPython |
+|----------|----------:|-------------:|-----------------|
+| `fib(30)` | ~0.099 s | ~0.091 s | ~1.1× slower (on par) |
+| tight loop 10M, **locals** | ~0.35 s | ~0.32 s | ~1.1× slower (on par) |
+| tight loop 10M, **globals** | ~1.8 s | — | 5× slower than locals |
+
+The earlier "1.4× faster on loops" was optimistic — Loqi is roughly on par, not
+ahead. The clear finding: **global-variable access is the bottleneck** (each
+`let` at top level is a hash-table lookup per read/write), so **inline caching of
+global slots** is the highest-leverage speed work, alongside computed-goto
+dispatch. Keep hot loops in functions (locals are stack slots) until then.
 
 **Decision.** The remaining headroom is in interpreter dispatch and global access:
 (1) computed-goto dispatch instead of a `switch`, (2) caching global slots so a
