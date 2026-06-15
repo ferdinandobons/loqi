@@ -220,6 +220,22 @@ else
   fail=$((fail+1))
 fi
 
+# stdin(): the pipe-filter path. Pipe data into a script that reads stdin() and
+# iterates lines(); assert it processes every line, and that empty stdin is clean.
+stdin_out="$(printf 'one\ntwo\nthree\n' | "$LOQI" tests/fixtures/stdin_lines.lq 2>&1)"
+stdin_empty="$(printf '' | "$LOQI" tests/fixtures/stdin_lines.lq 2>&1)"
+if printf '%s' "$stdin_out" | grep -q "^ONE$" \
+   && printf '%s' "$stdin_out" | grep -q "^THREE$" \
+   && printf '%s' "$stdin_out" | grep -q "count=3" \
+   && printf '%s' "$stdin_empty" | grep -q "count=0"; then
+  echo "  ✓ (stdin) a pipe filter reads stdin() and iterates lines() (empty stdin clean)"
+  pass=$((pass+1))
+else
+  echo "  ✗ (stdin) unexpected stdin()/lines() behavior:"
+  printf 'data:\n%s\nempty:\n%s\n' "$stdin_out" "$stdin_empty" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

@@ -3739,6 +3739,23 @@ static Value nat_input(Interp *I, int argc, Value *argv) {
     free(line);
     return v;
 }
+/* stdin() -> all of standard input as one string (slurp). The headline input for a
+   pipe filter: `for line in lines(stdin()) { ... }`. Empty input -> "". Binary-safe
+   (length-counted, no NUL truncation). */
+static Value nat_stdin(Interp *I, int argc, Value *argv) {
+    (void)argc; (void)argv;
+    size_t cap = 65536, len = 0;
+    char *buf = xmalloc(cap);
+    for (;;) {
+        if (len == cap) { cap *= 2; buf = xrealloc(buf, cap); }
+        size_t got = fread(buf + len, 1, cap - len, stdin);
+        len += got;
+        if (got == 0) break; /* EOF (or read error) */
+    }
+    Value v = string_val(I, buf, (int)len);
+    free(buf);
+    return v;
+}
 static Value nat_assert(Interp *I, int argc, Value *argv) {
     if (argc < 1) runtime_error(I, 0, "assert() requires a condition");
     if (!is_truthy(argv[0])) {
@@ -5933,6 +5950,7 @@ static void install_stdlib(Interp *I) {
     define_native(I, "clock", nat_clock, 0);
     define_native(I, "now", nat_now, 0);
     define_native(I, "input", nat_input, -1);
+    define_native(I, "stdin", nat_stdin, 0);
     define_native(I, "assert", nat_assert, -1);
 
     /* --- collections --- */
@@ -6311,6 +6329,12 @@ static void repl(Interp *I) {
 }
 
 int main(int argc, char **argv) {
+    /* Line-buffer stdout so a pipe filter streams each line to the next stage
+       (e.g. `loqi extract.lq | head`) instead of withholding it in a full buffer.
+       SIGPIPE stays at its default on purpose: when a downstream `head` closes,
+       the terminating signal stops the run (and any further paid model calls). */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     Interp I;
     interp_init(&I);
 

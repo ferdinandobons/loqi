@@ -1,0 +1,9 @@
+# Driven by scripts/test.sh: a pipe filter. Reads ALL of stdin via stdin(), iterates
+# it line by line with lines(), uppercases each, and reports the count. Exercises the
+# headline `cat data | loqi script.lq` path (script from file, data on stdin).
+let n = 0
+for line in lines(stdin()) {
+  print(upper(line))
+  n = n + 1
+}
+print("count={n}")
