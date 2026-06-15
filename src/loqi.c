@@ -30,6 +30,10 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /* ===========================================================================
  * Forward declarations
@@ -4012,6 +4016,232 @@ static Value nat_http_post(Interp *I, int argc, Value *argv) {
     return v;
 }
 
+/* ===========================================================================
+ * http.serve: a minimal, single-threaded HTTP/1.1 server. One connection at a
+ * time; the handler is a Loqi fn run on the MAIN VM thread (vm_invoke), so the GC
+ * and re-entrancy behave exactly as in normal code. An UNCAUGHT error in the
+ * handler becomes a 500 response instead of killing the server. Every request byte
+ * is bounds-checked (untrusted input). Enough to write an agent/webhook/API in Loqi
+ * end-to-end (request -> ai() -> JSON response); not a hardened production server.
+ * ========================================================================= */
+#define HTTP_MAX_HEADERS (64 * 1024)         /* request line + headers cap */
+#define HTTP_MAX_BODY    (32 * 1024 * 1024)  /* Content-Length cap */
+
+static const char *http_status_text(int code) {
+    switch (code) {
+        case 200: return "OK";              case 201: return "Created";
+        case 204: return "No Content";      case 301: return "Moved Permanently";
+        case 302: return "Found";           case 400: return "Bad Request";
+        case 401: return "Unauthorized";    case 403: return "Forbidden";
+        case 404: return "Not Found";       case 405: return "Method Not Allowed";
+        case 429: return "Too Many Requests"; case 500: return "Internal Server Error";
+        case 503: return "Service Unavailable"; default: return "OK";
+    }
+}
+static void http_lower(char *s) { for (; *s; s++) *s = (char)tolower((unsigned char)*s); }
+static bool http_ci_eq(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
+    return *a == *b;
+}
+/* Send all `len` bytes, retrying short writes. Returns false on error. */
+static bool http_send_all(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = send(fd, buf + off, len - off, 0);
+        if (n <= 0) return false;
+        off += (size_t)n;
+    }
+    return true;
+}
+/* Write a full HTTP/1.1 response: status line, our headers, the handler's extra
+   headers (reserved ones skipped), a blank line, then the body. */
+static void http_write_response(int fd, int status, const char *content_type,
+                                const char *body, size_t body_len, ObjMap *extra_headers) {
+    char head[1024];
+    int hn = snprintf(head, sizeof head,
+        "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n",
+        status, http_status_text(status), content_type, body_len);
+    if (hn < 0) return;
+    if (hn > (int)sizeof head) hn = (int)sizeof head;
+    http_send_all(fd, head, (size_t)hn);
+    if (extra_headers) {
+        for (int i = 0; i < extra_headers->count; i++) {
+            const char *k = extra_headers->entries[i].key;
+            Value v = extra_headers->entries[i].value;
+            if (!IS_STRING(v)) continue;
+            if (http_ci_eq(k, "content-type") || http_ci_eq(k, "content-length") || http_ci_eq(k, "connection"))
+                continue; /* we control these */
+            char line[1024];
+            int ln = snprintf(line, sizeof line, "%s: %s\r\n", k, AS_STRING(v)->chars);
+            if (ln > 0 && ln <= (int)sizeof line) http_send_all(fd, line, (size_t)ln);
+        }
+    }
+    http_send_all(fd, "\r\n", 2);
+    if (body && body_len) http_send_all(fd, body, body_len);
+}
+/* Read and parse one request off `cfd` into a GC-managed map {method, path, headers,
+   body}, reading the Content-Length body. Returns NULL on a malformed/oversized
+   request (caller replies 400). All raw buffers are freed before returning, so the
+   later vm_invoke can't strand them on a longjmp. */
+static ObjMap *http_read_request(Interp *I, int cfd) {
+    size_t cap = 4096, len = 0, hdr_end = 0;
+    char *buf = xmalloc(cap);
+    for (;;) {
+        if (len + 1 >= cap) {
+            if (cap >= HTTP_MAX_HEADERS) { free(buf); return NULL; }
+            cap *= 2; buf = xrealloc(buf, cap);
+        }
+        ssize_t n = recv(cfd, buf + len, cap - len - 1, 0);
+        if (n <= 0) break;
+        len += (size_t)n;
+        buf[len] = '\0';
+        char *e = strstr(buf, "\r\n\r\n");
+        if (e) { hdr_end = (size_t)(e - buf) + 4; break; }
+    }
+    if (hdr_end == 0) { free(buf); return NULL; } /* no complete header block */
+
+    char *line_end = strstr(buf, "\r\n");
+    *line_end = '\0';
+    char *sp1 = strchr(buf, ' ');
+    if (!sp1) { free(buf); return NULL; }
+    *sp1 = '\0';
+    char *method = buf, *target = sp1 + 1;
+    char *sp2 = strchr(target, ' ');
+    if (sp2) *sp2 = '\0'; /* drop the "HTTP/1.1" version */
+
+    ObjMap *req = new_map(I);
+    map_set(req, "method", cstring_val(I, method));
+    map_set(req, "path", cstring_val(I, target));
+
+    ObjMap *headers = new_map(I);
+    long content_length = 0;
+    for (char *h = line_end + 2; h < buf + hdr_end; ) {
+        char *eol = strstr(h, "\r\n");
+        if (!eol || eol == h) break; /* the empty line ends the header block */
+        *eol = '\0';
+        char *colon = strchr(h, ':');
+        if (colon) {
+            *colon = '\0';
+            char *name = h, *val = colon + 1;
+            while (*val == ' ' || *val == '\t') val++;
+            http_lower(name);
+            map_set(headers, name, cstring_val(I, val));
+            if (strcmp(name, "content-length") == 0) {
+                content_length = strtol(val, NULL, 10);
+                if (content_length < 0) content_length = 0;
+                if (content_length > HTTP_MAX_BODY) content_length = HTTP_MAX_BODY;
+            }
+        }
+        h = eol + 2;
+    }
+    map_set(req, "headers", obj_val((Obj *)headers));
+
+    size_t have = len - hdr_end;
+    if ((size_t)content_length > have) {
+        size_t need = (size_t)content_length;
+        char *body = xmalloc(need + 1);
+        memcpy(body, buf + hdr_end, have);
+        size_t got = have;
+        while (got < need) {
+            ssize_t n = recv(cfd, body + got, need - got, 0);
+            if (n <= 0) break;
+            got += (size_t)n;
+        }
+        map_set(req, "body", string_val(I, body, (int)got));
+        free(body);
+    } else {
+        map_set(req, "body", string_val(I, buf + hdr_end, (int)content_length));
+    }
+    free(buf);
+    return req;
+}
+/* http.serve(port, handler): bind, listen, and serve requests forever (blocking).
+   The handler is `fn(request) -> str | { status?, body?, content_type?, headers? }`. */
+static Value nat_http_serve(Interp *I, int argc, Value *argv) {
+    if (argc < 2 || !IS_INT(argv[0]) || !(IS_CLOSURE(argv[1]) || IS_NATIVE(argv[1])))
+        runtime_error(I, 0, "http.serve(port, handler) requires (port: int, handler: fn)");
+    int64_t port = AS_INT(argv[0]);
+    if (port < 1 || port > 65535) runtime_error(I, 0, "http.serve(): port must be 1..65535");
+    Value handler = argv[1];
+
+    signal(SIGPIPE, SIG_IGN); /* a write to a closed socket must not kill us */
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    if (srv < 0) runtime_error(I, 0, "http.serve(): socket() failed");
+    int yes = 1;
+    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(srv, (struct sockaddr *)&addr, sizeof addr) < 0) {
+        close(srv); runtime_error(I, 0, "http.serve(): bind() failed on port %lld (already in use?)", (long long)port);
+    }
+    if (listen(srv, 16) < 0) { close(srv); runtime_error(I, 0, "http.serve(): listen() failed"); }
+    fprintf(stderr, "loqi: serving HTTP on http://0.0.0.0:%lld/ (Ctrl-C to stop)\n", (long long)port);
+
+    VM *vm = I->vm;
+    for (;;) {
+        int cfd = accept(srv, NULL, NULL);
+        if (cfd < 0) { if (errno == EINTR) continue; break; }
+        /* a stalled client must not hang the single thread forever */
+        struct timeval tv = { 30, 0 };
+        setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
+        ObjMap *req = http_read_request(I, cfd);
+        if (!req) {
+            http_write_response(cfd, 400, "text/plain; charset=utf-8", "Bad Request\n", 12, NULL);
+            close(cfd); continue;
+        }
+
+        /* Call the handler with a per-request catch: an uncaught error becomes a 500
+           rather than tearing down the server. Mirror run_vm's trap save/restore. */
+        int sv_frames = vm->frame_count;
+        Value *sv_top = vm->stack_top;
+        int sv_handlers = vm->handler_count;
+        jmp_buf saved;
+        memcpy(saved, I->err_jmp, sizeof(jmp_buf));
+        Value resp = NIL_VAL;
+        bool errored = false;
+        if (setjmp(I->err_jmp)) {
+            errored = true;
+            close_upvalues(vm, sv_top);
+            vm->frame_count = sv_frames;
+            vm->stack_top = sv_top;
+            vm->handler_count = sv_handlers;
+            I->has_error = false;
+        } else {
+            Value reqv = obj_val((Obj *)req);
+            resp = vm_invoke(vm, handler, 1, &reqv);
+        }
+        memcpy(I->err_jmp, saved, sizeof(jmp_buf));
+
+        if (errored) {
+            fprintf(stderr, "loqi: http handler error: %s\n", I->err_msg);
+            http_write_response(cfd, 500, "text/plain; charset=utf-8", "Internal Server Error\n", 22, NULL);
+        } else if (IS_STRING(resp)) {
+            http_write_response(cfd, 200, "text/plain; charset=utf-8",
+                                AS_STRING(resp)->chars, (size_t)AS_STRING(resp)->length, NULL);
+        } else if (IS_MAP(resp)) {
+            ObjMap *m = AS_MAP(resp);
+            Value *st = map_get(m, "status"), *ct = map_get(m, "content_type");
+            Value *bd = map_get(m, "body"), *hd = map_get(m, "headers");
+            int status = (st && IS_INT(*st)) ? (int)AS_INT(*st) : 200;
+            const char *ctype = (ct && IS_STRING(*ct)) ? AS_STRING(*ct)->chars : "text/plain; charset=utf-8";
+            const char *body = (bd && IS_STRING(*bd)) ? AS_STRING(*bd)->chars : "";
+            size_t blen = (bd && IS_STRING(*bd)) ? (size_t)AS_STRING(*bd)->length : 0;
+            ObjMap *extra = (hd && IS_MAP(*hd)) ? AS_MAP(*hd) : NULL;
+            http_write_response(cfd, status, ctype, body, blen, extra);
+        } else {
+            fprintf(stderr, "loqi: http handler must return a string or a map {status, body, ...}\n");
+            http_write_response(cfd, 500, "text/plain; charset=utf-8", "Internal Server Error\n", 22, NULL);
+        }
+        close(cfd);
+    }
+    close(srv);
+    return NIL_VAL;
+}
+
 /* ---- ai: a first-class LLM call (Anthropic Messages API via curl) ---- */
 /* Parse model text into a native value for ai(prompt, { json: true }), tolerating
    the ```/```json markdown fences models often wrap JSON in. json_parse_value
@@ -5640,6 +5870,7 @@ static void install_stdlib(Interp *I) {
     ObjMap *http = new_map(I);
     define_native_in(I, http, "get", nat_http_get, 1);
     define_native_in(I, http, "post", nat_http_post, -1);
+    define_native_in(I, http, "serve", nat_http_serve, 2);
     table_set(I->globals, "http", hash_string("http", 4), obj_val((Obj *)http));
 
     ObjMap *path = new_map(I);

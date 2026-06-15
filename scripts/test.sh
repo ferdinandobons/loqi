@@ -123,6 +123,37 @@ else
   fail=$((fail+1))
 fi
 
+# http.serve: launch a tiny server on the loopback, hit it with curl, assert the
+# string and map (status + content-type) responses, then stop it via /quit.
+HTTP_PORT=8911
+"$LOQI" tests/fixtures/http_server.lq >/dev/null 2>&1 &
+HTTP_SRV=$!
+http_up=0
+for i in $(seq 1 50); do
+  if curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/"; then http_up=1; break; fi
+  sleep 0.1
+done
+if [ "$http_up" -eq 1 ]; then
+  http_body="$(curl -s "http://127.0.0.1:$HTTP_PORT/ping")"
+  http_json="$(curl -s -i "http://127.0.0.1:$HTTP_PORT/json")"
+  if printf '%s' "$http_body" | grep -q "loqi-http GET /ping" \
+     && printf '%s' "$http_json" | grep -q "201 Created" \
+     && printf '%s' "$http_json" | grep -q "application/json"; then
+    echo "  ✓ (http-serve) the built-in server answers string and map responses"
+    pass=$((pass+1))
+  else
+    echo "  ✗ (http-serve) unexpected server responses:"
+    printf '%s\n---\n%s\n' "$http_body" "$http_json" | sed 's/^/      /'
+    fail=$((fail+1))
+  fi
+else
+  echo "  ✗ (http-serve) server did not come up on port $HTTP_PORT"
+  fail=$((fail+1))
+fi
+curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/quit" 2>/dev/null
+kill "$HTTP_SRV" 2>/dev/null
+wait "$HTTP_SRV" 2>/dev/null
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

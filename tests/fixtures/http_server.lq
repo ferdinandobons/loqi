@@ -1,0 +1,11 @@
+# Driven by scripts/test.sh: a tiny server exercised over the loopback. The /quit
+# path stops it cleanly; /json returns a map response; anything else echoes. Not in
+# examples/ (the suite smoke-runs those, and http.serve blocks forever).
+fn handler(req) {
+  if req.path == "/quit" { exit(0) }
+  if req.path == "/json" {
+    return { status: 201, content_type: "application/json", body: `{"ok":true}` }
+  }
+  return "loqi-http {req.method} {req.path}"
+}
+http.serve(8911, handler)

@@ -255,6 +255,10 @@ it with a small, modern, memory-safe runtime:
 - **Parallel agents without the ceremony.** `ai_all` fans slow model calls out across
   a thread pool and returns answers in order, while your code stays single-threaded
   and race-free. No async colouring, no event loop, no GIL workaround.
+- **An agent endpoint is one built-in.** `http.serve(port, handler)` makes a webhook,
+  agent, or API a Loqi program end to end, request → `ai()` → JSON response, no web
+  framework. An uncaught error in a handler becomes a `500` and the server keeps
+  serving, so one bad request never takes the service down.
 - **RAG without a vector database.** `similarity` + `topk` + `normalize` are enough to
   embed, rank, and retrieve in a few lines, semantic search is a language feature.
 - **Safer text processing.** The `regex` engine is a linear-time Thompson NFA: it

@@ -383,6 +383,37 @@ print("{repo.full_name}: {repo.stargazers_count} ⭐")
 let reply = http.post("https://httpbin.org/post", json.stringify({ hi: "loqi" }))
 ```
 
+## `http.serve(port, handler)`
+A built-in HTTP/1.1 server, so an agent, webhook, or API is a Loqi program end to
+end (request → `ai()` → response). Blocks and serves forever (Ctrl-C to stop).
+
+`handler` is `fn(request)` where `request` is a map `{ method, path, headers, body }`
+(`headers` keys are lowercased). It returns either:
+
+- a **string** → `200 OK`, `text/plain`, that string as the body; or
+- a **map** `{ status?, body?, content_type?, headers? }` for full control
+  (`status` defaults to `200`, `content_type` to `text/plain; charset=utf-8`).
+
+The handler runs on the main thread (one request at a time). An **uncaught error in
+the handler becomes a `500`** and the server keeps running, so a single bad request
+never takes the service down. Requests are bounds-checked (64 KB of headers, 32 MB
+body cap).
+
+```loqi
+fn handler(req) {
+  if req.path == "/health" {
+    return { content_type: "application/json", body: json.stringify({ ok: true }) }
+  }
+  if req.method != "POST" { return { status: 405, body: "POST a prompt\n" } }
+  return ai(req.body)              # an LLM endpoint in one line
+}
+http.serve(8080, handler)
+```
+
+```sh
+curl -s -X POST --data "Write a haiku about the sea" http://127.0.0.1:8080/
+```
+
 ## Vectors & semantic search (RAG)
 
 Batteries-included building blocks for retrieval-augmented generation: embed your

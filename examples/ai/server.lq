@@ -1,0 +1,23 @@
+# An AI endpoint in ~10 lines of Loqi: POST a prompt, get the model's answer back.
+# The HTTP server, the LLM call, and JSON are all built in, no framework, no SDK.
+#
+#   Run:   ANTHROPIC_API_KEY=sk-... loqi examples/ai/server.lq
+#   Call:  curl -s -X POST --data "Write a haiku about the sea" http://127.0.0.1:8080/
+#   JSON:  curl -s http://127.0.0.1:8080/health
+#
+# The handler runs on the main thread; an uncaught error in it becomes a 500 and
+# the server keeps running, so one bad request never takes the service down.
+
+fn handler(req) {
+  if req.path == "/health" {
+    return { content_type: "application/json", body: json.stringify({ ok: true }) }
+  }
+  if req.method != "POST" {
+    return { status: 405, body: "POST a prompt to / to ask the model.\n" }
+  }
+  let answer = ai(req.body)
+  return { content_type: "text/plain; charset=utf-8", body: answer }
+}
+
+print("Loqi AI server on http://127.0.0.1:8080/  (POST a prompt to /)")
+http.serve(8080, handler)

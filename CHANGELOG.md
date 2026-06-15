@@ -67,6 +67,12 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
   fatal 4xx is not retried. Tunable via `LOQI_AI_MAX_RETRIES` (default 3) and
   `LOQI_AI_RETRY_BASE_MS` (default 500). The endpoint is overridable with
   `LOQI_AI_BASE_URL` (a gateway/proxy, or a local mock for testing).
+- **`http.serve(port, handler)`**, a built-in single-threaded HTTP/1.1 server, so an
+  agent/webhook/API is a Loqi program end to end (request → `ai()` → response). The
+  handler is `fn(request)` returning a string or `{ status, body, content_type,
+  headers }`. It runs on the main thread; an uncaught handler error becomes a `500`
+  and the server keeps serving. Requests are bounds-checked (64 KB headers, 32 MB
+  body). See `examples/ai/server.lq`.
 - Example gallery `examples/ai/` (haiku, structured extraction, web+JSON).
 
 ### Added, diagnostics

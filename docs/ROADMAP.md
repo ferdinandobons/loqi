@@ -38,6 +38,7 @@ imply for the next step.
 | AI | `json.validate(value, schema)`, schema validation | ✅ done |
 | AI | retry/backoff on 429/5xx + transient network errors | ✅ done |
 | AI | `LOQI_AI_BASE_URL` endpoint override (gateway/proxy) | ✅ done |
+| AI | `http.serve(port, handler)` (write an agent/API in Loqi) | ✅ done |
 | AI | `embed` (embeddings API) | 🔜 next |
 | AI | schema-constrained generation (`ai_json`) | ✅ done |
 | Concurrency | `run_all(cmds)`, parallel subprocesses (thread pool) | ✅ done |
