@@ -48,6 +48,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
   first `ai`/`ai_json`/`ai_all`/`http` call with a clear install hint
   (`apt install curl` / `apk add curl`) instead of a confusing "curl returned an error".
 
+### Fixed
+- **`sort()` on musl** (Alpine, and the upcoming static Linux binaries): the `qsort_r`
+  portability shim keyed only on `__GLIBC__`, but musl uses the same GNU-style
+  signature without defining it, so a musl build took the BSD branch and passed the
+  context pointer where the comparator goes, crashing on the first `sort()`. The shim
+  now keys on `__linux__` too. The glibc CI never hit this (it defines `__GLIBC__`);
+  found while building the musl artifacts.
+
 ### Removed
 - **`docs/WHY-LOQI.md`** (the old "AI-first programming language" manifesto, wrong
   audience) and **`docs/COMPARISON.md`** (general-language duel vs Go/Rust/Mojo). Their

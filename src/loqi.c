@@ -5635,9 +5635,16 @@ static int value_compare(Interp *I, Value a, Value b) {
     runtime_error(I, 0, "invalid comparison between %s and %s", type_name(a), type_name(b));
     return 0;
 }
-/* qsort_r's argument order and comparator signature differ between the
-   BSD/macOS and glibc/Linux flavors; provide both so the source is portable. */
-#if defined(__GLIBC__)
+/* qsort_r's argument order and comparator signature differ between two flavors. The
+   GNU flavor (comparator (a, b, thunk); call order base, n, size, compar, thunk) is used
+   across ALL of Linux, glibc AND musl. The BSD/macOS flavor swaps both. musl does not
+   define __GLIBC__, so we must key on __linux__ too, or a static musl build takes the
+   BSD branch and passes the context pointer where the comparator goes, crashing on the
+   first sort(). (The glibc CI never hit this; the bug only bites the musl artifact.) */
+#if defined(__linux__) || defined(__GLIBC__)
+#define LOQI_QSORT_R_GNU 1
+#endif
+#ifdef LOQI_QSORT_R_GNU
 static int sort_cmp(const void *pa, const void *pb, void *thunk) {
     return value_compare((Interp *)thunk, *(const Value *)pa, *(const Value *)pb);
 }
@@ -5652,7 +5659,7 @@ static Value nat_sort(Interp *I, int argc, Value *argv) {
     ObjList *out = new_list(I);
     for (int i = 0; i < src->count; i++) list_push(out, src->items[i]);
     if (out->count > 1) {
-#if defined(__GLIBC__)
+#ifdef LOQI_QSORT_R_GNU
         qsort_r(out->items, (size_t)out->count, sizeof(Value), sort_cmp, I);
 #else
         qsort_r(out->items, (size_t)out->count, sizeof(Value), I, sort_cmp);
