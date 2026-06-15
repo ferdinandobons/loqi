@@ -296,6 +296,18 @@ print("{person.name} ({person.birth_year})")          # person.birth_year is an 
 let summary = ai("Summarize this.", { system: "Be terse.", temperature: 0.2 })
 ```
 
+**Reliability.** `ai` (and `ai_all`) retries transient failures automatically with
+exponential backoff and jitter: HTTP `429` (rate limit), any `5xx`, and transient
+network errors (DNS, connect, timeout, dropped connection). A fatal `4xx` (bad
+request, auth) is **not** retried, it fails immediately with the API's message.
+Tunable via the environment:
+
+| env var | default | meaning |
+|---------|---------|---------|
+| `LOQI_AI_MAX_RETRIES` | `3` | retries after the first try (0 disables; max 8) |
+| `LOQI_AI_RETRY_BASE_MS` | `500` | backoff base in ms; doubles per retry, capped at 16s |
+| `LOQI_AI_BASE_URL` | Anthropic Messages API | override the endpoint (a gateway/proxy) |
+
 ## `ai_all(prompts) → list` / `ai_all(prompts, options) → list`
 Runs many model calls **concurrently** and returns the answers in input order,
 the same `options` (incl. `json`) apply to every prompt. This is how you fan out

@@ -1,0 +1,6 @@
+# Driven by scripts/test.sh: run with LOQI_AI_BASE_URL pointing at a closed local
+# port, a dummy key, a tiny backoff and a small retry budget. The connection fails
+# (a transient error), so ai() must retry the configured number of times and then
+# fail cleanly and fast, never hang. This exercises the retry/backoff loop offline.
+let answer = ai("ping")
+print(answer)

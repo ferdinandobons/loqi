@@ -62,10 +62,20 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
 - **`env`, `read`, `write`**, environment variables and whole-file I/O.
 - **Raw strings** with backticks (`` `...` ``): verbatim, no escapes/interpolation,
   so JSON and regex literals need no escaping.
+- **`ai` retry/backoff**: `ai` and `ai_all` now retry transient failures (HTTP 429,
+  any 5xx, and transient network errors) with exponential backoff and jitter; a
+  fatal 4xx is not retried. Tunable via `LOQI_AI_MAX_RETRIES` (default 3) and
+  `LOQI_AI_RETRY_BASE_MS` (default 500). The endpoint is overridable with
+  `LOQI_AI_BASE_URL` (a gateway/proxy, or a local mock for testing).
 - Example gallery `examples/ai/` (haiku, structured extraction, web+JSON).
 
+### Fixed
+- A `let` redeclaration of a module global after a `const` of the same name is now
+  mutable again (`const x = 1; let x = 2; x = 3` was wrongly rejected at compile
+  time, matching neither the runtime nor plain `let`/`let` redeclaration).
+
 ### In progress
-- `embed()` (embeddings API), structured generation with schema.
+- `embed()` (embeddings API).
 - Presentation & positioning materials.
 
 ### Known limitations

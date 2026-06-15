@@ -36,6 +36,8 @@ imply for the next step.
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `ai_json(prompt, schema)`, schema-validated output + retry | ✅ done |
 | AI | `json.validate(value, schema)`, schema validation | ✅ done |
+| AI | retry/backoff on 429/5xx + transient network errors | ✅ done |
+| AI | `LOQI_AI_BASE_URL` endpoint override (gateway/proxy) | ✅ done |
 | AI | `embed` (embeddings API) | 🔜 next |
 | AI | schema-constrained generation (`ai_json`) | ✅ done |
 | Concurrency | `run_all(cmds)`, parallel subprocesses (thread pool) | ✅ done |
@@ -202,7 +204,7 @@ Still ahead (the items above the line are done, GC, modules, schema-validated
 output, regex, RAG, expression-form if/match, and the rest all shipped):
 
 - `embed()` (embeddings API, needs a non-Anthropic provider/key).
-- `ai` retry/backoff on 429/5xx; token counting.
+- `ai` token counting / usage reporting (retry/backoff on 429/5xx already shipped).
 - `loqi fmt`, `loqi test`, an LSP for editor support.
 - Optional type annotations; block expressions that declare locals.
 - Computed-goto dispatch and NaN-boxed values (raw VM speed).

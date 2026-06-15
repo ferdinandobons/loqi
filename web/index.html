@@ -633,7 +633,7 @@
           <span class="bat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
           <span class="bat-name">ai(prompt)</span>
         </div>
-        <p class="bat-desc">A first-class LLM call to the Anthropic Messages API. Reads <code>ANTHROPIC_API_KEY</code>; pass a model as a second arg or via <code>LOQI_AI_MODEL</code>.</p>
+        <p class="bat-desc">A first-class LLM call to the Anthropic Messages API. Reads <code>ANTHROPIC_API_KEY</code>; pass a model as a second arg or via <code>LOQI_AI_MODEL</code>. Rate limits and transient errors are retried with backoff automatically.</p>
         <pre><code><span class="tk">let</span> <span class="ti">poem</span> <span class="tp">=</span> <span class="tf">ai</span><span class="tp">(</span><span class="ts">"Write a haiku about clean code"</span><span class="tp">)</span>
 <span class="tf">print</span><span class="tp">(</span><span class="ti">poem</span><span class="tp">)</span></code></pre>
       </div>

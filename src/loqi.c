@@ -3976,6 +3976,98 @@ static AiOpts ai_parse_opts(Interp *I, int argc, Value *argv, int optidx) {
     return o;
 }
 
+/* ---- ai: bounded retry with exponential backoff on transient failures ----
+   LLM endpoints rate-limit (429) and have transient 5xx blips; a production-grade
+   AI call retries those with backoff rather than failing on the first hiccup. */
+
+/* Read an int env var, falling back to `def`, clamped to [lo, hi]. */
+static int ai_env_int(const char *name, int def, int lo, int hi) {
+    const char *s = getenv(name);
+    if (!s || !*s) return def;
+    char *end; long v = strtol(s, &end, 10);
+    if (end == s) return def;
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    return (int)v;
+}
+
+/* curl -w appends "\n__LQHTTP:<code>__" after the body. Find the last marker,
+   return the parsed HTTP status, and truncate the body to drop the marker. */
+static long ai_split_http_code(char *buf, size_t *len) {
+    static const char MARK[] = "__LQHTTP:";
+    const size_t mlen = sizeof(MARK) - 1;
+    if (!buf || *len < mlen) return 0;
+    for (size_t i = *len - mlen; ; i--) {
+        if (memcmp(buf + i, MARK, mlen) == 0) {
+            long code = strtol(buf + i + mlen, NULL, 10);
+            size_t cut = (i > 0 && buf[i - 1] == '\n') ? i - 1 : i;
+            buf[cut] = '\0';
+            *len = cut;
+            return code;
+        }
+        if (i == 0) break;
+    }
+    return 0;
+}
+
+/* Transient conditions worth retrying: a handful of curl network exit codes, and
+   HTTP 429 (rate limit) or any 5xx. A 4xx (bad request, auth) is fatal: no retry. */
+static bool ai_status_retryable(int curl_status, long http_code) {
+    if (curl_status != 0) {
+        switch (curl_status) {
+            case 6:  /* couldn't resolve host */
+            case 7:  /* couldn't connect */
+            case 28: /* operation timed out */
+            case 35: /* SSL connect error */
+            case 52: /* empty reply from server */
+            case 55: /* failed sending network data */
+            case 56: /* failure receiving network data */
+                return true;
+            default: return false;
+        }
+    }
+    return http_code == 429 || (http_code >= 500 && http_code <= 599);
+}
+
+/* Sleep before the next attempt: exponential (base_ms << attempt, capped 16s)
+   with full jitter so concurrent callers don't retry in lockstep. */
+static void ai_backoff_sleep(int attempt, long base_ms) {
+    if (base_ms <= 0) return;
+    long cap = base_ms;
+    for (int i = 0; i < attempt && cap < 16000; i++) cap *= 2;
+    if (cap > 16000 || cap < base_ms) cap = 16000;
+    long jitter = (long)((unsigned long)clock() % (unsigned long)(cap + 1)); /* [0, cap] */
+    struct timespec ts;
+    ts.tv_sec = jitter / 1000;
+    ts.tv_nsec = (jitter % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
+/* Run an ai curl command, retrying transient failures with backoff. Returns the
+   response body (marker stripped; caller frees), and reports the final curl exit
+   status, HTTP code, and the number of attempts made. Retries are bounded by
+   LOQI_AI_MAX_RETRIES (default 3, 0..8); backoff base by LOQI_AI_RETRY_BASE_MS
+   (default 500, 0..60000). Thread-safe: only popen/malloc/sleep, no Loqi heap. */
+static char *ai_run_with_retry(const char *cmd, size_t *out_len, int *out_status,
+                               long *out_http, int *out_attempts) {
+    int max_retries = ai_env_int("LOQI_AI_MAX_RETRIES", 3, 0, 8);
+    long base_ms = ai_env_int("LOQI_AI_RETRY_BASE_MS", 500, 0, 60000);
+    int attempt = 0;
+    for (;;) {
+        size_t len = 0; int status = -1;
+        char *resp = run_capture(cmd, &len, &status);
+        long http = resp ? ai_split_http_code(resp, &len) : 0;
+        attempt++;
+        bool last = attempt > max_retries; /* attempt 1 is the first try */
+        if (!resp || last || !ai_status_retryable(status, http)) {
+            *out_len = len; *out_status = status; *out_http = http; *out_attempts = attempt;
+            return resp;
+        }
+        free(resp);
+        ai_backoff_sleep(attempt - 1, base_ms);
+    }
+}
+
 /* Build the request body + 0600 curl config temp files for one prompt and return
    the curl command (malloc'd, caller frees). Fills body_tmpl/cfg_tmpl (>= 32
    bytes; caller unlinks them). Runs on the MAIN thread only, it allocates Loqi
@@ -4017,7 +4109,13 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
     if (cfd < 0) { unlink(body_tmpl); return fail_msg(I, "ai(): could not create config file"); }
     FILE *cf = fdopen(cfd, "w");
     if (!cf) { close(cfd); unlink(cfg_tmpl); unlink(body_tmpl); return fail_msg(I, "ai(): config not writable"); }
-    fputs("url = \"https://api.anthropic.com/v1/messages\"\n", cf);
+    /* Endpoint is overridable (a proxy/gateway, or a local mock for testing) but
+       defaults to the Anthropic Messages API. */
+    const char *base_url = getenv("LOQI_AI_BASE_URL");
+    if (!base_url || !*base_url) base_url = "https://api.anthropic.com/v1/messages";
+    fputs("url = \"", cf);
+    for (const char *u = base_url; *u; u++) { if (*u == '"' || *u == '\\') fputc('\\', cf); fputc(*u, cf); }
+    fputs("\"\n", cf);
     fputs("header = \"content-type: application/json\"\n", cf);
     fputs("header = \"anthropic-version: 2023-06-01\"\n", cf);
     fputs("header = \"x-api-key: ", cf);
@@ -4027,9 +4125,12 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
     fclose(cf);
 
     char *qcfg = shell_quote(cfg_tmpl);
-    size_t clen = strlen(qcfg) + 48;
+    size_t clen = strlen(qcfg) + 80;
     char *cmd = xmalloc(clen);
-    snprintf(cmd, clen, "curl -fsS --max-time 120 -K %s", qcfg);
+    /* No -f: on an HTTP error we want the body (the API's error JSON) and the
+       status code so the retry logic can tell a transient 429/5xx apart from a
+       fatal 4xx. curl -w appends the status after the body for ai_split_http_code. */
+    snprintf(cmd, clen, "curl -s --max-time 120 -K %s -w '\\n__LQHTTP:%%{http_code}__'", qcfg);
     free(qcfg);
     return cmd;
 }
@@ -4037,10 +4138,21 @@ static char *ai_build_request(Interp *I, Value prompt, AiOpts o, const char *key
 /* Parse one Anthropic Messages response into a Loqi value (the first text block,
    or its parsed JSON if want_json). Takes ownership of `resp` (frees it). Raises
    on a curl/API/format error. */
-static Value ai_parse_response(Interp *I, char *resp, int status, bool want_json) {
+static Value ai_parse_response(Interp *I, char *resp, int status, long http_code,
+                               int attempts, bool want_json) {
     if (!resp) runtime_error(I, 0, "ai(): could not run curl");
-    if (status != 0 && !*resp) { free(resp); runtime_error(I, 0, "ai(): API request failed (curl %d), check network and key", status); }
-    if (!*resp) { free(resp); runtime_error(I, 0, "ai(): no response from the API"); }
+    if (status != 0 && !*resp) {
+        free(resp);
+        if (attempts > 1)
+            runtime_error(I, 0, "ai(): API request failed after %d attempts (curl %d), check network and key", attempts, status);
+        runtime_error(I, 0, "ai(): API request failed (curl %d), check network and key", status);
+    }
+    if (!*resp) {
+        free(resp);
+        if (http_code >= 400)
+            runtime_error(I, 0, "ai(): API returned HTTP %ld with no body%s", http_code, attempts > 1 ? " (after retries)" : "");
+        runtime_error(I, 0, "ai(): no response from the API");
+    }
     const char *p = resp;
     Value parsed = json_parse_value(I, &p, 0);
     free(resp);
@@ -4076,10 +4188,10 @@ static Value nat_ai(Interp *I, int argc, Value *argv) {
     char body_tmpl[32], cfg_tmpl[32];
     char *cmd = ai_build_request(I, argv[0], o, key, body_tmpl, cfg_tmpl);
     if (!cmd) raise_error(I); /* build cleaned up its own temp files; raise the message */
-    size_t rlen; int status;
-    char *resp = run_capture(cmd, &rlen, &status);
+    size_t rlen; int status; long http; int attempts;
+    char *resp = ai_run_with_retry(cmd, &rlen, &status, &http, &attempts);
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
-    return ai_parse_response(I, resp, status, o.want_json);
+    return ai_parse_response(I, resp, status, http, attempts, o.want_json);
 }
 
 /* One model call returning a parsed JSON value (want_json forced). */
@@ -4087,10 +4199,10 @@ static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key
     char body_tmpl[32], cfg_tmpl[32];
     char *cmd = ai_build_request(I, prompt, o, key, body_tmpl, cfg_tmpl);
     if (!cmd) raise_error(I);
-    size_t rlen; int status;
-    char *resp = run_capture(cmd, &rlen, &status);
+    size_t rlen; int status; long http; int attempts;
+    char *resp = ai_run_with_retry(cmd, &rlen, &status, &http, &attempts);
     free(cmd); unlink(body_tmpl); unlink(cfg_tmpl);
-    return ai_parse_response(I, resp, status, true);
+    return ai_parse_response(I, resp, status, http, attempts, true);
 }
 /* ai_json(prompt, schema [, opts]), structured output: ask the model for JSON that
    matches `schema`, parse it, validate against the schema, and retry ONCE with the
@@ -4243,10 +4355,16 @@ static Value nat_args(Interp *I, int argc, Value *argv) {
  * only run a subprocess (popen) and malloc, they never touch the Loqi heap or
  * the VM, so the single-threaded GC stays safe. The blocking I/O (curl, tools)
  * is what overlaps, which is exactly the win for fanning out AI/HTTP calls. */
-typedef struct { const char *cmd; char *out; size_t len; int status; } RunJob;
+typedef struct {
+    const char *cmd; char *out; size_t len; int status;
+    bool ai_retry; long http; int attempts; /* ai jobs retry transient failures */
+} RunJob;
 static void *run_one_job(void *arg) {
     RunJob *j = (RunJob *)arg;
-    j->out = run_capture(j->cmd, &j->len, &j->status);
+    if (j->ai_retry)
+        j->out = ai_run_with_retry(j->cmd, &j->len, &j->status, &j->http, &j->attempts);
+    else
+        j->out = run_capture(j->cmd, &j->len, &j->status);
     return NULL;
 }
 #define MAX_PARALLEL 32
@@ -4278,6 +4396,7 @@ static Value nat_run_all(Interp *I, int argc, Value *argv) {
     for (int i = 0; i < n; i++) {
         jobs[i].cmd = AS_STRING(cmds->items[i])->chars;
         jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
+        jobs[i].ai_retry = false; jobs[i].http = 0; jobs[i].attempts = 1;
     }
     run_jobs_parallel(jobs, n);
     /* back on the single Loqi thread, allocating Loqi objects is safe again */
@@ -4322,6 +4441,7 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
             raise_error(I);
         }
         jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
+        jobs[i].ai_retry = true; jobs[i].http = 0; jobs[i].attempts = 1;
     }
     run_jobs_parallel(jobs, n);
     for (int i = 0; i < n; i++) { unlink(body_tmpls[i]); unlink(cfg_tmpls[i]); free((char *)jobs[i].cmd); }
@@ -4329,7 +4449,7 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
 
     ObjList *out = new_list(I);
     for (int i = 0; i < n; i++)
-        list_push(out, ai_parse_response(I, jobs[i].out, jobs[i].status, o.want_json));
+        list_push(out, ai_parse_response(I, jobs[i].out, jobs[i].status, jobs[i].http, jobs[i].attempts, o.want_json));
     free(jobs);
     return obj_val((Obj *)out);
 }

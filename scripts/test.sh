@@ -55,6 +55,24 @@ else
   fail=$((fail+1))
 fi
 
+# ai() retry/backoff: point the endpoint at a closed local port so the connection
+# fails (a transient error). With a dummy key, a tiny backoff and 2 retries, ai()
+# must try exactly 3 times (1 + 2), then fail cleanly and fast, never hang. This
+# exercises the retry loop fully offline.
+retry_out="$(ANTHROPIC_API_KEY=dummy-key \
+  LOQI_AI_BASE_URL='http://127.0.0.1:1/v1/messages' \
+  LOQI_AI_MAX_RETRIES=2 LOQI_AI_RETRY_BASE_MS=1 \
+  "$LOQI" tests/fixtures/ai_retry.lq 2>&1)"
+rc=$?
+if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ] && printf '%s' "$retry_out" | grep -q "after 3 attempts"; then
+  echo "  ✓ (ai-retry) a transient failure is retried the configured number of times"
+  pass=$((pass+1))
+else
+  echo "  ✗ (ai-retry) expected a bounded retry failure (exit 64-127, 'after 3 attempts'), exit=$rc:"
+  printf '%s\n' "$retry_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

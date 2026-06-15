@@ -35,7 +35,8 @@ print(summary)
 > **Status: v0.2, small but real, and it does what it says.** A **bytecode VM** with a
 > precise **garbage collector**; the **AI-native layer**, `ai` (options + structured
 > JSON), **`ai_json(prompt, schema)`** (schema-validated output with auto-retry),
-> **parallel model calls** (`ai_all`/`run_all`), **vector search / RAG** (`similarity`,
+> **parallel model calls** (`ai_all`/`run_all`), **automatic retry/backoff** on rate
+> limits (429) and transient errors, **vector search / RAG** (`similarity`,
 > `topk`, `normalize`), `json`, `http`; a **linear-time, ReDoS-proof `regex`** engine; a
 > modern surface, **arrow functions** (`x => x*2`), **`if`/`match` expressions**,
 > null-safety (`?.`/`??`), ranges, the pipe `|>`; **modules**, **`try`/`catch`** with
@@ -231,8 +232,9 @@ let p = ai_json("Extract the person from: {text}", schema)
 print(p.name, p.birth_year)                        # Ada Lovelace 1815
 ```
 
-No SDK, no client object, no fence-stripping, no manual validation, no retry loop,
-and the result is **guaranteed** to match the schema or it raises. Same story for
+No SDK, no client object, no fence-stripping, no manual validation, no retry loop
+(rate limits and transient 5xx are retried with backoff for you), and the result is
+**guaranteed** to match the schema or it raises. Same story for
 fetching (`http.get`), parsing (`json.parse`), parallel calls (`ai_all`), and
 semantic search (`topk`): in Python each is a dependency and some glue; in Loqi each
 is one built-in.
