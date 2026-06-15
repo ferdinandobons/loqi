@@ -1851,8 +1851,10 @@ static void named_set(Compiler *C, const char *name, int line) {
         if (C->upvalues[up].is_const) const_reassign_error(C, name);
         emit_byte(C, OP_SET_UPVALUE, line); emit_byte(C, (uint8_t)up, line); return;
     }
-    if (C->const_globals && table_get(C->const_globals, name, hash_string(name, (size_t)len)))
-        const_reassign_error(C, name);
+    if (C->const_globals) {
+        Value *cv = table_get(C->const_globals, name, hash_string(name, (size_t)len));
+        if (cv && is_truthy(*cv)) const_reassign_error(C, name);
+    }
     emit_byte(C, OP_SET_GLOBAL, line); emit_u16(C, name_const(C, name), line);
 }
 
@@ -2220,8 +2222,13 @@ static void compile_stmt(Compiler *C, Node *n) {
             bool is_const = (n->op == T_CONST);
             if (n->a) compile_expr(C, n->a); else emit_byte(C, OP_NIL, n->line);
             if (C->scope_depth == 0) {
-                if (is_const && C->const_globals)
-                    table_set(C->const_globals, n->name, hash_string(n->name, strlen(n->name)), NIL_VAL);
+                /* Record const-ness keyed by name. A later non-const `let` of the
+                   same module global must clear an earlier `const` marking, else a
+                   legitimately mutable redeclaration is wrongly rejected. Storing
+                   the flag as the value (rather than deleting the key) keeps the
+                   shared Table's open-addressing probe invariant intact. */
+                if (C->const_globals)
+                    table_set(C->const_globals, n->name, hash_string(n->name, strlen(n->name)), bool_val(is_const));
                 emit_byte(C, OP_DEFINE_GLOBAL, n->line); emit_u16(C, name_const(C, n->name), n->line);
             } else {
                 add_local(C, n->name, (int)strlen(n->name));

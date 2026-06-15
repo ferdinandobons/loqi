@@ -29,4 +29,12 @@ fn shadow() {
 }
 assert(shadow() == 3 and x == 1, "an inner let shadows an outer const without touching it")
 
+# redeclaring a module global with `let` after a `const` clears the const marking,
+# so the fresh binding is mutable again (matches plain let/let redeclaration, which
+# is always valid). Regression: const-then-let was once over-rejected at assignment.
+const cfg = 1
+let cfg = 2
+cfg = 3
+assert(cfg == 3, "a let-redeclaration after a const is mutable again")
+
 print("test_const: all tests passed ✓")
