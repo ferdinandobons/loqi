@@ -261,3 +261,29 @@ Read and write whole files.
 write("note.txt", "hi from Loqi\n")
 print(read("note.txt"))
 ```
+
+## Filesystem
+| Function | Result |
+|----------|--------|
+| `ls(dir)` | list of entry names in `dir` (excludes `.` and `..`) |
+| `exists(path)` | `true` if the path exists |
+| `is_dir(path)` | `true` if the path is a directory |
+| `mkdir(path)` | create the directory and any missing parents (`mkdir -p`) |
+| `rm(path)` | remove a file or empty directory |
+
+## `path` — path manipulation
+| Function | Result |
+|----------|--------|
+| `path.join(a, b, ...)` | join with `/` (an absolute part resets, empties are skipped) |
+| `path.dirname(p)` | everything before the last `/` (`.` if none) |
+| `path.basename(p)` | the final component |
+| `path.ext(p)` | file extension incl. the dot (`""` if none) |
+
+```loqi
+let dir = "data/2026"
+mkdir(dir)
+write(path.join(dir, "log.txt"), "started\n")
+for name in ls(dir) {
+  if path.ext(name) == ".txt" { print(read(path.join(dir, name))) }
+}
+```

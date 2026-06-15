@@ -1,0 +1,36 @@
+# Path manipulation (pure string ops, deterministic).
+assert(path.join("a", "b", "c") == "a/b/c", "join")
+assert(path.join("a/", "b") == "a/b", "join handles trailing slash")
+assert(path.join("a", "/abs", "b") == "/abs/b", "join: an absolute part resets")
+assert(path.join("", "b") == "b", "join skips empty parts")
+assert(path.dirname("a/b/c.txt") == "a/b", "dirname")
+assert(path.dirname("file.txt") == ".", "dirname with no slash")
+assert(path.basename("a/b/c.txt") == "c.txt", "basename")
+assert(path.basename("file.txt") == "file.txt", "basename with no slash")
+assert(path.ext("a/b/c.txt") == ".txt", "ext")
+assert(path.ext("noext") == "", "ext: none")
+assert(path.ext("a/.hidden") == "", "ext: leading-dot hidden file")
+
+# Filesystem round-trip in a temp directory.
+let dir = "/tmp/loqi_fs_test_dir"
+# pre-clean any leftovers from a previous crashed run
+try { rm(path.join(dir, "hello.txt")) } catch e { }
+try { rm(path.join(dir, "sub")) } catch e { }
+try { rm(dir) } catch e { }
+
+mkdir(path.join(dir, "sub"))                       # mkdir -p: makes dir and dir/sub
+assert(exists(dir) and is_dir(dir), "mkdir + exists + is_dir")
+write(path.join(dir, "hello.txt"), "hi there")
+assert(exists(path.join(dir, "hello.txt")), "write then exists")
+assert(read(path.join(dir, "hello.txt")) == "hi there", "read back what was written")
+assert(not is_dir(path.join(dir, "hello.txt")), "a file is not a directory")
+let names = sort(ls(dir))
+assert(contains(names, "hello.txt") and contains(names, "sub"), "ls lists entries")
+
+# cleanup
+rm(path.join(dir, "hello.txt"))
+rm(path.join(dir, "sub"))
+rm(dir)
+assert(not exists(dir), "rm removes files and dirs")
+
+print("test_fs: all tests passed ✓")

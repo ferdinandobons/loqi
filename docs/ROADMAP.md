@@ -34,6 +34,7 @@ imply for the next step.
 | Core | garbage collector (mark-sweep) | ✅ done |
 | Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
 | Diagnostics | backtrace on uncaught errors | ✅ done |
+| Stdlib | filesystem (ls/exists/mkdir/rm) + `path` ops | ✅ done |
 | Diagnostics | source-line snippet + caret (needs column tracking) | 🔜 next |
 | Core | module cache (single-evaluation) | 📋 planned |
 | Tooling | `loqi fmt`, `loqi test`, LSP | 📋 planned |

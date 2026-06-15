@@ -27,6 +27,7 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
 
 /* ===========================================================================
  * Forward declarations
@@ -3176,6 +3177,105 @@ static Value nat_write(Interp *I, int argc, Value *argv) {
     fclose(f);
     return NIL_VAL;
 }
+/* ---- filesystem (these are pure C / OS calls: no VM re-entry, no GC rooting) ---- */
+static Value nat_ls(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "ls() requires a path (str)");
+    const char *path = AS_STRING(argv[0])->chars;
+    DIR *d = opendir(path);
+    if (!d) runtime_error(I, 0, "ls(): could not open directory '%s'", path);
+    ObjList *out = new_list(I);
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        list_push(out, cstring_val(I, e->d_name));
+    }
+    closedir(d);
+    return obj_val((Obj *)out);
+}
+static Value nat_exists(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "exists() requires a path (str)");
+    struct stat st;
+    return bool_val(stat(AS_STRING(argv[0])->chars, &st) == 0);
+}
+static Value nat_is_dir(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "is_dir() requires a path (str)");
+    struct stat st;
+    return bool_val(stat(AS_STRING(argv[0])->chars, &st) == 0 && S_ISDIR(st.st_mode));
+}
+static Value nat_mkdir(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "mkdir() requires a path (str)");
+    ObjString *s = AS_STRING(argv[0]);
+    char *tmp = xmalloc((size_t)s->length + 1);
+    memcpy(tmp, s->chars, (size_t)s->length); tmp[s->length] = '\0';
+    /* create intermediate directories, like `mkdir -p` */
+    for (int i = 1; i < s->length; i++) {
+        if (tmp[i] == '/') {
+            tmp[i] = '\0';
+            if (mkdir(tmp, 0777) != 0 && errno != EEXIST) { free(tmp); runtime_error(I, 0, "mkdir(): could not create '%s'", AS_STRING(argv[0])->chars); }
+            tmp[i] = '/';
+        }
+    }
+    if (mkdir(tmp, 0777) != 0 && errno != EEXIST) { free(tmp); runtime_error(I, 0, "mkdir(): could not create '%s'", AS_STRING(argv[0])->chars); }
+    free(tmp);
+    return NIL_VAL;
+}
+static Value nat_rm(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "rm() requires a path (str)");
+    const char *path = AS_STRING(argv[0])->chars;
+    if (remove(path) != 0) runtime_error(I, 0, "rm(): could not remove '%s'", path);
+    return NIL_VAL;
+}
+/* ---- path manipulation (string-only, length-aware) ---- */
+static Value nat_path_join(Interp *I, int argc, Value *argv) {
+    char *buf = xmalloc(16); size_t len = 0, cap = 16; buf[0] = '\0';
+    for (int i = 0; i < argc; i++) {
+        if (!IS_STRING(argv[i])) { free(buf); runtime_error(I, 0, "path.join() requires string components"); }
+        ObjString *s = AS_STRING(argv[i]);
+        if (s->length == 0) continue;
+        if (s->chars[0] == '/') { len = 0; buf[0] = '\0'; } /* an absolute part resets */
+        else if (len > 0 && buf[len - 1] != '/') append_str(&buf, &len, &cap, "/", 1);
+        append_str(&buf, &len, &cap, s->chars, (size_t)s->length);
+    }
+    Value v = string_val(I, buf, (int)len);
+    free(buf);
+    return v;
+}
+static int last_slash(ObjString *s) { /* index of the last '/', or -1 */
+    int slash = -1;
+    for (int i = 0; i < s->length; i++) if (s->chars[i] == '/') slash = i;
+    return slash;
+}
+static Value nat_path_dirname(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "path.dirname() requires a path (str)");
+    ObjString *s = AS_STRING(argv[0]);
+    int slash = last_slash(s);
+    if (slash < 0) return cstring_val(I, ".");
+    if (slash == 0) return cstring_val(I, "/");
+    return string_val(I, s->chars, slash);
+}
+static Value nat_path_basename(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "path.basename() requires a path (str)");
+    ObjString *s = AS_STRING(argv[0]);
+    int start = last_slash(s) + 1;
+    return string_val(I, s->chars + start, s->length - start);
+}
+static Value nat_path_ext(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_STRING(argv[0])) runtime_error(I, 0, "path.ext() requires a path (str)");
+    ObjString *s = AS_STRING(argv[0]);
+    int start = last_slash(s) + 1; /* start of the basename */
+    int dot = -1;
+    for (int i = start; i < s->length; i++) if (s->chars[i] == '.') dot = i;
+    if (dot <= start) return cstring_val(I, ""); /* no dot, or a leading-dot hidden file */
+    return string_val(I, s->chars + dot, s->length - dot); /* includes the dot */
+}
 static Value nat_similarity(Interp *I, int argc, Value *argv) {
     if (!IS_LIST(argv[0]) || !IS_LIST(argv[1]))
         runtime_error(I, 0, "similarity() requires two vectors (list of numbers)");
@@ -3740,6 +3840,12 @@ static void install_stdlib(Interp *I) {
     define_native(I, "read", nat_read, 1);
     define_native(I, "write", nat_write, 2);
     define_native(I, "similarity", nat_similarity, 2);
+    /* filesystem */
+    define_native(I, "ls", nat_ls, 1);
+    define_native(I, "exists", nat_exists, 1);
+    define_native(I, "is_dir", nat_is_dir, 1);
+    define_native(I, "mkdir", nat_mkdir, 1);
+    define_native(I, "rm", nat_rm, 1);
 
     ObjMap *json = new_map(I);
     define_native_in(I, json, "parse", nat_json_parse, 1);
@@ -3750,6 +3856,13 @@ static void install_stdlib(Interp *I) {
     define_native_in(I, http, "get", nat_http_get, 1);
     define_native_in(I, http, "post", nat_http_post, -1);
     table_set(I->globals, "http", hash_string("http", 4), obj_val((Obj *)http));
+
+    ObjMap *path = new_map(I);
+    define_native_in(I, path, "join", nat_path_join, -1);
+    define_native_in(I, path, "dirname", nat_path_dirname, 1);
+    define_native_in(I, path, "basename", nat_path_basename, 1);
+    define_native_in(I, path, "ext", nat_path_ext, 1);
+    table_set(I->globals, "path", hash_string("path", 4), obj_val((Obj *)path));
 }
 
 /* ===========================================================================
