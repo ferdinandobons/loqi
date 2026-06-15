@@ -1,0 +1,2 @@
+# A dangling quantifier (nothing to repeat) is a clean catchable error.
+regex.test("a**", "x")

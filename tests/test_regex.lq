@@ -26,9 +26,22 @@ assert(regex.replace(`\d+`, "a1b22c333", "#") == "a#b#c#", "replace digit runs")
 assert(regex.replace(`\s+`, "a   b  c", "_") == "a_b_c", "collapse whitespace")
 assert(regex.replace(`cat`, "cat and dog", "feline") == "feline and dog", "replace literal word")
 
-# --- split ---
+# --- split (boundaries on every match; empty matches included, like Python re.split) ---
 assert(regex.split(`,\s*`, "a, b,c,  d") == ["a", "b", "c", "d"], "split on comma+spaces")
 assert(regex.split(`\d+`, "x10y20z") == ["x", "y", "z"], "split on number separators")
+assert(regex.split(``, "ab") == ["", "a", "b", ""], "split on empty pattern (zero-width boundaries)")
+assert(regex.split(`a*`, "xay") == ["", "x", "", "y", ""], "split with empty + non-empty matches")
+assert(regex.split(`,`, "a,b,c") == ["a", "b", "c"], "split on a literal delimiter")
+
+# --- a quantifier with nothing to repeat is rejected (like Python) ---
+fn rejects(pat) {
+  let bad = false
+  try { regex.test(pat, "x") } catch e { bad = true }
+  return bad
+}
+assert(rejects("*") and rejects("+") and rejects("?"), "a leading quantifier is an error")
+assert(rejects("a**") and rejects("(*)") and rejects("a|*"), "a dangling/doubled quantifier is an error")
+assert(rejects("^*") and rejects("a$?"), "an anchor cannot be quantified")
 
 # --- groups, alternation, anchors together ---
 assert(regex.test(`(cat|dog)s?`, "I have dogs"), "grouped alternation + optional")

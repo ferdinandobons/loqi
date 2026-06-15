@@ -3056,18 +3056,23 @@ static ReNode *re_atom(ReP *rp) {
         if (single >= 0) rx_class_add(&n->cls, single);
         return n;
     }
+    if (c == '*' || c == '+' || c == '?') { /* a quantifier with nothing to repeat */
+        rp->err = true; rp->p++; return re_new(RE_EMPTY);
+    }
     rp->p++;
     ReNode *n = re_new(RE_CHAR); rx_class_add(&n->cls, (unsigned char)c); return n;
 }
 
 static ReNode *re_rep(ReP *rp) {
     ReNode *n = re_atom(rp);
-    while (rp->p < rp->end) {
-        char c = *rp->p;
-        if (c == '*') { rp->p++; ReNode *s = re_new(RE_STAR);  s->a = n; n = s; }
-        else if (c == '+') { rp->p++; ReNode *s = re_new(RE_PLUS);  s->a = n; n = s; }
-        else if (c == '?') { rp->p++; ReNode *s = re_new(RE_QUEST); s->a = n; n = s; }
-        else break;
+    if (rp->p < rp->end && (*rp->p == '*' || *rp->p == '+' || *rp->p == '?')) {
+        if (n->type == RE_BOL || n->type == RE_EOL) rp->err = true; /* can't repeat an anchor */
+        char c = *rp->p++;
+        ReNode *s = re_new(c == '*' ? RE_STAR : c == '+' ? RE_PLUS : RE_QUEST);
+        s->a = n; n = s;
+        /* a second quantifier has nothing to apply to (Python: "multiple repeat");
+           also rejects lazy '*?' etc., which this engine does not support */
+        if (rp->p < rp->end && (*rp->p == '*' || *rp->p == '+' || *rp->p == '?')) rp->err = true;
     }
     return n;
 }
@@ -4282,17 +4287,18 @@ static Value nat_regex_split(Interp *I, int argc, Value *argv) {
     RxProg prog; rx_compile_or_raise(I, argv[0], "regex.split()", &prog);
     ObjString *text = AS_STRING(argv[1]);
     ObjList *out = new_list(I);
-    int from = 0, ms, me, piece = 0;
+    /* Split at every match boundary, zero-width matches included (consistent with
+       find_all/replace and with Python re.split): a match at [ms,me) emits the field
+       text[last..ms]; `last` then jumps to me. A zero-width match advances the search
+       by one byte (so it can't loop) but leaves `last` at the position, so the byte
+       there lands in the next field — no character is dropped. */
+    int from = 0, ms, me, last = 0;
     while (from <= text->length && rx_search(&prog, text->chars, text->length, from, &ms, &me)) {
-        if (me == ms) { /* empty match: skip past one char so split terminates */
-            if (ms >= text->length) break;
-            from = ms + 1;
-            continue;
-        }
-        list_push(out, string_val(I, text->chars + piece, ms - piece));
-        from = me; piece = me;
+        list_push(out, string_val(I, text->chars + last, ms - last));
+        last = me;
+        from = (me == ms) ? me + 1 : me;
     }
-    list_push(out, string_val(I, text->chars + piece, text->length - piece));
+    list_push(out, string_val(I, text->chars + last, text->length - last));
     rx_free(&prog);
     return obj_val((Obj *)out);
 }
