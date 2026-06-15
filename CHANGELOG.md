@@ -86,9 +86,12 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
   and `|>` pipelines just work. (Fixes the stale "trailing `\`" claim in the docs.)
 
 ### Added, diagnostics
-- **Syntax-error carets.** A parse error now reports `file:line:column`, prints the
+- **Carets on every error.** A parse error reports `file:line:column`, prints the
   offending source line, and underlines the exact spot with a `^` caret (Rust/Elm
-  style). Runtime errors already carry the source line + a full backtrace.
+  style). **Runtime errors now carry the same caret** under the faulting
+  subexpression (e.g. the `[` of an out-of-bounds index, the `/` of a divide-by-zero),
+  via per-op source-column tracking in the bytecode, on top of the existing source
+  line + full backtrace.
 
 ### Fixed
 - A `let` redeclaration of a module global after a `const` of the same name is now

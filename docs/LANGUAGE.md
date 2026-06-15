@@ -299,20 +299,22 @@ try { risky() } catch { print("handled") }
 `return` works from inside a `try`. (Avoid `break`/`continue` that jump out of a
 `try` block before it finishes, that edge case isn't supported yet.)
 
-An **uncaught** error prints the message, the offending source line, and a
-backtrace of the call stack, so you see exactly where it came from:
+An **uncaught** error prints the message, the offending source line with a `^` caret
+under the faulting subexpression, and a backtrace of the call stack, so you see
+exactly where it came from:
 
 ```
 runtime error [app.lq:4]: index 3 out of bounds (len 0)
   4 |   return items[3]
+              ^
   at deepest (app.lq:4)
   at middle (app.lq:6)
   at outer (app.lq:7)
   at <script> (app.lq:8)
 ```
 
-A **syntax** error pinpoints the exact column: it reports `file:line:column`, prints
-the offending line, and underlines the spot with a `^` caret (Rust/Elm style):
+A **syntax** error likewise pinpoints the exact column: it reports `file:line:column`,
+prints the offending line, and underlines the spot with a `^` caret (Rust/Elm style):
 
 ```
 syntax error [app.lq:1:14] at ')': expected an expression

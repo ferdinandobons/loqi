@@ -105,6 +105,7 @@ typedef struct { Table *table; uint32_t version; Value *slot; } GCache;
 typedef struct Chunk {
     uint8_t *code;
     int *lines;
+    int *cols;          /* 1-based source column per op, parallel to lines (for carets) */
     int count;
     int cap;
     Value *constants;
@@ -359,6 +360,7 @@ typedef struct {
     const char *start;
     int length;
     int line;
+    int col;       /* 1-based column of `start` within its line (for caret diagnostics) */
     /* pre-decoded payloads */
     int64_t int_val;
     double float_val;
@@ -388,9 +390,16 @@ static bool match_ch(Lexer *L, char c) {
     L->cur++; return true;
 }
 
+/* 1-based column of `at` within its line in `src` (scan back to the line start). */
+static int lex_col_of(const char *src, const char *at) {
+    const char *ls = at;
+    while (ls > src && ls[-1] != '\n') ls--;
+    return (int)(at - ls) + 1;
+}
 static Token make_token(Lexer *L, TokType t) {
     Token tok; tok.type = t; tok.start = L->start;
     tok.length = (int)(L->cur - L->start); tok.line = L->line;
+    tok.col = lex_col_of(L->src, L->start);
     tok.str_val = NULL; tok.int_val = 0; tok.float_val = 0;
     return tok;
 }
@@ -401,6 +410,7 @@ static Token error_token(Lexer *L, const char *msg) {
        unterminated literal points at where it began, not where scanning stopped. */
     Token tok; tok.type = T_ERROR; tok.start = L->start;
     tok.length = (int)(L->cur - L->start); tok.line = L->line;
+    tok.col = lex_col_of(L->src, L->start);
     tok.str_val = (char *)msg; tok.int_val = 0; tok.float_val = 0;
     return tok;
 }
@@ -702,6 +712,7 @@ typedef enum {
 struct Node {
     NodeType type;
     int line;
+    int col;              /* 1-based source column, for runtime-error carets */
     Value literal;        /* N_INT/N_FLOAT/N_BOOL/N_STR */
     char *name;           /* identifier, member name, var name, fn name */
     TokType op;           /* operator for unary/binary/logical */
@@ -710,10 +721,10 @@ struct Node {
     Node **items2; int item2_count; /* map values */
 };
 
-static Node *new_node(NodeType t, int line) {
+static Node *new_node(NodeType t, int line, int col) {
     Node *n = xmalloc(sizeof(Node));
     memset(n, 0, sizeof(Node));
-    n->type = t; n->line = line;
+    n->type = t; n->line = line; n->col = col;
     n->literal = NIL_VAL;
     return n;
 }
@@ -916,31 +927,31 @@ static Node *parse_primary(Parser *P) {
        caught earlier by parse_statement and compiled in statement (no-value) form. */
     if (p_match(P, T_IF))    return parse_if(P, true);
     if (p_match(P, T_MATCH)) return parse_match(P);
-    if (p_match(P, T_NIL))   { Node *n = new_node(N_NIL, P->prev.line); return n; }
-    if (p_match(P, T_TRUE))  { Node *n = new_node(N_BOOL, P->prev.line); n->literal = bool_val(true); return n; }
-    if (p_match(P, T_FALSE)) { Node *n = new_node(N_BOOL, P->prev.line); n->literal = bool_val(false); return n; }
-    if (p_match(P, T_INT))   { Node *n = new_node(N_INT, P->prev.line); n->literal = int_val(P->prev.int_val); return n; }
-    if (p_match(P, T_FLOAT)) { Node *n = new_node(N_FLOAT, P->prev.line); n->literal = float_val(P->prev.float_val); return n; }
+    if (p_match(P, T_NIL))   { Node *n = new_node(N_NIL, P->prev.line, P->prev.col); return n; }
+    if (p_match(P, T_TRUE))  { Node *n = new_node(N_BOOL, P->prev.line, P->prev.col); n->literal = bool_val(true); return n; }
+    if (p_match(P, T_FALSE)) { Node *n = new_node(N_BOOL, P->prev.line, P->prev.col); n->literal = bool_val(false); return n; }
+    if (p_match(P, T_INT))   { Node *n = new_node(N_INT, P->prev.line, P->prev.col); n->literal = int_val(P->prev.int_val); return n; }
+    if (p_match(P, T_FLOAT)) { Node *n = new_node(N_FLOAT, P->prev.line, P->prev.col); n->literal = float_val(P->prev.float_val); return n; }
     if (p_match(P, T_STRING)) { return parse_string_literal(P, &P->prev); }
     if (p_match(P, T_RAWSTRING)) {
-        Node *n = new_node(N_STR, P->prev.line);
+        Node *n = new_node(N_STR, P->prev.line, P->prev.col);
         n->literal = cstring_val(P->I, P->prev.str_val ? P->prev.str_val : "");
         free(P->prev.str_val); P->prev.str_val = NULL; /* copied into the arena literal */
         return n;
     }
     if (p_match(P, T_IDENT)) {
-        Node *n = new_node(N_IDENT, P->prev.line);
+        Node *n = new_node(N_IDENT, P->prev.line, P->prev.col);
         n->name = copy_lexeme(&P->prev);
         return n;
     }
     if (p_match(P, T_LPAREN)) {
-        int line = P->prev.line;
+        int line = P->prev.line; int col = P->prev.col;
         /* `()`, only meaningful as an empty arrow-function parameter list */
-        if (p_check(P, T_RPAREN)) { p_advance(P); return new_node(N_PARAMS, line); }
+        if (p_check(P, T_RPAREN)) { p_advance(P); return new_node(N_PARAMS, line, col); }
         Node *first = parse_expression(P);
         if (p_check(P, T_COMMA)) {
             /* `(a, b, ...)`, a parameter group; only valid immediately before `=>` */
-            Node *g = new_node(N_PARAMS, line);
+            Node *g = new_node(N_PARAMS, line, col);
             node_add(&g->items, &g->item_count, first);
             while (p_match(P, T_COMMA)) {
                 skip_newlines(P);
@@ -954,7 +965,7 @@ static Node *parse_primary(Parser *P) {
         return first; /* ordinary grouped expression */
     }
     if (p_match(P, T_LBRACKET)) { /* list literal */
-        Node *n = new_node(N_LIST, P->prev.line);
+        Node *n = new_node(N_LIST, P->prev.line, P->prev.col);
         skip_newlines(P);
         if (!p_check(P, T_RBRACKET)) {
             do {
@@ -969,7 +980,7 @@ static Node *parse_primary(Parser *P) {
         return n;
     }
     if (p_match(P, T_LBRACE)) { /* map literal: { key: val, "str": val } */
-        Node *n = new_node(N_MAP, P->prev.line);
+        Node *n = new_node(N_MAP, P->prev.line, P->prev.col);
         skip_newlines(P);
         if (!p_check(P, T_RBRACE)) {
             do {
@@ -979,7 +990,7 @@ static Node *parse_primary(Parser *P) {
                 if (p_check(P, T_IDENT)) {
                     p_advance(P);
                     /* bare identifier key: treat as a string literal key */
-                    key = new_node(N_STR, P->prev.line);
+                    key = new_node(N_STR, P->prev.line, P->prev.col);
                     key->literal = string_val(P->I, P->prev.start, P->prev.length);
                 } else {
                     key = parse_expression(P);
@@ -997,13 +1008,13 @@ static Node *parse_primary(Parser *P) {
         return n;
     }
     if (p_match(P, T_FN)) { /* anonymous function expression */
-        Node *n = new_node(N_FN, P->prev.line);
+        Node *n = new_node(N_FN, P->prev.line, P->prev.col);
         p_consume(P, T_LPAREN, "expected '(' after 'fn'");
         if (!p_check(P, T_RPAREN)) {
             do {
                 if (p_check(P, T_RPAREN)) break; /* allow a trailing comma */
                 p_consume(P, T_IDENT, "expected parameter name");
-                Node *param = new_node(N_IDENT, P->prev.line);
+                Node *param = new_node(N_IDENT, P->prev.line, P->prev.col);
                 param->name = copy_lexeme(&P->prev);
                 node_add(&n->items, &n->item_count, param);
             } while (p_match(P, T_COMMA));
@@ -1014,7 +1025,7 @@ static Node *parse_primary(Parser *P) {
         return n;
     }
     parser_error_at(P, &P->cur, "expected an expression");
-    return new_node(N_NIL, P->cur.line);
+    return new_node(N_NIL, P->cur.line, P->cur.col);
 }
 
 /* postfix: call(), index[], member . */
@@ -1022,7 +1033,7 @@ static Node *parse_postfix(Parser *P) {
     Node *expr = parse_primary(P);
     for (;;) {
         if (p_match(P, T_LPAREN)) {
-            Node *call = new_node(N_CALL, P->prev.line);
+            Node *call = new_node(N_CALL, P->prev.line, P->prev.col);
             call->a = expr;
             skip_newlines(P);
             if (!p_check(P, T_RPAREN)) {
@@ -1037,20 +1048,20 @@ static Node *parse_postfix(Parser *P) {
             p_consume(P, T_RPAREN, "expected ')' after arguments");
             expr = call;
         } else if (p_match(P, T_LBRACKET)) {
-            Node *idx = new_node(N_INDEX, P->prev.line);
+            Node *idx = new_node(N_INDEX, P->prev.line, P->prev.col);
             idx->a = expr;
             idx->b = parse_expression(P);
             p_consume(P, T_RBRACKET, "expected ']'");
             expr = idx;
         } else if (p_match(P, T_DOT)) {
             p_consume(P, T_IDENT, "expected attribute name after '.'");
-            Node *mem = new_node(N_MEMBER, P->prev.line);
+            Node *mem = new_node(N_MEMBER, P->prev.line, P->prev.col);
             mem->a = expr;
             mem->name = copy_lexeme(&P->prev);
             expr = mem;
         } else if (p_match(P, T_QDOT)) {
             p_consume(P, T_IDENT, "expected attribute name after '?.'");
-            Node *mem = new_node(N_MEMBER, P->prev.line);
+            Node *mem = new_node(N_MEMBER, P->prev.line, P->prev.col);
             mem->a = expr;
             mem->name = copy_lexeme(&P->prev);
             mem->op = T_QDOT; /* optional chaining: nil if the object is nil */
@@ -1064,12 +1075,12 @@ static Node *parse_unary(Parser *P) {
     if (++P->depth > MAX_PARSE_DEPTH) {
         parser_error_at(P, &P->cur, "expression nesting too deep");
         P->depth--;
-        return new_node(N_NIL, P->cur.line);
+        return new_node(N_NIL, P->cur.line, P->cur.col);
     }
     Node *result;
     if (p_check(P, T_NOT) || p_check(P, T_MINUS)) {
         p_advance(P);
-        Node *n = new_node(N_UNARY, P->prev.line);
+        Node *n = new_node(N_UNARY, P->prev.line, P->prev.col);
         n->op = P->prev.type;
         n->a = parse_unary(P);
         result = n;
@@ -1115,7 +1126,7 @@ static Node *parse_binary(Parser *P, int min_prec) {
                 free(call->items);
                 call->items = ni; call->item_count++;
             } else {
-                call = new_node(N_CALL, P->prev.line); /* bare callee: f(x) */
+                call = new_node(N_CALL, P->prev.line, P->prev.col); /* bare callee: f(x) */
                 call->a = rhs;
                 node_add(&call->items, &call->item_count, left);
             }
@@ -1123,7 +1134,7 @@ static Node *parse_binary(Parser *P, int min_prec) {
             continue;
         }
         Node *right = parse_binary(P, prec + 1); /* left-assoc */
-        Node *n = new_node((op == T_AND || op == T_OR || op == T_QQ) ? N_LOGICAL : N_BINARY, P->prev.line);
+        Node *n = new_node((op == T_AND || op == T_OR || op == T_QQ) ? N_LOGICAL : N_BINARY, P->prev.line, P->prev.col);
         n->op = op; n->a = left; n->b = right;
         left = n;
     }
@@ -1134,7 +1145,7 @@ static Node *parse_binary(Parser *P, int min_prec) {
  * into an N_FN whose body is `{ return body }`. Right-associative so `a => b => …`
  * curries. `params` is reused in place when it is already an N_PARAMS group. */
 static Node *finish_arrow(Parser *P, Node *params) {
-    int line = P->cur.line;
+    int line = P->cur.line; int col = P->cur.col;
     p_advance(P); /* consume '=>' */
     /* Bound nesting: an arrow body is parsed by re-entering parse_expression, so a
        curried chain `a => b => ... => z` recurses finish_arrow once per level. The
@@ -1145,7 +1156,7 @@ static Node *finish_arrow(Parser *P, Node *params) {
         parser_error_at(P, &P->prev, "arrow functions nested too deeply");
         P->depth--;
         free_node(params);
-        return new_node(N_NIL, line);
+        return new_node(N_NIL, line, col);
     }
     Node *fn;
     if (params->type == N_PARAMS) {
@@ -1155,19 +1166,19 @@ static Node *finish_arrow(Parser *P, Node *params) {
         params->type = N_FN; /* items are already the parameter idents; freed via the returned fn */
         fn = params;
     } else if (params->type == N_IDENT) {
-        fn = new_node(N_FN, line);
+        fn = new_node(N_FN, line, col);
         node_add(&fn->items, &fn->item_count, params);
     } else {
         /* `params` (e.g. a grouped `(1 + 2)`) is not linked into the tree, so free it
            explicitly, free_node(prog) would never reach it otherwise. */
         parser_error_line(P, params->line, "invalid arrow-function parameters (expected a name or '(name, ...)')");
         free_node(params);
-        fn = new_node(N_FN, line);
+        fn = new_node(N_FN, line, col);
     }
     skip_newlines(P);
     Node *body = parse_expression(P); /* single-expression body; recursion enables currying */
-    Node *ret = new_node(N_RETURN, line); ret->a = body;
-    Node *block = new_node(N_BLOCK, line);
+    Node *ret = new_node(N_RETURN, line, col); ret->a = body;
+    Node *block = new_node(N_BLOCK, line, col);
     node_add(&block->items, &block->item_count, ret);
     fn->a = block;
     P->depth--;
@@ -1190,7 +1201,7 @@ static Node *parse_expression(Parser *P) {
         if (expr->type == N_MEMBER && expr->op == T_QDOT) {
             parser_error_at(P, &P->prev, "optional chaining '?.' is not allowed on an assignment target");
         }
-        Node *n = new_node(N_ASSIGN, P->prev.line);
+        Node *n = new_node(N_ASSIGN, P->prev.line, P->prev.col);
         n->a = expr; n->b = value;
         return n;
     }
@@ -1199,7 +1210,7 @@ static Node *parse_expression(Parser *P) {
 
 static Node *parse_block(Parser *P) {
     p_consume(P, T_LBRACE, "expected '{'");
-    Node *block = new_node(N_BLOCK, P->prev.line);
+    Node *block = new_node(N_BLOCK, P->prev.line, P->prev.col);
     skip_newlines(P);
     while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
         node_add(&block->items, &block->item_count, parse_statement(P));
@@ -1213,9 +1224,9 @@ static Node *parse_block(Parser *P) {
 }
 
 static Node *parse_let(Parser *P, bool is_const) {
-    int line = P->prev.line;
+    int line = P->prev.line; int col = P->prev.col;
     p_consume(P, T_IDENT, is_const ? "expected a name after 'const'" : "expected variable name after 'let'");
-    Node *n = new_node(N_LET, line);
+    Node *n = new_node(N_LET, line, col);
     n->name = copy_lexeme(&P->prev);
     if (is_const) n->op = T_CONST; /* mark an immutable binding */
     if (p_match(P, T_EQ)) n->a = parse_expression(P);
@@ -1228,16 +1239,16 @@ static Node *parse_let(Parser *P, bool is_const) {
 }
 
 static Node *parse_fn_decl(Parser *P) {
-    int line = P->prev.line;
+    int line = P->prev.line; int col = P->prev.col;
     p_consume(P, T_IDENT, "expected function name after 'fn'");
-    Node *n = new_node(N_FN, line);
+    Node *n = new_node(N_FN, line, col);
     n->name = copy_lexeme(&P->prev);
     p_consume(P, T_LPAREN, "expected '(' after the name");
     if (!p_check(P, T_RPAREN)) {
         do {
             if (p_check(P, T_RPAREN)) break; /* allow a trailing comma */
             p_consume(P, T_IDENT, "expected parameter name");
-            Node *param = new_node(N_IDENT, P->prev.line);
+            Node *param = new_node(N_IDENT, P->prev.line, P->prev.col);
             param->name = copy_lexeme(&P->prev);
             node_add(&n->items, &n->item_count, param);
         } while (p_match(P, T_COMMA));
@@ -1249,8 +1260,8 @@ static Node *parse_fn_decl(Parser *P) {
 }
 
 static Node *parse_if(Parser *P, bool as_expr) {
-    int line = P->prev.line;
-    Node *n = new_node(N_IF, line);
+    int line = P->prev.line; int col = P->prev.col;
+    Node *n = new_node(N_IF, line, col);
     n->a = parse_expression(P);          /* condition */
     skip_newlines(P);
     n->b = parse_block(P);               /* then */
@@ -1267,8 +1278,8 @@ static Node *parse_if(Parser *P, bool as_expr) {
 }
 
 static Node *parse_while(Parser *P) {
-    int line = P->prev.line;
-    Node *n = new_node(N_WHILE, line);
+    int line = P->prev.line; int col = P->prev.col;
+    Node *n = new_node(N_WHILE, line, col);
     n->a = parse_expression(P);
     skip_newlines(P);
     n->b = parse_block(P);
@@ -1276,8 +1287,8 @@ static Node *parse_while(Parser *P) {
 }
 
 static Node *parse_for(Parser *P) {
-    int line = P->prev.line;
-    Node *n = new_node(N_FOR, line);
+    int line = P->prev.line; int col = P->prev.col;
+    Node *n = new_node(N_FOR, line, col);
     p_consume(P, T_IDENT, "expected variable name in 'for'");
     n->name = copy_lexeme(&P->prev);
     p_consume(P, T_IN, "expected 'in' in for loop");
@@ -1289,8 +1300,8 @@ static Node *parse_for(Parser *P) {
 
 /* match subj { p1, p2: {..}  _: {..} } desugars to a let + if/else == chain. */
 static Node *parse_match(Parser *P) {
-    int line = P->prev.line;
-    Node *n = new_node(N_MATCH, line);
+    int line = P->prev.line; int col = P->prev.col;
+    Node *n = new_node(N_MATCH, line, col);
     n->a = parse_expression(P);          /* subject */
     skip_newlines(P);
     p_consume(P, T_LBRACE, "expected '{' after the match expression");
@@ -1298,10 +1309,10 @@ static Node *parse_match(Parser *P) {
     bool seen_default = false;
     skip_newlines(P);
     while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
-        int arm_line = P->cur.line;      /* diagnostics point at the arm, not 'match' */
+        int arm_line = P->cur.line; int arm_col = P->cur.col;      /* diagnostics point at the arm, not 'match' */
         Token arm_tok = P->cur;
         if (seen_default) { parser_error_at(P, &P->cur, "the default '_' arm must be last in a match"); break; }
-        Node *arm = new_node(N_MATCH_ARM, arm_line);
+        Node *arm = new_node(N_MATCH_ARM, arm_line, arm_col);
         bool is_default = false;
         for (;;) {
             if (p_check(P, T_IDENT) && P->cur.length == 1 && P->cur.start[0] == '_') {
@@ -1330,8 +1341,8 @@ static Node *parse_match(Parser *P) {
 
 /* try { ... } catch e { ... } */
 static Node *parse_try(Parser *P) {
-    int line = P->prev.line;
-    Node *n = new_node(N_TRY, line);
+    int line = P->prev.line; int col = P->prev.col;
+    Node *n = new_node(N_TRY, line, col);
     skip_newlines(P);
     n->a = parse_block(P);                    /* try body */
     skip_newlines(P);
@@ -1354,7 +1365,7 @@ static Node *parse_statement(Parser *P) {
     if (p_match(P, T_MATCH))  return parse_match(P);
     if (p_match(P, T_TRY))    return parse_try(P);
     if (p_match(P, T_LBRACE)) { /* bare block, '{' already consumed, build it here */
-        Node *block = new_node(N_BLOCK, P->prev.line);
+        Node *block = new_node(N_BLOCK, P->prev.line, P->prev.col);
         skip_newlines(P);
         while (!p_check(P, T_RBRACE) && !p_check(P, T_EOF)) {
             node_add(&block->items, &block->item_count, parse_statement(P));
@@ -1365,16 +1376,16 @@ static Node *parse_statement(Parser *P) {
         return block;
     }
     if (p_match(P, T_RETURN)) {
-        Node *n = new_node(N_RETURN, P->prev.line);
+        Node *n = new_node(N_RETURN, P->prev.line, P->prev.col);
         if (!p_check(P, T_NEWLINE) && !p_check(P, T_RBRACE) && !p_check(P, T_EOF))
             n->a = parse_expression(P);
         end_statement(P);
         return n;
     }
-    if (p_match(P, T_BREAK))    { Node *n = new_node(N_BREAK, P->prev.line); end_statement(P); return n; }
-    if (p_match(P, T_CONTINUE)) { Node *n = new_node(N_CONTINUE, P->prev.line); end_statement(P); return n; }
+    if (p_match(P, T_BREAK))    { Node *n = new_node(N_BREAK, P->prev.line, P->prev.col); end_statement(P); return n; }
+    if (p_match(P, T_CONTINUE)) { Node *n = new_node(N_CONTINUE, P->prev.line, P->prev.col); end_statement(P); return n; }
     if (p_match(P, T_IMPORT)) {
-        Node *n = new_node(N_IMPORT, P->prev.line);
+        Node *n = new_node(N_IMPORT, P->prev.line, P->prev.col);
         p_consume(P, T_STRING, "expected module path as a string");
         n->name = P->prev.str_val;
         /* optional: as <name>  (namespaced import) */
@@ -1387,14 +1398,14 @@ static Node *parse_statement(Parser *P) {
         return n;
     }
     /* expression statement */
-    Node *n = new_node(N_EXPRSTMT, P->cur.line);
+    Node *n = new_node(N_EXPRSTMT, P->cur.line, P->cur.col);
     n->a = parse_expression(P);
     end_statement(P);
     return n;
 }
 
 static Node *parse_program(Parser *P) {
-    Node *prog = new_node(N_PROGRAM, 1);
+    Node *prog = new_node(N_PROGRAM, 1, 1);
     skip_newlines(P);
     while (!p_check(P, T_EOF)) {
         node_add(&prog->items, &prog->item_count, parse_statement(P));
@@ -1425,7 +1436,7 @@ static Node *parse_expr_from_source(Interp *I, const char *src) {
  * either string literals or expressions. Markers \x01/\x02 are literal braces. */
 static Node *parse_string_literal(Parser *P, Token *strtok) {
     const char *s = strtok->str_val ? strtok->str_val : "";
-    int line = strtok->line;
+    int line = strtok->line; int col = strtok->col;
     Node *concat = NULL; /* build a chain of N_BINARY '+' */
 
     char *buf = xmalloc(64); size_t cap = 64, len = 0;
@@ -1437,11 +1448,11 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
         if (s[i] == '{') {
             /* flush current literal piece */
             buf[len] = '\0';
-            Node *lit = new_node(N_STR, line);
+            Node *lit = new_node(N_STR, line, col);
             lit->literal = string_val(P->I, buf, (int)len);
             len = 0;
             if (concat) {
-                Node *cb = new_node(N_BINARY, line);
+                Node *cb = new_node(N_BINARY, line, col);
                 cb->op = T_PLUS; cb->a = concat; cb->b = lit;
                 concat = cb;
             } else {
@@ -1471,11 +1482,11 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
             if (s[i] == '}') i++;
             Node *expr = parse_expr_from_source(P->I, ebuf);
             free(ebuf);
-            if (!expr) { parser_error_at(P, strtok, "invalid expression in interpolation"); expr = new_node(N_NIL, line); }
+            if (!expr) { parser_error_at(P, strtok, "invalid expression in interpolation"); expr = new_node(N_NIL, line, col); }
             /* concat is always string-typed here (starts as a string literal), so
              * '+' coerces the interpolated value via the VM's string concatenation.
              * No dependency on a (shadowable) global 'str'. */
-            Node *b = new_node(N_BINARY, line); b->op = T_PLUS; b->a = concat; b->b = expr;
+            Node *b = new_node(N_BINARY, line, col); b->op = T_PLUS; b->a = concat; b->b = expr;
             concat = b;
             any_interp = true;
         } else if ((unsigned char)s[i] == 0x01) {
@@ -1492,15 +1503,15 @@ static Node *parse_string_literal(Parser *P, Token *strtok) {
     /* trailing literal */
     buf[len] = '\0';
     if (!any_interp) {
-        Node *lit = new_node(N_STR, line);
+        Node *lit = new_node(N_STR, line, col);
         lit->literal = string_val(P->I, buf, (int)len);
         free(buf);
         return lit;
     }
     if (len > 0 || concat == NULL) {
-        Node *lit = new_node(N_STR, line);
+        Node *lit = new_node(N_STR, line, col);
         lit->literal = string_val(P->I, buf, (int)len);
-        if (concat) { Node *b = new_node(N_BINARY, line); b->op = T_PLUS; b->a = concat; b->b = lit; concat = b; }
+        if (concat) { Node *b = new_node(N_BINARY, line, col); b->op = T_PLUS; b->a = concat; b->b = lit; concat = b; }
         else concat = lit;
     }
     free(buf);
@@ -1773,13 +1784,14 @@ static GCache *chunk_gcache(Chunk *c) {
     }
     return c->gcache;
 }
-static void chunk_write(Chunk *c, uint8_t byte, int line) {
+static void chunk_write(Chunk *c, uint8_t byte, int line, int col) {
     if (c->count + 1 > c->cap) {
         c->cap = c->cap < 8 ? 8 : c->cap * 2;
         c->code = xrealloc(c->code, (size_t)c->cap);
         c->lines = xrealloc(c->lines, sizeof(int) * (size_t)c->cap);
+        c->cols = xrealloc(c->cols, sizeof(int) * (size_t)c->cap);
     }
-    c->code[c->count] = byte; c->lines[c->count] = line; c->count++;
+    c->code[c->count] = byte; c->lines[c->count] = line; c->cols[c->count] = col; c->count++;
 }
 static int chunk_add_const(Chunk *c, Value v) {
     if (c->const_count + 1 > c->const_cap) {
@@ -1847,6 +1859,7 @@ typedef struct Compiler {
     int try_depth; /* number of try handlers currently open in this function */
     int expr_depth; /* compile_expr recursion depth, to bound deep flat chains */
     int stmt_depth; /* compile_stmt recursion depth, to bound deep nested blocks/if */
+    int emit_col;   /* source column attributed to ops emitted now (for runtime carets) */
     Table *const_globals; /* names declared `const` at module scope (shared from the root) */
     bool *had_error; /* shared flag across nested compilers */
 } Compiler;
@@ -1881,7 +1894,7 @@ static void compile_match(Compiler *C, Node *n, bool as_value);
 static void compile_function(Compiler *enc, Node *fn_node, int line);
 
 static Chunk *cur_chunk(Compiler *C) { return &C->proto->chunk; }
-static void emit_byte(Compiler *C, uint8_t b, int line) { chunk_write(cur_chunk(C), b, line); }
+static void emit_byte(Compiler *C, uint8_t b, int line) { chunk_write(cur_chunk(C), b, line, C->emit_col); }
 static void emit_u16(Compiler *C, int v, int line) {
     emit_byte(C, (uint8_t)((v >> 8) & 0xff), line);
     emit_byte(C, (uint8_t)(v & 0xff), line);
@@ -1917,7 +1930,7 @@ static void emit_loop(Compiler *C, int loop_start, int line) {
 
 static void init_compiler(Compiler *C, Interp *I, Compiler *enclosing, const char *name, bool *had_error) {
     C->enclosing = enclosing; C->I = I; C->local_count = 0; C->scope_depth = 0;
-    C->loop = NULL; C->try_depth = 0; C->expr_depth = 0; C->stmt_depth = 0; C->had_error = had_error;
+    C->loop = NULL; C->try_depth = 0; C->expr_depth = 0; C->stmt_depth = 0; C->emit_col = 0; C->had_error = had_error;
     C->const_globals = enclosing ? enclosing->const_globals : NULL; /* root sets the real table */
     C->proto = new_proto(I);
     if (name) C->proto->name = xstrdup(name);
@@ -2034,6 +2047,7 @@ static void compile_expr(Compiler *C, Node *n) {
         C->expr_depth--;
         return;
     }
+    C->emit_col = n->col; /* ops emitted for this node carry its column (runtime carets) */
     switch (n->type) {
         case N_NIL: emit_byte(C, OP_NIL, n->line); break;
         case N_IF: compile_if_expr(C, n); break;       /* if as an expression -> branch value */
@@ -2361,6 +2375,7 @@ static void compile_stmt(Compiler *C, Node *n) {
         C->stmt_depth--;
         return;
     }
+    C->emit_col = n->col;
     switch (n->type) {
         case N_LET: {
             bool is_const = (n->op == T_CONST);
@@ -2592,15 +2607,31 @@ static const char *vm_current_path(Interp *I) {
     return I->path ? I->path : "?";
 }
 
-/* Copy source line `line` of `src` into buf as "  N | <text>" (empty if absent). */
-static void capture_source_line(char *buf, size_t bufsz, const char *src, int line) {
+/* Render source line `line` of `src` into buf as "  N | <text>", plus a second line
+   with a `^` caret under 1-based `col` (Rust/Elm style) when col is in range. Empty
+   if the line is absent. */
+static void capture_source_line(char *buf, size_t bufsz, const char *src, int line, int col) {
     buf[0] = '\0';
     if (!src || line <= 0) return;
     const char *p = src;
     for (int l = 1; l < line && *p; ) { if (*p++ == '\n') l++; }
     const char *end = p;
     while (*end && *end != '\n') end++;
-    snprintf(buf, bufsz, "  %d | %.*s", line, (int)(end - p), p);
+    int line_len = (int)(end - p);
+    char gutter[32];
+    int gw = snprintf(gutter, sizeof gutter, "  %d | ", line);
+    if (gw < 0) return;
+    int off = snprintf(buf, bufsz, "%s%.*s", gutter, line_len, p);
+    if (off < 0 || (size_t)off >= bufsz) return;
+    if (col >= 1 && col <= line_len + 1) { /* append an aligned caret line */
+        size_t o = (size_t)off;
+        if (o + 1 < bufsz) buf[o++] = '\n';
+        for (int i = 0; i < gw && o + 1 < bufsz; i++) buf[o++] = ' ';
+        for (int i = 0; i < col - 1 && i < line_len && o + 1 < bufsz; i++)
+            buf[o++] = (p[i] == '\t') ? '\t' : ' '; /* echo tabs so the caret aligns */
+        if (o + 1 < bufsz) buf[o++] = '^';
+        buf[o] = '\0';
+    }
 }
 
 /* Build a human-readable backtrace of the live call stack at error time, newest
@@ -2619,8 +2650,9 @@ static void build_backtrace(Interp *I) {
         Chunk *ch = &fr->closure->proto->chunk;
         int idx = (int)(fr->ip - ch->code) - 1;
         int line = (idx >= 0 && idx < ch->count) ? ch->lines[idx] : 0;
+        int col  = (idx >= 0 && idx < ch->count) ? ch->cols[idx]  : 0;
         if (i == vm->frame_count - 1) /* the innermost frame: where the error is */
-            capture_source_line(I->err_source, sizeof(I->err_source), fr->closure->proto->source, line);
+            capture_source_line(I->err_source, sizeof(I->err_source), fr->closure->proto->source, line, col);
         const char *name = (i == 0) ? "<script>"
                          : (fr->closure->proto->name ? fr->closure->proto->name : "<anonymous>");
         const char *fpath = fr->closure->proto->path ? fr->closure->proto->path
@@ -2872,7 +2904,7 @@ static void gc_free_obj(Obj *o) {
         }
         case OBJ_PROTO: {
             ObjProto *p = (ObjProto *)o;
-            free(p->chunk.code); free(p->chunk.lines); free(p->chunk.constants);
+            free(p->chunk.code); free(p->chunk.lines); free(p->chunk.cols); free(p->chunk.constants);
             free(p->chunk.gcache);
             free(p->name); /* module_globals is borrowed, not owned */
             break;

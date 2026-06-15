@@ -188,6 +188,22 @@ curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/quit" 2>/dev/null
 kill "$HTTP_SRV" 2>/dev/null
 wait "$HTTP_SRV" 2>/dev/null
 
+# Runtime-error caret: an uncaught runtime error prints the offending source line
+# and a ^ caret under the faulting subexpression (here the out-of-bounds index).
+rtcaret_out="$("$LOQI" tests/fixtures/runtime_caret.lq 2>&1)"
+rc=$?
+if [ "$rc" -ge 64 ] && [ "$rc" -lt 128 ] \
+   && printf '%s' "$rtcaret_out" | grep -q "index 9 out of bounds" \
+   && printf '%s' "$rtcaret_out" | grep -q "print(xs\[9\])" \
+   && printf '%s' "$rtcaret_out" | grep -q "\^"; then
+  echo "  ✓ (runtime-caret) a runtime error shows the source line + a ^ caret"
+  pass=$((pass+1))
+else
+  echo "  ✗ (runtime-caret) expected a runtime error with a ^ caret, exit=$rc:"
+  printf '%s\n' "$rtcaret_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

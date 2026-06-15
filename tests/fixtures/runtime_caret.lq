@@ -1,0 +1,5 @@
+# Driven by scripts/test.sh: an uncaught runtime error must print the offending
+# source line and a ^ caret under the exact column of the faulting subexpression.
+# The out-of-bounds index below faults at the `[` on column 14.
+let xs = [1, 2]
+print(xs[9])
