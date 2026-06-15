@@ -3829,12 +3829,18 @@ static Value json_parse_value(Interp *I, const char **p, int depth) {
         if (**p == '}') { (*p)++; return obj_val((Obj *)m); }
         for (;;) {
             json_skip_ws(p);
-            char *key = json_parse_string_raw(I, p);
+            char *raw = json_parse_string_raw(I, p);
+            /* Hold the key as a GC-managed string and free the raw buffer now: the
+               value parse below can raise (longjmp), and a raw malloc held across it
+               would leak. macOS ASan misses this, but LeakSanitizer (bundled into
+               ASan on Linux) catches it; the GC string is reclaimed at teardown. */
+            Value keyv = cstring_val(I, raw);
+            free(raw);
             json_skip_ws(p);
-            if (**p != ':') { free(key); runtime_error(I, 0, "json: expected ':'"); }
+            if (**p != ':') runtime_error(I, 0, "json: expected ':'");
             (*p)++;
             Value val = json_parse_value(I, p, depth + 1);
-            map_set(m, key, val); free(key);
+            map_set(m, AS_STRING(keyv)->chars, val);
             json_skip_ws(p);
             if (**p == ',') { (*p)++; continue; }
             if (**p == '}') { (*p)++; break; }
