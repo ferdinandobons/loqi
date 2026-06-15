@@ -26,8 +26,10 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <pthread.h>
 
 /* ===========================================================================
  * Forward declarations
@@ -3253,6 +3255,55 @@ static Value nat_args(Interp *I, int argc, Value *argv) {
     for (int i = 0; i < I->script_argc; i++) list_push(l, cstring_val(I, I->script_argv[i]));
     return obj_val((Obj *)l);
 }
+
+/* run_all(cmds) — run shell commands concurrently and collect { out, code } for
+ * each, in input order. This is Loqi's concurrency primitive: the worker threads
+ * only run a subprocess (popen) and malloc — they never touch the Loqi heap or
+ * the VM — so the single-threaded GC stays safe. The blocking I/O (curl, tools)
+ * is what overlaps, which is exactly the win for fanning out AI/HTTP calls. */
+typedef struct { const char *cmd; char *out; size_t len; int status; } RunJob;
+static void *run_one_job(void *arg) {
+    RunJob *j = (RunJob *)arg;
+    j->out = run_capture(j->cmd, &j->len, &j->status);
+    return NULL;
+}
+#define MAX_PARALLEL 32
+static Value nat_run_all(Interp *I, int argc, Value *argv) {
+    (void)argc;
+    if (!IS_LIST(argv[0])) runtime_error(I, 0, "run_all() requires a list of command strings");
+    ObjList *cmds = AS_LIST(argv[0]);
+    int n = cmds->count;
+    for (int i = 0; i < n; i++)
+        if (!IS_STRING(cmds->items[i])) runtime_error(I, 0, "run_all(): each command must be a str");
+    RunJob *jobs = (n > 0) ? xmalloc(sizeof(RunJob) * (size_t)n) : NULL;
+    for (int i = 0; i < n; i++) {
+        jobs[i].cmd = AS_STRING(cmds->items[i])->chars;
+        jobs[i].out = NULL; jobs[i].len = 0; jobs[i].status = -1;
+    }
+    /* run in waves so at most MAX_PARALLEL subprocesses are in flight at once */
+    pthread_t threads[MAX_PARALLEL];
+    bool started[MAX_PARALLEL];
+    for (int base = 0; base < n; base += MAX_PARALLEL) {
+        int cnt = n - base < MAX_PARALLEL ? n - base : MAX_PARALLEL;
+        for (int k = 0; k < cnt; k++)
+            started[k] = (pthread_create(&threads[k], NULL, run_one_job, &jobs[base + k]) == 0);
+        for (int k = 0; k < cnt; k++) {
+            if (started[k]) pthread_join(threads[k], NULL);
+            else run_one_job(&jobs[base + k]); /* thread spawn failed: run it synchronously */
+        }
+    }
+    /* back on the single Loqi thread — allocating Loqi objects is safe again */
+    ObjList *out = new_list(I);
+    for (int i = 0; i < n; i++) {
+        ObjMap *m = new_map(I);
+        map_set(m, "out", jobs[i].out ? string_val(I, jobs[i].out, (int)jobs[i].len) : cstring_val(I, ""));
+        map_set(m, "code", int_val(jobs[i].status));
+        list_push(out, obj_val((Obj *)m));
+        free(jobs[i].out);
+    }
+    free(jobs);
+    return obj_val((Obj *)out);
+}
 static Value nat_exit(Interp *I, int argc, Value *argv) {
     (void)I;
     int code = (argc >= 1 && IS_INT(argv[0])) ? (int)AS_INT(argv[0]) : 0;
@@ -3740,7 +3791,10 @@ static Value nat_chars(Interp *I, int argc, Value *argv) {
     return obj_val((Obj *)l);
 }
 static Value nat_now(Interp *I, int argc, Value *argv) {
-    return float_val((double)time(NULL));
+    (void)I; (void)argc; (void)argv;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return float_val((double)tv.tv_sec + (double)tv.tv_usec / 1e6); /* sub-second wall clock */
 }
 
 /* ---- higher-order: map / filter / reduce / each / find (need a VM callback) ---- */
@@ -4005,6 +4059,7 @@ static void install_stdlib(Interp *I) {
     define_native(I, "rm", nat_rm, 1);
     /* process / OS */
     define_native(I, "run", nat_run, 1);
+    define_native(I, "run_all", nat_run_all, 1);
     define_native(I, "args", nat_args, 0);
     define_native(I, "exit", nat_exit, -1);
 

@@ -1,0 +1,32 @@
+# run_all: run shell commands concurrently, results in input order.
+let r = run_all(["echo a", "echo b", "echo c"])
+assert(len(r) == 3, "result count matches input")
+assert(trim(r[0].out) == "a" and trim(r[1].out) == "b" and trim(r[2].out) == "c",
+       "outputs are in input order")
+
+# exit codes are captured per command
+let codes = run_all(["exit 0", "exit 4", "true", "false"])
+assert(codes[0].code == 0, "code 0")
+assert(codes[1].code == 4, "code 4")
+assert(codes[2].code == 0 and codes[3].code == 1, "true/false codes")
+
+# edge: empty input
+assert(run_all([]) == [], "empty list returns empty result")
+
+# more than MAX_PARALLEL (32) runs in waves, still ordered
+let many = []
+let i = 0
+while i < 40 { push(many, "echo n{i}"); i = i + 1 }
+let mr = run_all(many)
+assert(len(mr) == 40 and trim(mr[39].out) == "n39", "40 commands across waves, ordered")
+
+# parallelism: 8 x sleep 0.25 must finish far under the serial 2.0s
+let sleeps = []
+let j = 0
+while j < 8 { push(sleeps, "sleep 0.25"); j = j + 1 }
+let t = now()
+run_all(sleeps)
+let elapsed = now() - t
+assert(elapsed < 1.0, "run_all overlaps work (parallel; serial would be ~2.0s)")
+
+print("test_concurrency: all tests passed ✓")

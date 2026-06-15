@@ -30,7 +30,8 @@ imply for the next step.
 | AI | structured JSON output (`ai(.., { json: true })`) | ✅ done |
 | AI | `embed` (embeddings API) | 🔜 next |
 | AI | schema-constrained generation | 🔜 next |
-| AI | concurrency for parallel `ai`/`http` calls | 🔜 next |
+| Concurrency | `run_all(cmds)` — parallel subprocesses (thread pool) | ✅ done |
+| Concurrency | `ai.batch` / parallel `ai`/`http` helpers on top | 🔜 next |
 | Core | garbage collector (mark-sweep) | ✅ done |
 | Core | namespaced modules (`import .. as`) + relative paths | ✅ done |
 | Diagnostics | backtrace on uncaught errors | ✅ done |

@@ -104,7 +104,8 @@ print("elapsed: {clock() - t}s")
 ```
 
 ### `now() → float`
-Wall-clock seconds since the Unix epoch (UTC).
+Wall-clock seconds since the Unix epoch (UTC), with sub-second precision — good
+for timestamps and for timing real (wall-clock) elapsed time.
 
 ### `time` — calendar helpers (UTC)
 | Function | Result |
@@ -275,6 +276,7 @@ let key = env("ANTHROPIC_API_KEY")
 | Function | Result |
 |----------|--------|
 | `run(cmd)` | run `cmd` via the shell; returns `{ out: <stdout>, code: <exit> }` |
+| `run_all(cmds)` | run a list of commands **concurrently**; list of `{ out, code }` in input order |
 | `args()` | list of CLI arguments passed after the script path |
 | `exit(code?)` | exit the process (default code `0`) |
 | `env(name)` | environment variable, or `nil` |
@@ -285,7 +287,23 @@ let res = run("git rev-parse --short HEAD")
 if res.code == 0 { print("commit: {trim(res.out)}") }
 for a in args() { print("arg: {a}") }
 ```
-> `run` passes the command to the shell — quote untrusted input yourself.
+> `run`/`run_all` pass the command to the shell — quote untrusted input yourself.
+
+### Concurrency with `run_all`
+`run_all` is Loqi's concurrency primitive: it runs the commands on worker threads
+so their **blocking I/O overlaps**, then returns the results in order. This is how
+you fan out slow calls — fetch many URLs, or run many model calls — in parallel:
+```loqi
+# fetch three pages at once instead of one after another
+let pages = run_all([
+  "curl -s https://example.com/a",
+  "curl -s https://example.com/b",
+  "curl -s https://example.com/c",
+])
+for p in pages { print(len(p.out)) }
+```
+Up to 32 commands run at a time (larger lists run in waves). The Loqi runtime
+itself stays single-threaded, so your program logic is never racy.
 
 ## `read(path) → str` / `write(path, content) → nil`
 Read and write whole files.
