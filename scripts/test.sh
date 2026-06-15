@@ -271,6 +271,21 @@ else
   fail=$((fail+1))
 fi
 
+# CLI dispatch: -e inline programs, --help, exit-code contract, --dry-run flag.
+cli_e="$("$LOQI" -e 'print(6 * 7)' 2>&1)"
+"$LOQI" --help >/dev/null 2>&1; cli_help=$?
+"$LOQI" --nope >/dev/null 2>&1; cli_unknown=$?
+"$LOQI" -e 'let x =' >/dev/null 2>&1; cli_syntax=$?
+cli_dry="$(LOQI_AI_DRY_RUN= "$LOQI" --dry-run -e 'print(ai("hi"))' 2>/dev/null)"
+if [ "$cli_e" = "42" ] && [ "$cli_help" -eq 0 ] && [ "$cli_unknown" -eq 64 ] \
+   && [ "$cli_syntax" -eq 65 ] && [ "$cli_dry" = "" ]; then
+  echo "  ✓ (cli) -e inline, --help, --dry-run, and the exit-code contract (0/64/65)"
+  pass=$((pass+1))
+else
+  echo "  ✗ (cli) e=[$cli_e] help=$cli_help unknown=$cli_unknown syntax=$cli_syntax dry=[$cli_dry]"
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

@@ -6408,6 +6408,29 @@ static void repl(Interp *I) {
     free(line);
 }
 
+static void print_usage(void) {
+    printf(
+"Loqi %s, jq for the text only an LLM can parse.\n"
+"Turn messy text into schema-validated NDJSON in one pipe stage.\n\n"
+"Usage:\n"
+"  loqi [options] script.lq [args...]    run a script (read data on stdin)\n"
+"  loqi [options] -e \"<code>\" [args...]   run an inline program\n"
+"  loqi                                  start the REPL\n\n"
+"Pipe filter:\n"
+"  cat tickets.txt | loqi extract.lq > tickets.ndjson\n\n"
+"Options:\n"
+"  -e <code>      run the given source instead of a script file\n"
+"  --dry-run      make no model call: log each prompt, return a stub (no API key needed)\n"
+"  --limit <n>    cap total model calls (spend guard); the call past <n> errors out\n"
+"  -h, --help     show this help\n"
+"  -v, --version  show the version\n\n"
+"Environment:\n"
+"  ANTHROPIC_API_KEY   needed for ai()/ai_json()/ai_all() (sent via curl)\n"
+"  LOQI_AI_MODEL       default model. LOQI_AI_DRY_RUN / LOQI_AI_MAX_CALLS mirror the flags.\n\n"
+"Exit codes: 0 ok, 64 usage, 65 compile error, 70 runtime error, 74 I/O error.\n",
+        LOQI_VERSION);
+}
+
 int main(int argc, char **argv) {
     /* Line-buffer stdout so a pipe filter streams each line to the next stage
        (e.g. `loqi extract.lq | head`) instead of withholding it in a full buffer.
@@ -6417,19 +6440,42 @@ int main(int argc, char **argv) {
 
     Interp I;
     interp_init(&I);
-
     int rc = 0;
-    if (argc == 1) {
-        repl(&I);
-    } else if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
-        printf("Loqi %s\n", LOQI_VERSION);
+
+    /* Parse leading options up to the first non-flag (the script) or -e (inline). */
+    const char *inline_src = NULL, *script_path = NULL;
+    int i = 1;
+    for (; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "--version") || !strcmp(a, "-v")) { printf("Loqi %s\n", LOQI_VERSION); interp_free(&I); return 0; }
+        if (!strcmp(a, "--help") || !strcmp(a, "-h")) { print_usage(); interp_free(&I); return 0; }
+        if (!strcmp(a, "--dry-run")) { setenv("LOQI_AI_DRY_RUN", "1", 1); continue; }
+        if (!strcmp(a, "--limit")) {
+            if (i + 1 >= argc) { fprintf(stderr, "loqi: --limit needs a number (try --help)\n"); interp_free(&I); return 64; }
+            setenv("LOQI_AI_MAX_CALLS", argv[++i], 1); continue;
+        }
+        if (!strcmp(a, "-e")) {
+            if (i + 1 >= argc) { fprintf(stderr, "loqi: -e needs an expression (try --help)\n"); interp_free(&I); return 64; }
+            inline_src = argv[++i]; i++; break; /* the rest are the program's args */
+        }
+        if (a[0] == '-' && a[1] != '\0' && strcmp(a, "-") != 0) {
+            fprintf(stderr, "loqi: unknown option '%s' (try --help)\n", a); interp_free(&I); return 64;
+        }
+        script_path = a; i++; break; /* first non-flag: the script; the rest are its args */
+    }
+
+    if (!inline_src && !script_path) { repl(&I); interp_free(&I); return 0; }
+
+    /* expose any trailing arguments to args() */
+    I.script_argc = argc - i;
+    I.script_argv = (argc > i) ? &argv[i] : NULL;
+
+    if (inline_src) {
+        rc = interpret(&I, inline_src, "<-e>");
     } else {
-        char *src = read_file(argv[1]);
+        char *src = read_file(script_path);
         if (!src) { interp_free(&I); return 74; }
-        /* expose any arguments after the script path to args() */
-        I.script_argc = argc - 2;
-        I.script_argv = (argc > 2) ? &argv[2] : NULL;
-        rc = interpret(&I, src, argv[1]);
+        rc = interpret(&I, src, script_path);
         free(src);
     }
     interp_free(&I);
