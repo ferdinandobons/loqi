@@ -1,7 +1,7 @@
 # An AI endpoint in ~10 lines of Loqi: POST a prompt, get the model's answer back.
 # The HTTP server, the LLM call, and JSON are all built in, no framework, no SDK.
 #
-#   Run:   ANTHROPIC_API_KEY=sk-... loqi examples/ai/server.lq
+#   Run:   ANTHROPIC_API_KEY=sk-... loqi extras/ai/server.lq
 #   Call:  curl -s -X POST --data "Write a haiku about the sea" http://127.0.0.1:8080/
 #   JSON:  curl -s http://127.0.0.1:8080/health
 #

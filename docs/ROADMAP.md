@@ -213,8 +213,52 @@ Still ahead (the items above the line are done, GC, modules, schema-validated
 output, regex, RAG, expression-form if/match, and the rest all shipped):
 
 - `embed()` (embeddings API, needs a non-Anthropic provider/key).
-- `ai` token counting / usage reporting (retry/backoff on 429/5xx already shipped).
 - `loqi fmt`, `loqi test`, an LSP for editor support.
 - Optional type annotations; block expressions that declare locals.
 - Computed-goto dispatch and NaN-boxed values (raw VM speed).
 - `loqi build`: AOT-compile a program to a native binary via emitted C.
+
+(Shipped since: `ai` token usage reporting via `{ usage: true }`, retry/backoff on
+429/5xx, the `stdin()`/`ai_json`/`ai_json_all` extraction surface, schema constraints,
+the CLI + spend guard, `$TMPDIR`/curl hardening, and the Linux build + CI matrix.)
+
+---
+
+## v1.0 definition of done
+
+v1.0 is scoped to the **wedge**, not language completeness: one static binary that turns
+messy text into schema-validated NDJSON on two platforms, with a trust contract that
+holds. Each box links the code/test that backs it.
+
+**The job runs, end to end**
+- [x] `cat file | loqi extract.lq > out.ndjson` reads stdin, extracts per record, emits
+  NDJSON (`stdin()` + `lines()` + `ai_json`; `examples/ai/extract.lq`, `tests/fixtures/stdin_lines.lq`).
+- [x] Parallel validated extraction: `ai_json_all(prompts, schema)` (`tests/fixtures/ai_json_all.lq`).
+
+**The trust contract (validated-or-fails)**
+- [x] A row that can't be made to validate stops the run naming the field (`ai_json`
+  retry-then-raise) and, for the batch, the row index (`ai_json_all`); exit code 70.
+- [x] Pipe-friendly exit codes `0/64/65/70/74` and `--help` (`(cli)` test).
+- [x] Reproducible rows: pinned `temperature: 0` + model in `extract.lq`.
+- [x] Spend guard: `--dry-run` / `--limit N` + `LOQI_AI_DRY_RUN` / `LOQI_AI_MAX_CALLS`
+  (`(ai-dry-run)`, `(ai-max-calls)` tests).
+
+**Two platforms, one static binary**
+- [x] Builds + full suite green on macOS arm64 AND Linux (glibc) in CI (`.github/workflows/ci.yml`).
+- [ ] Tag-triggered release ships checksummed static binaries for macos-arm64,
+  linux-x86_64, linux-arm64; each asserts `--version` == the tag (`scripts/release.sh`,
+  `.github/workflows/release.yml`).
+- [ ] `curl -fsSL <pages>/install.sh | sh` detects OS/arch, verifies SHA256, installs to
+  `~/.local/bin` (`web/install.sh`).
+
+**Quality gates (every change)**
+- [x] ASan/UBSan clean; `leaks --atExit → 0` incl. a forced validation-failure run; LSan
+  on Linux. Adversarial multi-agent review per change (0 confirmed findings to date).
+
+## Out of scope (by design, for now)
+
+Deliberately **not** built so the one job stays sharp; revisit only on real demand:
+`embed()` / embeddings, AOT `loqi build`, an LSP, `loqi fmt`, a type system, a
+concurrency rewrite (the single shared VM is intentionally single-threaded; only blocking
+I/O overlaps), Windows, sandboxing, glibc-static, a 4th Intel-Mac artifact, lazy streaming
+for larger-than-RAM inputs, a package registry, and a Homebrew tap.

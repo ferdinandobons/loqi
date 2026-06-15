@@ -1,6 +1,6 @@
 # HTTP and JSON are in the language: fetch + parse in two lines, zero dependencies.
 # (Only requires a network connection.)
-#   loqi examples/ai/web.lq
+#   loqi extras/ai/web.lq
 
 let repo = json.parse(http.get("https://api.github.com/repos/python/cpython"))
 print("{repo.full_name}: {repo.stargazers_count} stars ⭐")
