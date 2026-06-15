@@ -318,6 +318,10 @@ Tunable via the environment:
 | `LOQI_AI_MAX_RETRIES` | `3` | retries after the first try (0 disables; max 8) |
 | `LOQI_AI_RETRY_BASE_MS` | `500` | backoff base in ms; doubles per retry, capped at 16s |
 | `LOQI_AI_BASE_URL` | Anthropic Messages API | override the endpoint (a gateway/proxy) |
+| `LOQI_AI_DRY_RUN` | unset | when set, make no model call: log each prompt to stderr, return a stub (`""`/`{}`). Preview a pipeline for free, no key needed |
+| `LOQI_AI_MAX_CALLS` | unbounded | cap total model calls; the call that would exceed it raises. A spend guard against accidental fan-out over a huge input |
+
+Tip: combine with `head` to bound a run, e.g. `head -100 big.txt | loqi extract.lq`.
 
 ## `ai_all(prompts) → list` / `ai_all(prompts, options) → list`
 Runs many model calls **concurrently** and returns the answers in input order,

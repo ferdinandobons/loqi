@@ -1,0 +1,6 @@
+# Driven by scripts/test.sh. Under LOQI_AI_DRY_RUN=1 these make no network call and
+# need no key: ai() returns "" and ai_json() returns {}. Under LOQI_AI_MAX_CALLS the
+# second call trips the spend guard. Two model calls total (ai + ai_json).
+let a = ai("classify this ticket")
+let b = ai_json("extract fields from this ticket", { type: "object" })
+print("done a=[{a}] b_keys={len(keys(b))}")

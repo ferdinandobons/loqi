@@ -213,6 +213,7 @@ struct Interp {
     int source_count, source_cap;
     int import_depth;  /* number of files currently being loaded (import stack height) */
     const char *import_stack[64]; /* paths currently loading, for cycle detection */
+    int64_t ai_calls;  /* model calls made so far (spend guard: LOQI_AI_MAX_CALLS) */
     /* mark-sweep garbage collector */
     size_t obj_count;  /* live heap objects (the GC trigger metric) */
     size_t next_gc;    /* collect once obj_count reaches this */
@@ -4728,13 +4729,50 @@ static Value ai_parse_response(Interp *I, char *resp, int status, long http_code
                               status, http_code, attempts, want_json, want_usage);
 }
 
+/* ---- spend guard: stop accidental fan-out over a huge input from billing real money.
+   LOQI_AI_DRY_RUN  -> make no network call, note the prompt on stderr, return a stub.
+   LOQI_AI_MAX_CALLS=N -> raise once the program would exceed N model calls. Counts one
+   per ai()/ai_json() and one per ai_all() prompt (internal retries are not re-counted). */
+static bool ai_dry_run(void) {
+    const char *s = getenv("LOQI_AI_DRY_RUN");
+    return s && *s && strcmp(s, "0") != 0;
+}
+static void ai_charge(Interp *I, int n) {
+    const char *s = getenv("LOQI_AI_MAX_CALLS");
+    if (s && *s) {
+        char *end; long limit = strtol(s, &end, 10);
+        if (end != s && limit >= 0 && I->ai_calls + n > limit)
+            runtime_error(I, 0, "ai: call limit reached (LOQI_AI_MAX_CALLS=%ld; %lld model call(s) already made)",
+                          limit, (long long)I->ai_calls);
+    }
+    I->ai_calls += n;
+}
+static void ai_dry_log(Value prompt) {
+    if (IS_STRING(prompt)) {
+        ObjString *s = AS_STRING(prompt);
+        int n = s->length < 80 ? s->length : 80;
+        fprintf(stderr, "[loqi dry-run] ai: %.*s%s\n", n, s->chars, s->length > 80 ? " ..." : "");
+    } else {
+        fprintf(stderr, "[loqi dry-run] ai: <%d-message conversation>\n", IS_LIST(prompt) ? AS_LIST(prompt)->count : 0);
+    }
+}
+
 static Value nat_ai(Interp *I, int argc, Value *argv) {
     if (argc < 1 || (!IS_STRING(argv[0]) && !IS_LIST(argv[0])))
         runtime_error(I, 0, "ai() requires a prompt (str) or a list of messages");
+    AiOpts o = ai_parse_opts(I, argc, argv, 1);
+    if (ai_dry_run()) { /* no key needed, no call made */
+        ai_dry_log(argv[0]);
+        if (!o.want_usage) return cstring_val(I, "");
+        ObjMap *w = new_map(I);
+        map_set(w, "output", cstring_val(I, ""));
+        map_set(w, "usage", obj_val((Obj *)new_map(I)));
+        return obj_val((Obj *)w);
+    }
+    ai_charge(I, 1);
     const char *key = getenv("ANTHROPIC_API_KEY");
     if (!key || !*key)
         runtime_error(I, 0, "ai(): set the ANTHROPIC_API_KEY environment variable");
-    AiOpts o = ai_parse_opts(I, argc, argv, 1);
     char body_tmpl[32], cfg_tmpl[32];
     char *cmd = ai_build_request(I, argv[0], o, key, body_tmpl, cfg_tmpl);
     if (!cmd) raise_error(I); /* build cleaned up its own temp files; raise the message */
@@ -4763,6 +4801,8 @@ static Value ai_one_json_call(Interp *I, Value prompt, AiOpts o, const char *key
 static Value nat_ai_json(Interp *I, int argc, Value *argv) {
     if (argc < 2 || !IS_STRING(argv[0]) || !IS_MAP(argv[1]))
         runtime_error(I, 0, "ai_json() requires (prompt: str, schema: map [, opts])");
+    if (ai_dry_run()) { ai_dry_log(argv[0]); return obj_val((Obj *)new_map(I)); } /* stub, no call/validation */
+    ai_charge(I, 1);
     const char *key = getenv("ANTHROPIC_API_KEY");
     if (!key || !*key) runtime_error(I, 0, "ai_json(): set the ANTHROPIC_API_KEY environment variable");
     AiOpts o = ai_parse_opts(I, argc, argv, 2);
@@ -4978,6 +5018,12 @@ static Value nat_ai_all(Interp *I, int argc, Value *argv) {
         if (!IS_STRING(prompts->items[i])) runtime_error(I, 0, "ai_all(): each prompt must be a str");
     AiOpts o = ai_parse_opts(I, argc, argv, 1);
     if (n == 0) return obj_val((Obj *)new_list(I));
+    if (ai_dry_run()) { /* no calls; one stub per prompt */
+        ObjList *out = new_list(I);
+        for (int i = 0; i < n; i++) { ai_dry_log(prompts->items[i]); list_push(out, cstring_val(I, "")); }
+        return obj_val((Obj *)out);
+    }
+    ai_charge(I, n);
 
     RunJob *jobs = xmalloc(sizeof(RunJob) * (size_t)n);
     char (*body_tmpls)[32] = xmalloc(sizeof(char[32]) * (size_t)n);
@@ -6303,6 +6349,7 @@ static void interp_init(Interp *I) {
     I->path = NULL;
     I->vm = NULL;
     I->has_error = false;
+    I->ai_calls = 0;
     I->err_msg[0] = '\0';
     I->err_trace[0] = '\0';
     I->err_source[0] = '\0';

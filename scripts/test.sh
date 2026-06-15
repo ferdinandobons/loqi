@@ -236,6 +236,41 @@ else
   fail=$((fail+1))
 fi
 
+# ai spend guard: LOQI_AI_DRY_RUN makes no network call (no key needed), logs the
+# prompt, and returns a stub so a pipeline can be previewed for free.
+dry_out="$(LOQI_AI_DRY_RUN=1 "$LOQI" tests/fixtures/ai_dryrun.lq 2>/tmp/loqi_dry_err)"
+dry_rc=$?
+dry_err="$(cat /tmp/loqi_dry_err 2>/dev/null)"; rm -f /tmp/loqi_dry_err
+if [ "$dry_rc" -eq 0 ] && printf '%s' "$dry_out" | grep -q "done a=\[\] b_keys=0" \
+   && printf '%s' "$dry_err" | grep -q "dry-run"; then
+  echo "  ✓ (ai-dry-run) LOQI_AI_DRY_RUN makes no call (no key) and returns a stub"
+  pass=$((pass+1))
+else
+  echo "  ✗ (ai-dry-run) expected a clean dry run, rc=$dry_rc out=[$dry_out]"
+  fail=$((fail+1))
+fi
+
+# ai spend guard: LOQI_AI_MAX_CALLS caps total model calls. With a stubbed curl + a
+# dummy key and a cap of 1, the first call (ai) succeeds and the second (ai_json) raises.
+ai_stub2="$(mktemp -d)"
+cat > "$ai_stub2/curl" <<'STUB'
+#!/bin/sh
+printf '%s' '{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}'
+printf '\n__LQHTTP:200__'
+STUB
+chmod +x "$ai_stub2/curl"
+cap_out="$(PATH="$ai_stub2:$PATH" ANTHROPIC_API_KEY=dummy LOQI_AI_MAX_CALLS=1 "$LOQI" tests/fixtures/ai_dryrun.lq 2>&1)"
+cap_rc=$?
+rm -rf "$ai_stub2"
+if [ "$cap_rc" -ge 64 ] && [ "$cap_rc" -lt 128 ] && printf '%s' "$cap_out" | grep -q "call limit reached"; then
+  echo "  ✓ (ai-max-calls) LOQI_AI_MAX_CALLS caps spend and raises past the limit"
+  pass=$((pass+1))
+else
+  echo "  ✗ (ai-max-calls) expected a call-limit error, rc=$cap_rc:"
+  printf '%s\n' "$cap_out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
 echo "-----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
