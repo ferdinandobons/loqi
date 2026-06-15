@@ -1,4 +1,4 @@
-# Loqi — crawlers welcome, including AI search engines
+# Loqi, crawlers welcome, including AI search engines
 User-agent: *
 Allow: /
 

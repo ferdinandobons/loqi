@@ -2,7 +2,7 @@
 
 > Loqi is an AI-first programming language: calling an LLM with `ai()`, parsing
 > JSON, making HTTP requests, and computing vector similarity are built into the
-> language and its runtime — not separate packages. It is implemented in
+> language and its runtime, not separate packages. It is implemented in
 > dependency-free C as a stack bytecode VM and is fast on Apple Silicon.
 
 Loqi (from Latin *loqui*, "to speak") is designed for people building AI features
@@ -23,8 +23,8 @@ virtualenv or node_modules. Reads like Python; ships as a single native binary.
 - **Language:** `let`/`fn`, closures, `if`/`while`/`for-in`, `match` pattern matching,
   `try`/`catch` error handling, `"{interpolation}"` strings and `` `raw` `` strings,
   `#` comments, no semicolons. Types: nil, bool, int (i64), float (f64), str, list, map, fn.
-- **Honest limitations:** no JIT yet, no garbage collector yet (arena freed at exit),
-  Apple-Silicon-first, `http`/`ai` shell out to `curl` today.
+- **Honest limitations:** no JIT yet, Apple-Silicon-first, young/small ecosystem,
+  `http`/`ai` shell out to `curl` today. (Memory IS reclaimed by a precise mark-sweep GC.)
 - **License:** MIT. **Repository:** https://github.com/ferdinandobons/loqi
 
 ## Example

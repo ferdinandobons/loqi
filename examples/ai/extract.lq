@@ -1,5 +1,5 @@
 # Structured extraction: ask for JSON and get back native Loqi data directly.
-# `{ json: true }` steers the model, strips any ```fences```, and parses for you —
+# `{ json: true }` steers the model, strips any ```fences```, and parses for you,
 # no HTTP libraries, no JSON glue, no SDK.
 #   ANTHROPIC_API_KEY=... loqi examples/ai/extract.lq
 

@@ -1,6 +1,6 @@
 # Loqi Standard Library
 
-Everything here is **built in** — always available, no import, no packages. This
+Everything here is **built in**, always available, no import, no packages. This
 is the "batteries included" core, including the **AI-native layer** (`ai`, `json`,
 `http`, ...) that you would otherwise assemble from separate libraries.
 
@@ -96,7 +96,7 @@ Largest integer ≤ x.
 ## Time
 
 ### `clock() → float`
-CPU time in seconds since process start — handy for micro-benchmarks.
+CPU time in seconds since process start, handy for micro-benchmarks.
 ```loqi
 let t = clock()
 # ... work ...
@@ -104,10 +104,10 @@ print("elapsed: {clock() - t}s")
 ```
 
 ### `now() → float`
-Wall-clock seconds since the Unix epoch (UTC), with sub-second precision — good
+Wall-clock seconds since the Unix epoch (UTC), with sub-second precision, good
 for timestamps and for timing real (wall-clock) elapsed time.
 
-### `time` — calendar helpers (UTC)
+### `time`, calendar helpers (UTC)
 | Function | Result |
 |----------|--------|
 | `time.iso(secs?)` | ISO-8601 string `YYYY-MM-DDTHH:MM:SSZ` (default: now) |
@@ -137,7 +137,7 @@ print(time.parse("14/11/2023", `%d/%m/%Y`))      # custom format
 A built-in, dependency-free regex engine. It is **linear-time** (a Thompson NFA /
 Pike VM): unlike the backtracking engines in Python, JavaScript, Java or PCRE, it
 **cannot catastrophically backtrack**, so a pattern like `(a+)+$` against a long
-non-matching string returns instantly instead of hanging — there is no "ReDoS".
+non-matching string returns instantly instead of hanging, there is no "ReDoS".
 Matching is leftmost-first with greedy `*` `+` `?` (the semantics you expect from
 Perl/Python). Use raw strings (backticks) so backslashes need no escaping.
 
@@ -156,7 +156,7 @@ the escapes `\d \D \w \W \s \S \n \t \r` plus any escaped metacharacter (`\.`, `
 `.` matches one byte). An invalid pattern raises a catchable error.
 
 `{n,m}` counted repetition is not supported yet; use `*`/`+`/`?` (or repeat the
-atom). Replacement is literal — backreferences like `$1` are not supported yet.
+atom). Replacement is literal, backreferences like `$1` are not supported yet.
 
 ```loqi
 regex.test(`^(yes|no)$`, "yes")            # true
@@ -288,7 +288,7 @@ The second argument can also be an **options map**:
 | `json` | bool | return parsed native data instead of text |
 
 With `{ json: true }`, `ai` steers the model toward JSON, tolerates ```` ```json ````
-fences, and returns native Loqi values — no manual parsing:
+fences, and returns native Loqi values, no manual parsing:
 ```loqi
 let person = ai("Extract name and birth_year from: {text}", { json: true })
 print("{person.name} ({person.birth_year})")          # person.birth_year is an int
@@ -297,11 +297,11 @@ let summary = ai("Summarize this.", { system: "Be terse.", temperature: 0.2 })
 ```
 
 ## `ai_all(prompts) → list` / `ai_all(prompts, options) → list`
-Runs many model calls **concurrently** and returns the answers in input order —
+Runs many model calls **concurrently** and returns the answers in input order,
 the same `options` (incl. `json`) apply to every prompt. This is how you fan out
 work to the model in parallel instead of one slow call after another:
 ```loqi
-# classify many items at once — N calls overlap instead of running serially
+# classify many items at once, N calls overlap instead of running serially
 let labels = ai_all([
   "Sentiment of 'I love it' in one word",
   "Sentiment of 'it broke instantly' in one word"
@@ -316,7 +316,7 @@ Built on `run_all`'s thread pool: the model requests overlap, while the Loqi
 runtime stays single-threaded. A failed call raises (use `try` to guard a batch).
 
 ## `ai_json(prompt, schema) → value` / `ai_json(prompt, schema, options) → value`
-**Structured output** — the reliable way to get typed data out of a model. Loqi
+**Structured output**, the reliable way to get typed data out of a model. Loqi
 shows the model the `schema`, parses its JSON answer, **validates it against the
 schema, and automatically retries once** with the validation errors if it doesn't
 conform. Returns the validated native value, or raises if the model still can't
@@ -339,11 +339,11 @@ Schema shapes (see `json.validate`): primitive `type` (`string`/`str`, `int`,
 `{type:"object", fields:{…}, required:[…]}`.
 
 ## `json.validate(value, schema) → bool`
-Checks any value against a schema (the same one `ai_json` uses) — handy for
+Checks any value against a schema (the same one `ai_json` uses), handy for
 validating model output, API responses, or config. Listed `fields` that are present
 must match; `required` fields must exist; extra fields are allowed. A *malformed*
 schema (e.g. `required` that isn't a list, `type` that isn't a string) raises a
-clear error rather than silently passing — so a schema typo never hides a bug.
+clear error rather than silently passing, so a schema typo never hides a bug.
 ```loqi
 let s = { type: "object", fields: { id: { type: "int" } }, required: ["id"] }
 print(json.validate({ id: 7, extra: "ok" }, s))   # true
@@ -359,7 +359,7 @@ print(m.n[0])                                          # 1
 print(json.stringify({ a: 1, b: [true, nil] }))       # {"a":1,"b":[true,null]}
 ```
 > Tip: write JSON literals with **raw strings** (backticks) so `{`, `}` and `"`
-> need no escaping — see the [language guide](LANGUAGE.md#strings).
+> need no escaping, see the [language guide](LANGUAGE.md#strings).
 
 ## `http.get(url) → str` / `http.post(url, body, content_type?) → str`
 An HTTP client, built in. Returns the response body.
@@ -374,7 +374,7 @@ let reply = http.post("https://httpbin.org/post", json.stringify({ hi: "loqi" })
 ## Vectors & semantic search (RAG)
 
 Batteries-included building blocks for retrieval-augmented generation: embed your
-documents (and the query) into vectors, then rank by similarity — no vector
+documents (and the query) into vectors, then rank by similarity, no vector
 database required.
 
 ### `similarity(a, b) → float`
@@ -429,12 +429,12 @@ let res = run("git rev-parse --short HEAD")
 if res.code == 0 { print("commit: {trim(res.out)}") }
 for a in args() { print("arg: {a}") }
 ```
-> `run`/`run_all` pass the command to the shell — quote untrusted input yourself.
+> `run`/`run_all` pass the command to the shell, quote untrusted input yourself.
 
 ### Concurrency with `run_all`
 `run_all` is Loqi's concurrency primitive: it runs the commands on worker threads
 so their **blocking I/O overlaps**, then returns the results in order. This is how
-you fan out slow calls — fetch many URLs, or run many model calls — in parallel:
+you fan out slow calls, fetch many URLs, or run many model calls, in parallel:
 ```loqi
 # fetch three pages at once instead of one after another
 let pages = run_all([
@@ -463,7 +463,7 @@ print(read("note.txt"))
 | `mkdir(path)` | create the directory and any missing parents (`mkdir -p`) |
 | `rm(path)` | remove a file or empty directory |
 
-## `path` — path manipulation
+## `path`, path manipulation
 | Function | Result |
 |----------|--------|
 | `path.join(a, b, ...)` | join with `/` (an absolute part resets, empties are skipped) |
@@ -480,7 +480,7 @@ for name in ls(dir) {
 }
 ```
 
-## `base64` / `hex` — encoding
+## `base64` / `hex`, encoding
 | Function | Result |
 |----------|--------|
 | `base64.encode(s)` / `base64.decode(s)` | standard base64 (RFC 4648, padded) |

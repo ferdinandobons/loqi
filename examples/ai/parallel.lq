@@ -1,4 +1,4 @@
-# Fan out work to the model in PARALLEL — N calls overlap instead of running one
+# Fan out work to the model in PARALLEL, N calls overlap instead of running one
 # after another. Here we classify several product reviews at once with ai_all.
 #   ANTHROPIC_API_KEY=... loqi examples/ai/parallel.lq
 
@@ -6,7 +6,7 @@ let reviews = [
   "Shipping was slow but the product is fantastic.",
   "Broke on day one. Very disappointed.",
   "Exactly what I needed, works perfectly.",
-  "It's okay — nothing special, nothing terrible.",
+  "It's okay, nothing special, nothing terrible.",
 ]
 
 # build one prompt per review, then run them all concurrently

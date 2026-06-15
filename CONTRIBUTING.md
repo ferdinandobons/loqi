@@ -1,7 +1,7 @@
 # Contributing to Loqi
 
-Thanks for your interest. Loqi is built in a tight loop —
-**build → measure → review → improve** — and contributions follow the same rhythm.
+Thanks for your interest. Loqi is built in a tight loop,
+**build → measure → review → improve**, and contributions follow the same rhythm.
 
 ## Build & test
 
@@ -46,7 +46,7 @@ truth for semantics.
 ## Style
 
 - C11, 4-space indent, `snake_case` for functions and variables.
-- Match the surrounding code's comment density — explain *why*, not *what*.
+- Match the surrounding code's comment density, explain *why*, not *what*.
 - No new external dependencies in the core. The whole point is one `clang` build.
 
 ## Coding loop discipline

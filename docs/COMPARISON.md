@@ -1,12 +1,12 @@
 # Loqi vs Python, JavaScript/Node, Go, Rust, Mojo
 
-An honest comparison. Loqi is **v0.2 — early but real**: the core language, a
+An honest comparison. Loqi is **v0.2, early but real**: the core language, a
 bytecode VM, and the AI-native layer all work today. The languages below are
 mature, battle-tested ecosystems. This page is meant to help you decide *when
 Loqi is the right tool* and, just as importantly, when it is not.
 
 The short version: Loqi's bet is **the AI-native surface built into the
-language** — an LLM call, an HTTP client, a JSON codec, and vector similarity
+language**, an LLM call, an HTTP client, a JSON codec, and vector similarity
 that are always there, with no SDK to install and no `venv`/`node_modules` to
 assemble. On raw speed it sits in Python's class (often faster on tight loops),
 and Go, Rust, and Node will out-run it. All five comparison languages are far
@@ -27,7 +27,7 @@ self-contained binary**, not on benchmarks or ecosystem size.
 | Dependency manager needed | **❌ none** | ✅ pip/venv/poetry | ✅ npm/pnpm/yarn | ✅ go modules | ✅ cargo | ✅ |
 | Readability | **high** (Python-like) | high | medium | medium-high | medium-low | medium |
 | Speed class | **Python-class** (often faster on loops) | Python-class | fast (JIT) | fast (compiled) | fastest (compiled) | very fast (compiled) |
-| Garbage collector | ❌ not yet (arena freed at exit) | ✅ | ✅ | ✅ | ❌ (ownership) | ⚠️ (ownership model) |
+| Garbage collector | ✅ precise mark-sweep | ✅ | ✅ | ✅ | ❌ (ownership) | ⚠️ (ownership model) |
 | JIT | ❌ not yet | ⚠️ (3.13+ experimental) | ✅ (V8) | ❌ (AOT) | ❌ (AOT) | ❌ (AOT) |
 | Maturity | **new (v0.2)** | very mature (30+ yrs) | very mature | mature | mature | young (but well-funded) |
 | Platforms | Apple Silicon (arm64) only | everywhere | everywhere | everywhere | everywhere | Linux/macOS, growing |
@@ -37,15 +37,15 @@ self-contained binary**, not on benchmarks or ecosystem size.
 
 - **Loqi's genuine wins** are the leftmost rows: `ai()`, JSON, an HTTP client,
   and `similarity()` are all *in the language*, with **zero dependency manager**.
-  That is the whole pitch — no `pip install`, no `npm i`, no SDK, no `venv`.
-- **Where the others win** — and they do: Go, Rust, and Node's V8 are **faster**
+  That is the whole pitch, no `pip install`, no `npm i`, no SDK, no `venv`.
+- **Where the others win**, and they do: Go, Rust, and Node's V8 are **faster**
   than Loqi (Node JITs; Go and Rust compile to optimized machine code). All five
   are **far more mature**, run on **every platform**, and have **enormous
   ecosystems**. Loqi has none of that yet, runs on **Apple Silicon only**, and
-  has **no JIT and no GC** today.
+  has **no JIT** today (it does have a precise mark-sweep GC).
 - Loqi's HTTP is marked "via curl" on purpose: `http`/`ai` shell out to the
   always-present `curl` today (a native client is on the roadmap). It works
-  end-to-end and is memory-clean under ASan/UBSan — but it's honest to say it's
+  end-to-end and is memory-clean under ASan/UBSan, but it's honest to say it's
   not yet a native networking stack.
 
 ---
@@ -57,13 +57,13 @@ All on Apple Silicon, single thread, `process_time`:
 | Workload | Loqi v0.2 | CPython 3.13 | Node (V8 JIT) |
 |---|---:|---:|---:|
 | `fib(30)` | 0.097 s | 0.094 s | 0.017 s |
-| tight loop to 50M | 3.0 s | 4.3 s | — |
+| tight loop to 50M | 3.0 s | 4.3 s | n/a |
 
 Loqi is **on par with CPython** on recursion and **~1.4× faster** on tight
 numeric loops, and **~5× faster** than its own first tree-walking interpreter.
 **V8 is faster** on `fib` because it JIT-compiles hot code; **Loqi does not JIT
 yet**. The honest positioning: *Python-class speed (often faster on loops) from a
-single compiled binary, getting faster each iteration* — **not** faster than Go,
+single compiled binary, getting faster each iteration*, **not** faster than Go,
 Rust, C, or Node.
 
 ---
@@ -73,15 +73,15 @@ Rust, C, or Node.
 ### Python
 You'll feel at home immediately: `let`/`fn`, no semicolons, clean blocks, string
 interpolation, first-class functions, closures, lists and maps. What Loqi
-**adds**: `ai()`, `json`, `http`, and `similarity()` are *in the language* — no
-`pip install anthropic`, no `requests`, no `venv` — and it ships as one binary
+**adds**: `ai()`, `json`, `http`, and `similarity()` are *in the language*, no
+`pip install anthropic`, no `requests`, no `venv`, and it ships as one binary
 that's often faster than CPython on loops. What you'd **give up**: Python's
-colossal ecosystem (NumPy, pandas, Django, the lot), a real GC, decades of
-maturity, and the ability to run anywhere. Loqi is Apple-Silicon-only for now.
+colossal ecosystem (NumPy, pandas, Django, the lot), decades of maturity, and the
+ability to run anywhere. Loqi is Apple-Silicon-only for now.
 
 ### JavaScript / Node
 You keep the lightweight feel and first-class functions, and you drop
-`node_modules`, `package.json`, and the SDK-per-API ritual entirely — `ai()` and
+`node_modules`, `package.json`, and the SDK-per-API ritual entirely, `ai()` and
 `http.get()` are built in. What you'd **give up**: V8's JIT (Node is faster on
 hot code), the npm universe, async/await and the event loop, and cross-platform
 reach. Loqi is synchronous and single-binary, which is simpler but less powerful
@@ -91,18 +91,18 @@ for high-concurrency servers.
 You keep the single-binary deployment story and a readable, no-ceremony syntax,
 and you gain the AI-native batteries without reaching for an SDK or hand-rolling
 HTTP+JSON glue. What you'd **give up**: real compiled-language speed,
-goroutines/channels, a garbage collector, a huge standard library, and
-production maturity across every platform. Go is the better choice for
+goroutines/channels, a huge standard library, and production maturity across
+every platform. Go is the better choice for
 networked services today; Loqi is the faster path to an AI script or prototype.
 
 ### Rust
 You trade Rust's correctness-by-construction and top-tier performance for
 something dramatically simpler to write. No borrow checker, no `Cargo.toml`, no
-`serde` + `reqwest` + an LLM crate to wire together — `json.parse`,
+`serde` + `reqwest` + an LLM crate to wire together, `json.parse`,
 `http.get`, and `ai()` are one call each. What you'd **give up**: Rust's speed,
 memory-safety guarantees, fearless concurrency, and a mature crate ecosystem.
-Loqi has no GC *and* no ownership model yet (it frees its arena at exit), so it
-is not a systems language — it's a scripting language for AI work.
+Loqi has a GC but no ownership model, so it is not a systems language: it's a
+scripting language for AI work.
 
 ### Mojo
 Both are young languages betting on a specific niche. Mojo's bet is
@@ -112,7 +112,7 @@ JSON, and doing semantic search with zero setup. What you'd **give up** choosing
 Loqi: Mojo's serious numeric performance and its Python-superset
 interoperability. What Loqi gives you instead: a tiny, dependency-free,
 MIT-licensed binary where `ai("...")` is a keyword-level convenience, not a
-library import. Different problems — Mojo makes the math fast; Loqi makes the
+library import. Different problems, Mojo makes the math fast; Loqi makes the
 LLM call trivial.
 
 ---
@@ -121,16 +121,15 @@ LLM call trivial.
 
 Be honest with yourself. Pick something else if:
 
-- **It's production-critical.** Loqi is v0.2. There's no GC yet (the heap is
-  freed at exit — fine for scripts and short-lived processes, not for a
-  long-running server holding memory). Use Go, Rust, or a mature runtime for
-  anything that has to stay up and not leak.
+- **It's production-critical.** Loqi is v0.2: young, single-platform, and
+  small-ecosystem. Use Go, Rust, or a mature runtime for anything that has to
+  stay up under heavy production load.
 - **You're not on Apple Silicon.** The reference implementation targets arm64
   macOS today. No Linux, Windows, or x86 builds yet. If you need to deploy
   broadly, this is a hard blocker.
-- **You need a JIT or a GC.** No JIT means V8 will out-run you on hot numeric
-  code. No GC means long-running allocation-heavy workloads aren't a fit yet.
-  Both are on the roadmap; neither exists today.
+- **You need a JIT.** No JIT means V8 will out-run you on hot numeric code (it is
+  on the roadmap). Loqi does reclaim memory with a precise mark-sweep GC, so
+  allocation-heavy workloads are fine; raw hot-loop throughput is the gap.
 - **You depend on a large ecosystem.** No NumPy, no pandas, no web framework, no
   package registry. The single-file module model and the built-in stdlib are
   deliberately small. If your project lives on third-party libraries, Loqi can't
@@ -140,7 +139,7 @@ Be honest with yourself. Pick something else if:
   it assumes `curl` is present.
 
 Where Loqi **does** fit right now: AI scripts and prototypes, glue between a
-model and a JSON API, semantic-search experiments, internal tools on a Mac — any
+model and a JSON API, semantic-search experiments, internal tools on a Mac, any
 place where the cost of assembling an HTTP lib + a JSON lib + an LLM SDK + a
 `venv` outweighs the value of a mature ecosystem.
 
@@ -218,7 +217,7 @@ answer comes back as a plain string.
 
 **What Python keeps that Loqi doesn't have (yet):** explicit timeouts and
 `raise_for_status()` error handling, fine-grained control over `max_tokens` and
-the message structure, retries/streaming via the SDK, and — of course — the
+the message structure, retries/streaming via the SDK, and, of course, the
 ability to run anywhere and lean on a vast ecosystem. The Python version is more
 verbose because it's more configurable and more mature. Loqi trades that
 configurability for a near-zero-setup path to the same result.

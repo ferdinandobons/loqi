@@ -1,4 +1,4 @@
-# Recursive quicksort — recursion, lists, comparison closure.
+# Recursive quicksort, recursion, lists, comparison closure.
 fn quicksort(xs) {
   if len(xs) <= 1 { return xs }
   let pivot = xs[0]

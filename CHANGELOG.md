@@ -11,11 +11,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
   (Latin *loqui*, "to speak"): no existing language, all package registries and the
   `loqi-lang` GitHub org free. Extension `.lm` → `.lq`, CLI `lume` → `loqi`.
 
-### Added — language completeness (learning from other languages)
-- **`try` / `catch`** error handling — recoverable errors (VM errors *and* built-in
+### Added, language completeness (learning from other languages)
+- **`try` / `catch`** error handling, recoverable errors (VM errors *and* built-in
   failures like `json.parse`/`http`/`ai`), with the message bound to the catch var.
   A program no longer dies at the first bad input or failed request.
-- **`match`** pattern matching — `_` default, comma-OR patterns.
+- **`match`** pattern matching, `_` default, comma-OR patterns.
 - **Standard library** filled out: `sort`, `reverse`, `sum`, `min`/`max`, `slice`,
   `index_of`, `contains`, `del`, `map`/`filter`/`reduce`/`each`/`find`,
   `trim`/`replace`/`starts_with`/`ends_with`/`repeat`/`chars`, `round`/`ceil`/`pow`,
@@ -28,11 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
   tree-walking interpreter. Locals are stack slots, globals live in an
   open-addressing hash table, closures capture via upvalues. ~5× faster than the
   tree-walker; on par with CPython on recursion, ~1.4× faster on tight loops.
-  Same language surface — all tests and examples pass unchanged.
+  Same language surface, all tests and examples pass unchanged.
 
 ### Security & robustness (from the code-review loop)
 A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixed:
-- **VM stack-overflow guard** in `vm_push` — a huge literal/expression now raises a
+- **VM stack-overflow guard** in `vm_push`, a huge literal/expression now raises a
   clean runtime error instead of corrupting heap memory (was a critical OOB write).
 - `snprintf` return value clamped in both error formatters (long paths could
   overflow the message buffer).
@@ -48,20 +48,20 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
   C undefined behavior; out-of-range integer/float literals rejected.
 - `read_file` streams (works for pipes/stdin), rejects directories, checks errors.
 - Compile-time limits: ≤255 args/params, ≤65535 list/map literal entries,
-  ≤256 `break`s per loop — all diagnosed instead of silently truncating.
+  ≤256 `break`s per loop, all diagnosed instead of silently truncating.
 - CRLF line-continuation; control-byte rejection in strings; dead code removed;
   `value_to_cstr` repr de-duplicated.
 
-### Added — AI-first batteries
-- **`ai(prompt[, model])`** — a first-class LLM call (Anthropic Messages API via
+### Added, AI-first batteries
+- **`ai(prompt[, model])`**, a first-class LLM call (Anthropic Messages API via
   `curl`), reading `ANTHROPIC_API_KEY`; model defaults to `claude-sonnet-4-6`.
-- **`json.parse` / `json.stringify`** — a built-in JSON codec (full string
+- **`json.parse` / `json.stringify`**, a built-in JSON codec (full string
   escapes incl. `\uXXXX`) to/from native values.
-- **`http.get` / `http.post`** — a built-in HTTP client.
-- **`similarity(a, b)`** — cosine similarity over numeric vectors.
-- **`env`, `read`, `write`** — environment variables and whole-file I/O.
-- **Raw strings** with backticks (`` `...` ``): verbatim, no escapes/interpolation
-  — JSON and regex literals need no escaping.
+- **`http.get` / `http.post`**, a built-in HTTP client.
+- **`similarity(a, b)`**, cosine similarity over numeric vectors.
+- **`env`, `read`, `write`**, environment variables and whole-file I/O.
+- **Raw strings** with backticks (`` `...` ``): verbatim, no escapes/interpolation,
+  so JSON and regex literals need no escaping.
 - Example gallery `examples/ai/` (haiku, structured extraction, web+JSON).
 
 ### In progress
@@ -72,7 +72,7 @@ A multi-agent adversarial review raised 29 findings (28 confirmed); all are fixe
 - A `for` loop variable is one shared binding (Python-like); closures created in
   different iterations observe its final value. Per-iteration binding is planned.
 
-## [0.1.0] — 2026-06-14
+## [0.1.0], 2026-06-14
 
 First working version: a complete, correct core language.
 
@@ -86,7 +86,7 @@ First working version: a complete, correct core language.
 - `;` as an optional statement separator for one-liners.
 - Structural equality for lists and maps.
 - 22 built-in functions (I/O, conversions, collections, strings, math, time,
-  testing) — the "batteries included" core.
+  testing), the "batteries included" core.
 - REPL.
 - Build script (`release` with `-O3 -mcpu=apple-m1 -flto`; `debug` with ASan/UBSan).
 - Test suite + runner; runnable examples.

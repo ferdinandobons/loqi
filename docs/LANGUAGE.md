@@ -1,7 +1,7 @@
-# The Loqi Language Guide (v0.1)
+# The Loqi Language Guide (v0.2)
 
 This is the complete reference for the language as it exists today. Anything
-marked *planned* lives in the [roadmap](ROADMAP.md), not here — this guide only
+marked *planned* lives in the [roadmap](ROADMAP.md), not here, this guide only
 documents what runs.
 
 ## Contents
@@ -71,7 +71,7 @@ Variables are block-scoped. An inner scope can shadow an outer one.
 | Logical     | `and  or  not`                         | short-circuit; return operands |
 | Null-safety | `?.`  `??`                             | optional chaining; nil-coalescing |
 | Range       | `a..b`                                 | inclusive int range → list     |
-| Pipeline    | `x \|> f(a)`                            | `f(x, a)` — left-threads `x`    |
+| Pipeline    | `x \|> f(a)`                            | `f(x, a)`, left-threads `x`    |
 | Unary       | `-x`, `not x`                          |                                |
 
 Notes:
@@ -79,7 +79,7 @@ Notes:
 - `+` also concatenates strings (`"a" + "b"`) and lists (`[1] + [2]`).
 - `and`/`or` short-circuit and return the deciding operand, so
   `let name = input or "anon"` works as a default.
-- `a..b` is an **inclusive** integer range that builds a list — `1..3` is
+- `a..b` is an **inclusive** integer range that builds a list, `1..3` is
   `[1, 2, 3]`; `5..1` is `[]`. Great in `for`: `for i in 1..n { ... }`. It binds
   looser than arithmetic (`0..n-1` is `0..(n-1)`).
 - `x |> f(a)` is the **pipeline** operator: it threads `x` in as the first
@@ -97,10 +97,10 @@ Notes:
 
 Loqi targets the "billion-dollar mistake" with two operators:
 
-- `a?.b` — **optional chaining**: evaluates to `nil` if `a` is `nil`, otherwise
+- `a?.b`, **optional chaining**: evaluates to `nil` if `a` is `nil`, otherwise
   `a.b`. Chains short-circuit: `user?.address?.city` is `nil` if any link is nil.
-- `x ?? y` — **null-coalescing**: `x` if it is not `nil`, otherwise `y`. Unlike
-  `or`, it only replaces `nil` — `false ?? 1` is `false`, `0 ?? 1` is `0`.
+- `x ?? y`, **null-coalescing**: `x` if it is not `nil`, otherwise `y`. Unlike
+  `or`, it only replaces `nil`, `false ?? 1` is `false`, `0 ?? 1` is `0`.
 
 ```loqi
 fn display_name(user) {
@@ -111,7 +111,7 @@ display_name({ name: "Ada" })  # "Ada"
 ```
 
 `?.` guards the member access itself (not a following call or index): `obj?.field`
-is nil-safe, but in `obj?.method()` the `?.` only protects reading `method` — pair
+is nil-safe, but in `obj?.method()` the `?.` only protects reading `method`, pair
 it with `??` (`obj?.method ?? default`) when the base may be nil. `?.` is not
 allowed on the left of an assignment.
 - Integer arithmetic stays `int`; mixing with a `float` produces a `float`.
@@ -129,7 +129,7 @@ print("{a} * {b} = {a * b}")          # 6 * 7 = 42
 print("set: \{ {a}, {b} \}")          # set: { 6, 7 }
 ```
 
-Interpolation is fully recursive — expressions may contain their own strings and
+Interpolation is fully recursive, expressions may contain their own strings and
 nested interpolation:
 
 ```loqi
@@ -223,7 +223,7 @@ for i in range(0, 10) {
 ### `if` and `match` as expressions
 
 `if` and `match` used in expression position evaluate to the value of the taken
-branch / matched arm — no separate ternary operator needed. A branch's value is the
+branch / matched arm, no separate ternary operator needed. A branch's value is the
 last expression in its block; an `if` with no `else` (false condition) or a `match`
 with no matching arm evaluates to `nil`.
 
@@ -233,11 +233,11 @@ let kind  = match n { 0: { "zero" } 1, 2, 3: { "small" } _: { "big" } }
 print(map(xs, x => if x % 2 == 0 { "even" } else { "odd" }))
 ```
 
-They compose anywhere a value is expected — call arguments, list elements, arrow
+They compose anywhere a value is expected, call arguments, list elements, arrow
 bodies, nested in each other. A `match` evaluates its subject exactly once. Two small
 rules (the VM addresses locals from the frame base): an expression `if` wants `}
 else` on the same line, and an expression `if`/`match` branch can't declare local
-variables (`let`) — use the statement form for that.
+variables (`let`), use the statement form for that.
 
 ### Pattern matching
 
@@ -254,7 +254,7 @@ fn category(grade) {
   }
 }
 
-# match is also an expression (see above) — the matched arm's value is the result:
+# match is also an expression (see above), the matched arm's value is the result:
 let category = match grade { "A", "B": { "excellent" } _: { "other" } }
 ```
 
@@ -278,7 +278,7 @@ try { risky() } catch { print("handled") }
 ```
 
 `return` works from inside a `try`. (Avoid `break`/`continue` that jump out of a
-`try` block before it finishes — that edge case isn't supported yet.)
+`try` block before it finishes, that edge case isn't supported yet.)
 
 An **uncaught** error prints the message, the offending source line, and a
 backtrace of the call stack, so you see exactly where it came from:
@@ -314,7 +314,7 @@ A function with no `return` returns `nil`. Recursion is supported directly.
 
 ### Arrow functions
 
-For the common case of a one-expression function — especially callbacks — use the
+For the common case of a one-expression function, especially callbacks, use the
 arrow shorthand. `params => expr` is exactly `fn(params) { return expr }`:
 
 ```loqi
@@ -327,7 +327,7 @@ reduce(nums, (acc, x) => acc + x, 0)
 ```
 
 The body is a single expression. Arrows are right-associative, so they curry
-naturally — `a => b => a + b` is a function returning a function — and they read
+naturally, `a => b => a + b` is a function returning a function, and they read
 especially well with the pipe operator:
 
 ```loqi
@@ -344,10 +344,10 @@ For a multi-statement body, use the full `fn(params) { ... }` form.
 Loqi has two ways to bring in another file. **Import paths resolve relative to the
 file doing the import**, so a module works no matter which directory you run it from.
 
-**Namespaced import** — the recommended form. The module runs in its own global
+**Namespaced import**, the recommended form. The module runs in its own global
 scope and is exposed under a name; its functions keep resolving *their own* globals,
-so a module's internal constants never leak into — or clash with — yours. A module
-exports exactly the top-level names it defines with `let`/`fn` — including ones that
+so a module's internal constants never leak into, or clash with, yours. A module
+exports exactly the top-level names it defines with `let`/`fn`, including ones that
 shadow a built-in (a module may define and export its own `PI`):
 
 ```loqi
@@ -360,11 +360,11 @@ fn area(r) { return PI * r * r }
 # main.lq
 import "geometry.lq" as geo
 
-print(geo.area(2))      # 12.56636 — uses the module's own PI
-print(geo.PI)           # 3.14159  — constants are accessible too
+print(geo.area(2))      # 12.56636, uses the module's own PI
+print(geo.PI)           # 3.14159, constants are accessible too
 ```
 
-**Flat import** — runs the file in the *current* global scope, binding its
+**Flat import**, runs the file in the *current* global scope, binding its
 top-level names directly (handy for a shared prelude):
 
 ```loqi
@@ -375,8 +375,8 @@ print(area(2))          # area and PI are now in scope here
 Two things to know about the model:
 
 - **A namespaced module evaluates exactly once.** `import "x.lq" as a` is cached by
-  the file's canonical path: a second `import "x.lq" as b` — including a *diamond*
-  where two modules both import `x.lq` — returns the same already-evaluated module
+  the file's canonical path: a second `import "x.lq" as b`, including a *diamond*
+  where two modules both import `x.lq`, returns the same already-evaluated module
   instead of re-running its top-level code, so `a` and `b` share one instance of its
   state. (Flat `import "x.lq"` binds names into the *current* scope, so it re-runs
   per importing scope by design.)
@@ -385,7 +385,7 @@ Two things to know about the model:
 
 ## Grammar
 
-An informal EBNF of v0.1:
+An informal EBNF of v0.2:
 
 ```ebnf
 program     = { statement } ;

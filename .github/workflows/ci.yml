@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    # Apple Silicon (arm64) — Loqi's target platform; matches -mcpu=apple-m1.
+    # Apple Silicon (arm64), Loqi's target platform; matches -mcpu=apple-m1.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
