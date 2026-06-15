@@ -10,7 +10,8 @@ m["self"] = m                               # self-referential map
 assert(contains(str(m), "..."), "cyclic map repr is depth-capped")
 
 # normal (non-cyclic) nesting still renders in full
+# (the expected map form uses a raw `...` string so its braces aren't interpolation)
 assert(str([[1, 2], [3]]) == "[[1, 2], [3]]", "nested lists render fully")
-assert(str({ a: 1, b: [2, 3] }) == "{a: 1, b: [2, 3]}", "nested map renders fully")
+assert(str({ a: 1, b: [2, 3] }) == `{a: 1, b: [2, 3]}`, "nested map renders fully")
 
 print("test_repr: all tests passed ✓")
